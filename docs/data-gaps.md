@@ -353,6 +353,29 @@ Tier-3 project.
 
 ---
 
+### DG-20 — Cash & short-term investments (`cash_and_equivalents`) omitted by design (gross debt netted)
+
+**Tables:** `financial_facts`, `stock_fundamentals`, `stock_valuations`
+
+**State:** `stock_fundamentals.py` and `nse_fundamentals.py` ingest `total_debt`, `total_assets`,
+`current_assets`, `current_liabilities`, and `shareholder_equity`, but deliberately do not ingest a
+separate `cash_and_equivalents` metric. Per ADR 0026 and ADR 0030, enterprise-value valuation
+methods (`epv`, `damodaran_fcff`, `ev_ebitda_peer`, `owner_earnings`) subtract gross `total_debt`
+without crediting cash balances for conservatism.
+
+**Consequence:** Cash-rich companies with large net-cash positions receive a conservative floor in
+enterprise-to-equity bridges (`EV - Gross Debt` instead of `EV - (Gross Debt - Cash)`).
+
+**Status:** 🤔 Accepted conservatism (ADR 0026 / ADR 0030) — if exact `net_debt = total_debt - cash`
+is desired, add `CashAndCashEquivalentsAtCarryingValue` / `CashCashEquivalentsAndShortTermInvestments`
+to `EDGAR_MAP` in `stock_fundamentals.py` and cash tags in `nse_fundamentals.py`.
+
+**Source:** `docs/adr/0026-intrinsic-valuation-and-sector-analysis.md`,
+`docs/adr/0030-damodaran-fcff-and-graham-growth-valuations.md`,
+`docs/adr/0033-classification-soundness-and-continuous-calibration.md`.
+
+---
+
 ## Closed gaps (recently resolved — kept for audit)
 
 | ID | Gap | Closed | How |
@@ -372,6 +395,11 @@ Tier-3 project.
 | — | F-4 `failed` NameError | 2026-10-09 | Fixed in v9 |
 | — | Chunk merge | 2026-10-18 | stock_prices 3,382 → 107 chunks; 34s → 34ms planning |
 | — | FRED SP500 second source | live | DQ-5 check D (10/10 within 0.5%) |
+| DG-02 | FII/DII history | 2026-10-26 | Owner decision: forward-only |
+| DG-03 | India NSE fundamentals backfill | 2026-11-03 | Cursor cleared, CronJob live, DRY_RUN diff done |
+| DG-06 | Intraday ticker coverage | 2026-11-08 | Expanded from 4 to 10 tickers in `intraday-fetcher.py` |
+| DG-07 | `stock_metrics` on `adj_close` | 2026-11-08 | `stock_metrics.py` uses `adj_close` for return/risk series |
+| DG-11 | EDGAR gross profit sparsity | 2026-11-08 | `COGS_TAGS` fallback (`total_revenue - COGS`) in `stock_fundamentals.py` |
 
 ---
 
@@ -379,11 +407,11 @@ Tier-3 project.
 
 | Rank | ID | Gap | Effort | Blocks |
 |------|-----|-----|--------|--------|
-| 1 | DG-01 | India historical index membership | ~1 session (NSE PDFs) | India EV-0 backtests |
-| 2 | DG-03 | India NSE fundamentals backfill completion | running (~100 symbols) | India fundamental screens, DRY_RUN diff |
-| 3 | DG-02 | FII/DII history | owner decision | FII/DII backtests |
-| 4 | DG-04 | Per-stock second price source | free API key | DQ-5 per-stock validation |
-| 5 | DG-18 | `stock_metrics` on `adj_close` | downstream EV-0 decision | score accuracy (small effect) |
+| 1 | DG-01 | India historical index membership | ~1 session (NSE PDFs) | India EV-0 backtests (`DG-18`) |
+| 2 | DG-04 | Per-stock second price source | free `TIINGO_API_KEY` (code-ready) | DQ-5 per-stock validation |
+| 3 | DG-05 | Nifty multibagger point-in-time backtest | NSE quarterly filing dates | India fundamental backtests (US S&P unblocked via `EV-19`/`EV-20`) |
+| 4 | DG-20 | `cash_and_equivalents` for net debt | ~30 min (`EDGAR_MAP` + NSE tag) | Net-cash credit in EV valuations (currently gross debt by design) |
+| 5 | DG-08 | `mdjob` / `job_runs` adoption | per natural image rebuild | Grafana `job_runs` stale-feed rule |
 
 ---
 

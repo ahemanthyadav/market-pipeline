@@ -136,6 +136,22 @@ Each is ~20 min *inside* an already-happening §6 cycle.
 
 ## 1. Immediate (next checkpoint: tomorrow's `/health`)
 
+- [ ] 🔶 **Roll out ADR 0033 & Schema 25 (`25-valuation-and-metrics-catalog.sql`) to the cluster (§6 cycle):**
+  Code and hermetic unit tests are committed across `marketdata` and `marketview`:
+  1. **Apply TimescaleDB Schema 25:** `kubectl apply -f manifests/timescaledb/schema-configmap.yaml` and run the schema job (or trigger one `stock-valuation` job, as `valuation.ensure_schema_and_catalog()` idempotently creates `valuation_methods`, `stock_scientific_metrics`, `calibration_metrics`, additive columns on `stock_valuations` and `sector_metrics`, contract views `v_valuation_methods`, `v_latest_scientific_metrics`, `v_latest_calibration`, and grants `SELECT` to `grafana_ro` and `telegram_app`).
+  2. **Update `stock-screener` scripts/image:** Apply the updated `stock-screener` ConfigMap (`valuation.py` 15-method engine + 34-row catalog + `scientific_row()`, `stock_metrics.py` `adj_close` total-return series + `ret_12_1` + `near_high`, `stock_fundamentals.py` `COGS_TAGS` fallback for `gross_profit`, `stock_report.py` dual-lens report) and run a canary `stock-valuation` job.
+  3. **Build & roll out `local/telegram-digest:v38`:** Build on TX2, archive tarball to `/mnt/tx2-ssd/image-tarballs/telegram-digest-v38.tar.gz`, import on `pi1`, and apply `manifests/telegram/deployment.yaml` + `manifests/telegram/cronjob.yaml`.
+  4. **Build & roll out `local/marketview:v13`:** Bump `deploy/deployment.yaml` to `local/marketview:v13`, build on TX2, import on `pi1`, roll out, and canary `/stock/AAPL`, `/multibagger`, and `/strategies`.
+  5. **Run continuous calibration loop (`ops-tools/classifier_loop.py`):** Run `python3 ops-tools/classifier_loop.py run --horizon 91` from the workstation once `prediction_outcomes` has ≥6 resolved cross-sections to populate `__calibration__` in `stock_reports` and structured rows in `calibration_metrics`.
+- [ ] 🔶 **MarketView UI surface extensions for Schema 25 tables (follow-up):**
+  `/stock/{symbol}`, `/multibagger`, `/strategies`, and `/reports/__calibration__` already render the dual-lens models; three optional UI enhancements remain:
+  1. **`/sectors` (`sectors.html` + `SQLS["sectors"]` in `marketview/app/db.py`):** Expose the 4 new `sector_metrics` columns (`median_practitioner_upside_pct`, `median_academic_upside_pct`, `median_gpa`, `median_f_score`) alongside `median_upside_pct`.
+  2. **`/scorecard` (`scorecard.html`):** Render a structured calibration table directly from `v_latest_calibration` (`calibration_metrics`: Factor Rank ICs, Archetype Cohort Excess Returns, Multibagger Gate Marginal Value GMV, and Shrinkage-Proposed Factor Weights) in addition to the `/reports/__calibration__` markdown link.
+  3. **34-Row Method & Metric Reference Drawer (`v_valuation_methods`):** Render the full 34-row `valuation_methods` catalog (15 valuations, 8 scientific diagnostics, 5 factor pillars, 2 composites, 2 archetype taxonomies, 2 multibagger screens with formulas and peer-reviewed sources) on `/strategies` or `/scorecard`.
+- [ ] 🔶 **Open Data & Accounting Enhancements (`DG-20`, `EV-19`, `EV-20`):**
+  1. **Cash & Short-Term Investments (`cash_and_equivalents`, `DG-20`):** Add `CashAndCashEquivalentsAtCarryingValue` / `CashCashEquivalentsAndShortTermInvestments` to `EDGAR_MAP` in `stock_fundamentals.py` and `nse_fundamentals.py` if exact `net_debt = total_debt - cash` is desired for `ev_ebitda_peer`, `damodaran_fcff`, `epv`, and `owner_earnings` (currently uses gross `total_debt` without cash credit by design per ADR 0026 / ADR 0030).
+  2. **Post-Earnings-Announcement Drift (`EV-19` PEAD / SUE):** Compute standardized quarterly EPS surprise (`SUE = (EPS_q - EPS_{q-4}) / sigma`) on the filing date using `earnings_calendar` (Schema 19) + quarterly `financial_facts` (`duration_days BETWEEN 75 AND 105`), and test against `ev0.py` §5 acceptance rules.
+  3. **Point-in-Time Fundamental Panel Backtest (`EV-20`):** Reconstruct historical Value and Quality factor sleeves at each month-end from first-filed `financial_facts` in `ops-tools/ev0.py` to test fundamental sleeves with the same Newey-West / Fama-MacBeth rigor as price signals.
 - [ ] 🔑 **OWNER-RUN: tailnet exposure of marketview + Grafana** (feature wave #3, ADR 0028 §6 — the
   agent permission system refuses to widen network exposure, by design). pi1 is on the tailnet.
   From the workstation (resolves the ClusterIPs, then configures serve on pi1 over ssh):
