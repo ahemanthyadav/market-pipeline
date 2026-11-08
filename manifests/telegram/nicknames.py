@@ -233,6 +233,16 @@ COMMAND_ALIASES = {
     # scorecard
     "scorecard": "scorecard",
     "picks worked": "scorecard",
+    # valuation
+    "valuation": "valuation",
+    "fair value": "valuation",
+    "intrinsic value": "valuation",
+    # calibration
+    "calibration": "calibration",
+    "factor ic": "calibration",
+    # methods
+    "methods": "methods",
+    "valuation methods": "methods",
     # world
     "world": "world",
     "global": "world",
@@ -293,6 +303,9 @@ KEYWORD_COMMANDS = {
     "sp 500": "sp500",
     "fx": "fx",
     "usdinr": "fx",
+    "valuation": "valuation",
+    "calibration": "calibration",
+    "methods": "methods",
 }
 
 # Multi-word phrase → (command, arg_template)
@@ -350,6 +363,10 @@ PHRASE_ROUTES = {
     "index nikkei": ("index", "nikkei"),
     "index nifty": ("index", "^NSEI"),
     "index sensex": ("index", "^BSESN"),
+    "valuation of": ("valuation", "{arg}"),
+    "valuation for": ("valuation", "{arg}"),
+    "calibration report": ("calibration", ""),
+    "valuation methods": ("methods", ""),
 }
 
 # Commands that need a stock symbol argument

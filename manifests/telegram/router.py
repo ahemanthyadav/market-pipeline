@@ -37,7 +37,7 @@ import nicknames
 ARG_COMMANDS = frozenset({
     "stock", "news", "ask", "watch", "top", "scores", "screener",
     "multibagger", "mb", "sectors", "sector", "world", "index", "fx",
-    "usdinr", "route", "adduser", "rmuser",
+    "usdinr", "route", "adduser", "rmuser", "valuation",
 })
 
 # Words that are never a symbol lookup on their own (command/filler words).
@@ -120,8 +120,8 @@ ADMIN_COMMANDS = frozenset({"users", "adduser", "rmuser"})
 SAFE_AI_COMMANDS = frozenset({
     "stock", "news", "ask", "top", "multibagger", "movers", "sectors",
     "earnings", "scorecard", "regime", "track", "world", "index", "sp500",
-    "fx", "macro", "scores", "digest", "status", "vix", "nifty", "sensex",
-    "gold", "fii", "watch",
+    "valuation", "calibration", "methods", "fx", "macro", "scores", "digest",
+    "status", "vix", "nifty", "sensex", "gold", "fii", "watch",
 })
 _ai_route_cache: dict = {}
 

@@ -113,6 +113,13 @@ owner-approved — entering names, reasoning in the line, ≤5/run; first live l
 no-send validation green). Still queued for v26: `stocks.py series()` onto the facts path ·
 marketview deep-links from the card (needs the owner's exposure decision first).
 Each is ~20 min *inside* an already-happening §6 cycle.
+**Done in-repo, rides the next telegram-digest §6 cycle:** `/valuation <symbol>` command
+(stocks.py `valuation_text`, bot.py `cmd_valuation`, router/nicknames wiring, 6 new tests in
+tests/test_stocks.py) — shows all 15 intrinsic valuation methods + fair value/upside for a stock.
+**Also done in-repo:** `/calibration` (stocks.py `calibration_text`, reads `v_latest_calibration`,
+factor ICs / archetype returns / MB gate margins / shrunk weights) and `/methods`
+(stocks.py `methods_text`, reads `v_valuation_methods`, 34-row catalog with formulas + sources).
+Both wired into bot.py COMMANDS + MENU, router SAFE_AI_COMMANDS, and nicknames.
 
 **Projects — each needs its own session(s) plus a decision or ADR (order per §16 priorities):**
 | Project | Size | Gate / first decision |

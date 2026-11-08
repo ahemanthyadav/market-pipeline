@@ -1395,5 +1395,143 @@ class ScorecardCommandTest(unittest.TestCase):
         self.assertIn("not created yet", stocks.scorecard_text(db))
 
 
+class ValuationCommandTest(unittest.TestCase):
+    ROW = ("PLTR", "Palantir Technologies Inc.", "Technology", "SP500", "USD")
+
+    def db(self):
+        ts = day(9)
+        return FakeDB([
+            ("upper(symbol) = ANY", [self.ROW]),
+            ("FROM v_latest_valuations", [(ts, 100.0,   # close
+                                          110.0, 105.0, 90.0, 120.0, 95.0,
+                                          100.0, 108.0, 115.0, 102.0, 130.0,
+                                          108.0, 8.0, 15, 0.095, 0.06,
+                                          7, 99.0, 103.0, 107.0,
+                                          101.0, 104.0, 106.0, 8,
+                                          110.0, 7, 108.0, 15)])])
+
+    def test_shows_header_close_and_fair_value(self):
+        text = stocks.valuation_text(self.db(), "pltr")
+        self.assertIn("<b>Palantir Technologies Inc.</b>", text)
+        self.assertIn("PLTR · Technology · SP500", text)
+        self.assertIn("<b>100.00 USD</b>  <i>09 Oct close</i>", text)
+        self.assertIn("<b>Fair value</b> 108.00  (+8.0% vs close)", text)
+        self.assertIn("15 method(s) produced a value · 7 above close", text)
+
+    def test_practitioner_and_academic_medians(self):
+        text = stocks.valuation_text(self.db(), "pltr")
+        self.assertIn("Practitioner median <b>106.00</b> (8m)", text)
+        self.assertIn("Academic median <b>110.00</b> (7m)", text)
+        self.assertIn("Discount rate 9.5%", text)
+        self.assertIn("growth used 6.0%", text)
+
+    def test_all_15_methods_grouped_by_lens(self):
+        text = stocks.valuation_text(self.db(), "pltr")
+        self.assertIn("<b>Practitioner methods</b>", text)
+        self.assertIn("<b>Research-Backed methods</b>", text)
+        # Graham 110 > close 100 → flagged above close
+        self.assertIn("Graham sqrt(22.5×EPS×BVPS): 110.00 ↑above close", text)
+        # FCF yield 90 < close 100 → not flagged
+        self.assertIn("FCF yield perpetuity: 90.00", text)
+        self.assertNotIn("FCF yield perpetuity: 90.00 ↑above close", text)
+        self.assertIn("Damodaran FCFF: 102.00 ↑above close", text)
+        self.assertIn("Buyback + Div DDM: 104.00 ↑above close", text)
+        self.assertIn("not advice", text.lower())
+
+    def test_no_rows_says_so(self):
+        db = FakeDB([("upper(symbol) = ANY", [self.ROW]),
+                     ("FROM v_latest_valuations", [])])
+        text = stocks.valuation_text(db, "pltr")
+        self.assertIn("No valuation rows", text)
+        self.assertIn("Palantir Technologies Inc.</b>", text)
+
+    def test_unresolvable_symbol_messages(self):
+        db = FakeDB([("upper(symbol) = ANY", []), ("name ILIKE", []),
+                     ("WHERE active ORDER BY symbol", [])])
+        self.assertIn("No stock matching", stocks.valuation_text(db, "zzz"))
+
+
+class CalibrationCommandTest(unittest.TestCase):
+    def db(self):
+        return FakeDB([("FROM v_latest_calibration", [
+            (30, "factor_ic", "value", "SP500", 450, 0.042, 0.011, "ok"),
+            (30, "factor_ic", "quality", "SP500", 450, 0.038, 0.009, "ok"),
+            (30, "factor_ic", "growth", "SP500", 450, 0.029, 0.008, "ok"),
+            (91, "archetype_ret", "Quality Compounder", "SP500", 60, 0.031, None, "ok"),
+            (91, "academic_archetype_ret", "QMJ + BAB Compounder", "SP500", 55, 0.028, None, "ok"),
+            (91, "archetype_ret", "Value Trap", "SP500", 40, -0.012, None, "ok"),
+            (91, "mb_gmv", "debt gate", "SP500", 200, 0.018, None, "ok"),
+            (91, "shrunk_weight", "value", "ALL", 8, 0.27, None, "proposed"),
+            (91, "shrunk_weight", "quality", "ALL", 8, 0.23, None, "proposed"),
+        ])])
+
+    def test_shows_factor_ic(self):
+        text = stocks.calibration_text(self.db())
+        self.assertIn("<b>Factor &amp; Archetype Calibration</b>", text)
+        self.assertIn("Factor IC (cross-sectional Spearman rank IC)", text)
+        self.assertIn("value (SP500, n=450): 0.042 / 0.011", text)
+        self.assertIn("quality (SP500, n=450): 0.038 / 0.009", text)
+
+    def test_shows_archetype_and_mb_gmv(self):
+        text = stocks.calibration_text(self.db())
+        self.assertIn("Practitioner Archetype Excess Return", text)
+        self.assertIn("Academic Archetype Excess Return", text)
+        self.assertIn("Multibagger Gate Marginal Value", text)
+        self.assertIn("Quality Compounder (SP500, n=60): 0.031", text)
+        self.assertIn("debt gate (SP500, n=200): 0.018", text)
+
+    def test_shows_shrunk_weights(self):
+        text = stocks.calibration_text(self.db())
+        self.assertIn("Shrunk Factor Weight (vs prior)", text)
+        self.assertIn("value (ALL, n=8): 0.27", text)
+        self.assertIn("quality (ALL, n=8): 0.23", text)
+        self.assertIn("not a forecast", text.lower())
+
+    def test_missing_table_degrades(self):
+        class UndefinedTable(Exception):
+            pass
+
+        def boom(_args):
+            raise UndefinedTable("relation v_latest_calibration does not exist")
+
+        self.assertIn("not created yet", stocks.calibration_text(FakeDB([("FROM v_latest_calibration", boom)])))
+
+
+class MethodsCommandTest(unittest.TestCase):
+    ROWS = [
+        ("graham", "Graham sqrt(22.5×EPS×BVPS)", "valuation", "Practitioner",
+         "Graham", "Graham (1949, The Intelligent Investor)", "sqrt(22.5 * EPS * BVPS)"),
+        ("peg_lynch", "Lynch PEG=1", "valuation", "Practitioner",
+         "Lynch", "Lynch (1989, One Up On Wall Street)", "EPS * 100 * clamp(g_eps, 5%, 25%)"),
+        ("piotroski_f_score", "Piotroski F-Score", "scientific", "Research-Backed",
+         "Piotroski", "Piotroski (2000, JAR)", "9 binary accounting signals"),
+        ("composite", "Practitioner Composite", "composite", "Practitioner",
+         "", "ADR 0026", "0.25×value + 0.25×quality + 0.20×growth + 0.20×momentum + 0.10×risk"),
+    ]
+
+    def db(self):
+        return FakeDB([("FROM v_valuation_methods", self.ROWS)])
+
+    def test_shows_all_methods_grouped_by_category(self):
+        text = stocks.methods_text(self.db())
+        self.assertIn("<b>Valuation &amp; Scientific Method Catalog</b>", text)
+        self.assertIn("<b>valuation</b>", text)
+        self.assertIn("<b>scientific</b>", text)
+        self.assertIn("<b>composite</b>", text)
+        self.assertIn("Graham sqrt(22.5×EPS×BVPS) [Practitioner]", text)
+        self.assertIn("sqrt(22.5 * EPS * BVPS)", text)
+        self.assertIn("Graham (1949, The Intelligent Investor)", text)
+        self.assertIn("not advice", text.lower())
+
+    def test_missing_table_degrades(self):
+        class UndefinedTable(Exception):
+            pass
+
+        def boom(_args):
+            raise UndefinedTable("relation v_valuation_methods does not exist")
+
+        self.assertIn("not created yet", stocks.methods_text(FakeDB([("FROM v_valuation_methods", boom)])))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -974,6 +974,215 @@ def grouped_valuations(fv_row, f, annual, close, universe=""):
     }
 
 
+# ------------------------------------------------------------------ /valuation
+
+# (column, label, lens). lens matches grouped_valuations' Practitioner /
+# Research-Backed split; ev_ebitda_peer is a multiple-based comp → Practitioner.
+VALUATION_METHODS = (
+    ("graham", "Graham sqrt(22.5×EPS×BVPS)", "Practitioner"),
+    ("graham_growth", "Graham 1974 growth", "Practitioner"),
+    ("peg_lynch", "Lynch PEG=1", "Practitioner"),
+    ("peer_multiple", "Street comps (sector P/E)", "Practitioner"),
+    ("fcf_yield", "FCF yield perpetuity", "Practitioner"),
+    ("dcf", "2-stage FCF DCF", "Practitioner"),
+    ("owner_earnings", "Owner earnings", "Practitioner"),
+    ("ev_ebitda_peer", "EV/EBITDA peer", "Practitioner"),
+    ("epv", "Greenwald EPV", "Research-Backed"),
+    ("residual_income", "Residual income / justified P/B", "Research-Backed"),
+    ("intangible_ri", "Intangible RI (Peters–Taylor)", "Research-Backed"),
+    ("easton_mpeg", "Easton MPEG", "Research-Backed"),
+    ("damodaran_fcff", "Damodaran FCFF", "Research-Backed"),
+    ("ddm", "Gordon DDM", "Research-Backed"),
+    ("total_payout_ddm", "Buyback + Div DDM", "Research-Backed"),
+)
+
+
+def valuation_text(q, arg):
+    """/valuation <symbol> — every intrinsic valuation method for one stock.
+
+    Reads v_latest_valuations (the 4-day bound lives inside the view, rule 9).
+    Shows the close, the median fair value + upside, practitioner vs academic
+    medians, and all 15 methods with each one's per-share value, flagging the
+    methods that sit above today's close. Descriptive only (ADR 0026) — never
+    advice, never a score input.
+    """
+    row, problem, note = pick_one_ex(q, arg)
+    if problem:
+        return problem
+    symbol, name, sector, universe, currency = row
+
+    fv = q(
+        "SELECT ts, close, graham, peer_multiple, fcf_yield, dcf, ddm, epv, "
+        "residual_income, peg_lynch, damodaran_fcff, graham_growth, "
+        "fair_value, upside_pct, methods, discount_rate, growth_used, "
+        "methods_above_close, ev_ebitda_peer, owner_earnings, easton_mpeg, "
+        "intangible_ri, total_payout_ddm, practitioner_fair_value, "
+        "practitioner_methods, academic_fair_value, academic_methods, "
+        "all_fair_value, all_methods "
+        "FROM v_latest_valuations WHERE symbol = %s",
+        (symbol,),
+    )
+    if not fv:
+        return "\n".join(
+            [f"<b>{esc(name)}</b>",
+             f"{esc(symbol)} · {esc(sector or 'n/a')} · {esc(universe)}",
+             "No valuation rows in the last 4 days."])
+    (ts, close, graham, peer_multiple, fcf_yield, dcf, ddm, epv,
+     residual_income, peg_lynch, damodaran_fcff, graham_growth,
+     fair_value, upside_pct, methods, discount_rate, growth_used,
+     methods_above_close, ev_ebitda_peer, owner_earnings, easton_mpeg,
+     intangible_ri, total_payout_ddm, practitioner_fair_value,
+     practitioner_methods, academic_fair_value, academic_methods,
+     all_fair_value, all_methods) = fv[0]
+
+    head = [f"<b>{esc(name)}</b>",
+            f"{esc(symbol)} · {esc(sector or 'n/a')} · {esc(universe)}"]
+    if note:
+        head.insert(0, note)
+    out = head
+
+    vals = {
+        "graham": graham, "peer_multiple": peer_multiple, "fcf_yield": fcf_yield,
+        "dcf": dcf, "ddm": ddm, "epv": epv, "residual_income": residual_income,
+        "peg_lynch": peg_lynch, "damodaran_fcff": damodaran_fcff,
+        "graham_growth": graham_growth, "ev_ebitda_peer": ev_ebitda_peer,
+        "owner_earnings": owner_earnings, "easton_mpeg": easton_mpeg,
+        "intangible_ri": intangible_ri, "total_payout_ddm": total_payout_ddm,
+    }
+    above_close = {col for col, v in vals.items()
+                   if v is not None and close and v > close}
+
+    out += ["", f"<b>{num(close)} {esc(currency or '')}</b>  <i>{ts:%d %b} close</i>"]
+    out.append(
+        f"<b>Fair value</b> {num(fair_value)}  ({upside_pct:+.1f}% vs close)  "
+        f"<i>{methods} method(s) produced a value · {methods_above_close} above close</i>")
+    if practitioner_fair_value is not None and academic_fair_value is not None:
+        out.append(
+            f"Practitioner median <b>{num(practitioner_fair_value)}</b> "
+            f"({practitioner_methods}m) · "
+            f"Academic median <b>{num(academic_fair_value)}</b> ({academic_methods}m)")
+    if discount_rate is not None:
+        out.append(
+            f"<i>Discount rate {discount_rate * 100:.1f}% · growth used "
+            f"{growth_used * 100:.1f}% (ADR 0026 assumptions)</i>")
+
+    for lens in ("Practitioner", "Research-Backed"):
+        lines = []
+        for col, label, method_lens in VALUATION_METHODS:
+            if method_lens != lens:
+                continue
+            v = vals.get(col)
+            mark = " ↑above close" if col in above_close else ""
+            lines.append(f"{label}: {num(v)}{mark}")
+        out.append(f"<b>{lens} methods</b>")
+        out += lines
+
+    out += ["<i>All 15 methods from v_latest_valuations; fair_value is the median of the "
+            "methods that produced a number. Descriptive only — not advice.</i>"]
+    return "\n".join(line for i, line in enumerate(out) if line or i == 2)
+
+
+# ------------------------------------------------------------------ /calibration
+
+CALIBRATION_KIND_LABELS = {
+    "factor_ic": "Factor IC (cross-sectional Spearman rank IC)",
+    "sector_ic": "Sector IC (distortion by sector)",
+    "archetype_ret": "Practitioner Archetype Excess Return",
+    "academic_archetype_ret": "Academic Archetype Excess Return",
+    "mb_gmv": "Multibagger Gate Marginal Value",
+    "shrunk_weight": "Shrunk Factor Weight (vs prior)",
+}
+CALIBRATION_KIND_ORDER = ("factor_ic", "sector_ic", "archetype_ret",
+                          "academic_archetype_ret", "mb_gmv", "shrunk_weight")
+
+
+def calibration_text(q):
+    """/calibration — latest factor & archetype calibration results.
+
+    Reads v_latest_calibration (written by ops-tools/classifier_loop.py,
+    ADR 0033). Shows factor ICs, archetype cohort excess returns, multibagger
+    gate marginal value, and shrunk factor weights vs the prior (0.25/0.25/0.20/0.20/0.10).
+    Evidence-based — never a score input, never a forecast.
+    """
+    try:
+        rows = q(
+            "SELECT horizon_days, kind, metric_key, universe, sample_n, value, aux_value, status "
+            "FROM v_latest_calibration ORDER BY kind, metric_key")
+    except Exception as exc:  # noqa: BLE001 - table may not exist yet
+        if not table_missing(exc):
+            raise
+        return ("Calibration tables not created yet. "
+                "Run the Schema 25 job, then ops-tools/classifier_loop.py.")
+    if not rows:
+        return "No calibration results yet — the classifier loop runs daily."
+
+    by_kind = {}
+    for horizon, kind, metric_key, universe, sample_n, value, aux_value, status in rows:
+        by_kind.setdefault(kind, []).append(
+            (horizon, metric_key, universe, sample_n, value, aux_value, status))
+
+    out = ["<b>Factor &amp; Archetype Calibration</b>  <i>(classifier loop, latest run)</i>"]
+    for kind in CALIBRATION_KIND_ORDER:
+        items = by_kind.get(kind)
+        if not items:
+            continue
+        out.append(f"<b>{CALIBRATION_KIND_LABELS[kind]}</b>")
+        for horizon, metric_key, universe, sample_n, value, aux_value, status in items:
+            v_str = num(value, 3) if value is not None else "–"
+            a_str = f" / {num(aux_value, 3)}" if aux_value is not None else ""
+            out.append(
+                f"  {esc(metric_key)} ({universe}, n={sample_n}): {v_str}{a_str}  "
+                f"<i>{esc(status or '—')}</i>")
+    out += [
+        "",
+        "<i>Calibration measures empirical selection value — not a forecast. "
+        "ADR 0033 guardrails: max ±5% factor-weight tilt, min 6 cross-sections.</i>"]
+    return "\n".join(line for i, line in enumerate(out) if line or i == 2)
+
+
+# ------------------------------------------------------------------ /methods
+
+def methods_text(q):
+    """/methods — valuation & scientific method catalog (Schema 25).
+
+    Reads v_valuation_methods. Shows all catalogued metrics with their
+    lens, sub-school, formula and peer-reviewed source. Reference only —
+    descriptive, never advice.
+    """
+    try:
+        rows = q(
+            "SELECT method_key, method_name, category, lens, sub_school, "
+            "source_ref, formula FROM v_valuation_methods "
+            "ORDER BY display_order, method_key")
+    except Exception as exc:  # noqa: BLE001 - table may not exist yet
+        if not table_missing(exc):
+            raise
+        return ("Valuation method catalog not created yet. "
+                "Run the Schema 25 job.")
+    if not rows:
+        return "No valuation methods catalogued yet."
+
+    by_category = {}
+    for key, name, category, lens, sub_school, source_ref, formula in rows:
+        by_category.setdefault(category, []).append(
+            (key, name, lens, sub_school, source_ref, formula))
+
+    out = ["<b>Valuation &amp; Scientific Method Catalog</b>  "
+           "<i>(Schema 25, v_valuation_methods)</i>"]
+    for category in sorted(by_category):
+        out.append(f"<b>{esc(category)}</b>")
+        for key, name, lens, sub_school, source_ref, formula in by_category[category]:
+            src = f" — {esc(source_ref)}" if source_ref else ""
+            out.append(f"  • {esc(name)} [{esc(lens)}]{src}")
+            out.append(f"    {esc(formula)}")
+    out += [
+        "",
+        "<i>Catalogued metrics span valuations, scientific diagnostics, factor "
+        "pillars, composites, archetype taxonomies and multibagger screens. "
+        "Descriptive only — not advice.</i>"]
+    return "\n".join(line for i, line in enumerate(out) if line or i == 2)
+
+
 def stock_card(q, row):
     symbol, name, sector, universe, currency = row
     head = [f"<b>{esc(name)}</b>",

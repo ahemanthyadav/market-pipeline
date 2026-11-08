@@ -169,6 +169,9 @@ def _help_text() -> str:
         "/world — every index: close, day, 1m, YTD (/world asia)\n"
         "/index nikkei — one index in depth: 1w–1y, 52w range, trend, RSI\n"
         "/sp500 — S&P 500: close, trend, median P/E/P/B, market cap\n"
+        "/valuation PLTR — all 15 intrinsic valuation methods, fair value + upside\n"
+        "/calibration — factor ICs, archetype excess returns, MB gate margins, shrunk weights\n"
+        "/methods — valuation & scientific method catalog (formulas + sources)\n"
         "/fx — USD/INR and the other pairs\n"
         "/macro — gold in INR, yield spreads, FII vs Nifty\n"
         "/digest — your daily digest on demand\n"
@@ -225,6 +228,21 @@ def cmd_sp500(_text: str) -> str:
     """SP500 in depth: close, performance, trend, plus constituent-level
     quant values (median P/E, P/B, total market cap)."""
     return stocks.index_card(query, "^GSPC", "S&P 500")
+
+
+def cmd_valuation(text: str) -> str:
+    """All 15 intrinsic valuation methods for one stock."""
+    return stocks.valuation_text(query, _arg(text))
+
+
+def cmd_calibration(_text: str) -> str:
+    """Latest factor & archetype calibration results (classifier loop)."""
+    return stocks.calibration_text(query)
+
+
+def cmd_methods(_text: str) -> str:
+    """Valuation & scientific method catalog (Schema 25 reference)."""
+    return stocks.methods_text(query)
 
 
 def cmd_fii(_text: str) -> str:
@@ -450,6 +468,9 @@ COMMANDS = {
     "world": cmd_world,
     "index": cmd_index,
     "sp500": cmd_sp500,
+    "valuation": cmd_valuation,
+    "calibration": cmd_calibration,
+    "methods": cmd_methods,
     "fx": cmd_fx,
     "usdinr": cmd_fx,
     "watch": cmd_watch,
@@ -655,6 +676,9 @@ MENU = [
     ("world", "All world indices: day, 1m, YTD — /world asia"),
     ("index", "One index in depth — /index nikkei"),
     ("sp500", "S&P 500 in depth — close, trend, median P/E/P/B, cap"),
+    ("valuation", "All 15 intrinsic valuation methods — /valuation PLTR"),
+    ("calibration", "Factor ICs, archetype returns, MB gate margins, shrunk weights"),
+    ("methods", "Valuation & scientific method catalog — formulas + sources"),
     ("fx", "USD/INR and other currency pairs"),
     ("macro", "Gold in INR, yield spreads, FII vs Nifty"),
     ("scores", "Screener top-5"),

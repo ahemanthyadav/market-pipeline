@@ -96,6 +96,9 @@ driver import — unit-tested with a fake in `tests/test_stocks.py`) and
 | Command | Answers from | Notes |
 |---|---|---|
 | `/stock TCS` | `stock_prices`, `stock_metrics_daily`, `stock_scores`, `stock_fundamentals`, `headline_*` | symbol or name fragment (bare NSE symbols get `.NS` tried); close, day %, 1m/6m/12m/YTD, 50/200DMA, 52w position, RSI14 (computed in Python — `technical_indicators` covers indices only), factor scores, valuation, 3 headlines |
+| `/valuation PLTR` | `v_latest_valuations` (Schema 25, ADR 0026/0033) | all 15 intrinsic valuation methods (Graham, PEG, DCF, DDM, EPV, residual income, Damodaran FCFF, owner earnings, …), median fair value + upside vs close, practitioner vs academic medians, methods flagged above close; descriptive only — not advice |
+| `/calibration` | `v_latest_calibration` | factor ICs, archetype excess returns, multibagger gate marginal value, shrunk factor weights (classifier loop, ADR 0033) |
+| `/methods` | `v_valuation_methods` | valuation & scientific method catalog — formulas, lens, peer-reviewed sources (Schema 25) |
 | `/news TCS` | `headline_entities` → `raw_headlines`, `news_sentiment`, `headline_events` | last 14 d, sentiment per headline, event tags |
 | `/top growth sp500` | `stock_scores` | best 10 eligible by `value\|quality\|growth\|momentum\|risk\|composite`; default composite / NIFTY500 |
 | `/movers` | `stock_scores` | entered / left the top-20 between the last two FULL runs (≥40 eligible rows — canary runs ignored) |
