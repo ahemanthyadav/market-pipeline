@@ -203,6 +203,14 @@ def build_message(chat_id=None):
             if not stocks.table_missing(exc):
                 raise
             print("WARN regime inputs missing — line skipped", flush=True)
+        try:
+            sc_line = stocks.scorecard_line(q)
+            if sc_line:
+                lines.append(sc_line)
+        except psycopg.Error as exc:
+            if not stocks.table_missing(exc):
+                raise
+            print("WARN scorecard inputs missing — line skipped", flush=True)
         note = narrative(cur)
         if note:
             lines.append("<b>Summary</b> <i>(AI-written; every number checked against the data)</i>\n"

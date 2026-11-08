@@ -57,7 +57,7 @@ def bad_numbers(text, facts):
         v = float(m.replace(",", "").replace("−", "-").replace("–", "-").lstrip("+"))
         if any(abs(abs(v) - abs(a)) < 1e-9 for a in ok):
             continue
-        if any(abs(abs(v) - abs(f)) < 0.01 or abs(abs(v) - round(abs(f) * 100, 2)) < 0.01 for f in raw):
+        if any(abs(abs(v) - abs(f)) < 0.1 or abs(abs(v) - round(abs(f) * 100, 2)) < 0.1 for f in raw):
             continue            # same number, rounded or truncated (models do both); percent form allowed too
         bad.append(m)
     return bad

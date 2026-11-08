@@ -22,6 +22,11 @@ TOPICS = {
     "news": re.compile(r"\bnews|headline|recent|latest|said|announcement", re.I),
     "flows": re.compile(r"\bfii|\bdii|flow|foreign|institutional", re.I),
     "fx": re.compile(r"\bfx|usdinr|rupee|dollar|euro|yen|currency", re.I),
+    "screener": re.compile(r"\btop\b|\bscreener\b|\bbest\b|\bmultibagger\b|\bshortlist\b|\bpicks?\b", re.I),
+    "sectors": re.compile(r"\bsectors?\b|\bindustr(?:y|ies)\b|\bcheapest|\bexpensive", re.I),
+    "regime": re.compile(r"\bregime\b|\bmacro\b|\bvix\b|\bvolatility\b|\byield\b|\bspread\b|\bbreadth\b", re.I),
+    "scorecard": re.compile(r"\bscorecard\b|\btrack record\b|\bhit rate\b|\bpredictions?\b|\balpha\b", re.I),
+    "earnings": re.compile(r"\bearnings\b|\bresults calendar\b|\breporting\b|\bupcoming results\b", re.I),
 }
 
 
@@ -46,11 +51,35 @@ def stock_facts(q, row):
     if hl and hl[0] and hl[0][0] is not None:
         f["metrics"]["high_52w"] = round(hl[0][0], 2)
         f["metrics"]["low_52w"] = round(hl[0][1], 2)
-    sc = q_or_none(q, "SELECT composite, rank FROM stock_scores WHERE symbol = %s "
+    sc = q_or_none(q, "SELECT composite, rank, value_score, quality_score, growth_score, "
+                      "momentum_score, risk_score FROM stock_scores WHERE symbol = %s "
                       "AND ts >= now() - interval '400 days' ORDER BY ts DESC LIMIT 1", (sym,))
-    if sc:
+    if sc and sc[0]:
         f["score"] = {"composite": sc[0][0], "rank": sc[0][1]}
+        if len(sc[0]) >= 7 and sc[0][2] is not None:
+            subs = tuple(sc[0][2:7])
+            f["score"].update({
+                "value": round(subs[0], 2), "quality": round(subs[1], 2),
+                "growth": round(subs[2], 2), "momentum": round(subs[3], 2),
+                "risk": round(subs[4], 2),
+                "archetype": stocks.stock_archetype(subs),
+                "drivers": stocks.stock_drivers(subs),
+            })
+    fund = q_or_none(q, "SELECT DISTINCT ON (metric) metric, value FROM stock_fundamentals "
+                        "WHERE symbol = %s AND metric IN ('pe','pb','roe','operating_margin','market_cap','ev_ebitda') "
+                        "AND ts >= now() - interval '400 days' ORDER BY metric, ts DESC", (sym,))
+    if fund:
+        f["fundamentals"] = {k: round(v, 4) if isinstance(v, float) else v for k, v in fund if v is not None}
+    val = q_or_none(q, "SELECT fair_value, upside_pct, methods FROM v_latest_valuations WHERE symbol = %s", (sym,))
+    if val and val[0] and val[0][0] is not None:
+        f["valuation"] = {"fair_value": round(val[0][0], 2), "upside_pct": round(val[0][1], 2), "methods": val[0][2]}
+    ec = q_or_none(q, "SELECT earnings_date FROM earnings_calendar WHERE symbol = %s "
+                      "AND earnings_date >= current_date ORDER BY earnings_date LIMIT 1", (sym,))
+    if ec and ec[0] and ec[0][0] is not None:
+        f["next_earnings"] = str(ec[0][0])
     news = news_facts(q, sym, days=NEWS_DAYS, exact=True)
+    if not news and sym.endswith(".NS"):
+        news = news_facts(q, stocks.bare(sym), days=NEWS_DAYS, exact=True)
     if news:
         f["recent_headlines"] = news
     return f
@@ -123,13 +152,123 @@ def index_facts(q, arg):
     return f
 
 
+def screener_facts(q, question):
+    ql = question.lower()
+    uni = "NIFTY500"
+    for k, u in stocks.UNIVERSES.items():
+        if k in ql:
+            uni = u
+            break
+    fac_col = "composite"
+    fac_name = "composite"
+    for fn, col in (("value", "value_score"), ("quality", "quality_score"),
+                    ("growth", "growth_score"), ("momentum", "momentum_score"),
+                    ("risk", "risk_score")):
+        if fn in ql:
+            fac_name, fac_col = fn, col
+            break
+    rows = q_or_none(
+        q, f"SELECT symbol, rank, composite, value_score, quality_score, growth_score, "
+           f"momentum_score, risk_score FROM stock_scores "
+           f"WHERE universe = %s AND eligible AND ts = ("
+           f"  SELECT max(ts) FROM stock_scores WHERE universe = %s AND ts >= now() - interval '14 days') "
+           f"ORDER BY {fac_col} DESC NULLS LAST LIMIT 5", (uni, uni))
+    if not rows:
+        return None
+    picks = []
+    for r in rows:
+        item = {"symbol": r[0], "rank": r[1], "composite": round(r[2], 2) if r[2] is not None else None}
+        if len(r) >= 8 and r[3] is not None:
+            item["archetype"] = stocks.stock_archetype(tuple(r[3:8]))
+        picks.append(item)
+    return {"universe": uni, "sorted_by": fac_name, "top_picks": picks}
+
+
+def sector_facts(q, question):
+    ql = question.lower()
+    uni = "SP500" if any(k in ql for k in ("sp500", "s&p", "us")) else "NIFTY500"
+    rows = q_or_none(
+        q, "SELECT sector, median_pe, median_pb, median_roe, median_upside_pct FROM sector_metrics "
+           "WHERE universe = %s AND ts = ("
+           "  SELECT max(ts) FROM sector_metrics WHERE universe = %s AND ts >= now() - interval '14 days') "
+           "ORDER BY median_pe ASC NULLS LAST LIMIT 12", (uni, uni))
+    if not rows:
+        return None
+    return {"universe": uni, "sectors": [
+        {"sector": s, "median_pe": round(pe, 2) if pe is not None else None,
+         "median_pb": round(pb, 2) if pb is not None else None,
+         "median_roe": round(roe, 4) if roe is not None else None,
+         "median_upside_pct": round(up, 2) if up is not None else None}
+        for s, pe, pb, roe, up in rows
+    ]}
+
+
+def regime_facts(q):
+    f = macro_facts(q)
+    idx = q_or_none(
+        q, "SELECT DISTINCT ON (ticker) ticker, close FROM index_prices "
+           "WHERE ticker IN ('^NSEI','^GSPC','^VIX','^INDIAVIX','GC=F') "
+           "AND ts >= now() - interval '10 days' ORDER BY ticker, ts DESC")
+    if idx:
+        f["indices"] = {t: round(c, 2) for t, c in idx if c is not None}
+    return f if f else None
+
+
+def scorecard_facts(q):
+    rows = q_or_none(
+        q, "SELECT horizon_days, count(*), "
+           "avg(CASE WHEN excess > 0 THEN 100.0 ELSE 0.0 END), avg(excess) * 100.0 "
+           "FROM prediction_outcomes WHERE ts >= now() - interval '2 years' "
+           "GROUP BY horizon_days ORDER BY horizon_days")
+    if not rows:
+        return None
+    return {"horizons": [
+        {"horizon_days": h, "resolved_picks": n,
+         "hit_rate_pct": round(hr, 2) if hr is not None else None,
+         "mean_excess_pct": round(ex, 2) if ex is not None else None}
+        for h, n, hr, ex in rows
+    ]}
+
+
+def earnings_facts(q):
+    rows = q_or_none(
+        q, "SELECT symbol, earnings_date FROM earnings_calendar "
+           "WHERE earnings_date >= current_date AND earnings_date <= current_date + 7 "
+           "ORDER BY earnings_date, symbol LIMIT 15")
+    if not rows:
+        return None
+    return {"upcoming_earnings": [{"symbol": s, "date": str(d)} for s, d in rows]}
+
+
 def build_facts(q, question):
     """-> (facts, subject) or (None, None) when the question maps to nothing we store."""
     # "TCS outlook" is a question ABOUT TCS: try the whole phrase, then each word as a symbol.
     for cand in [question] + question.split():
+        if cand.lower().strip("?.,") in router_stop_words():
+            continue
         row, _problem, _note = stocks.pick_one_ex(q, cand)
-        if row:
+        if row and not str(row[0]).startswith("^"):
             return stock_facts(q, row), row[0]
+    if TOPICS["screener"].search(question):
+        f = screener_facts(q, question)
+        if f:
+            return f, "screener"
+    if TOPICS["sectors"].search(question):
+        f = sector_facts(q, question)
+        if f:
+            return f, "sectors"
+    if TOPICS["scorecard"].search(question):
+        f = scorecard_facts(q)
+        if f:
+            return f, "scorecard"
+    if TOPICS["earnings"].search(question):
+        f = earnings_facts(q)
+        if f:
+            return f, "earnings"
+    if TOPICS["regime"].search(question):
+        f = regime_facts(q)
+        if f:
+            return f, "regime"
     if TOPICS["news"].search(question):
         words = [w for w in re.findall(r"[A-Za-z0-9&\-]{3,}", question) if w.lower() not in
                  ("news", "headline", "recent", "latest", "said", "about", "what", "tell", "any")]
@@ -143,6 +282,17 @@ def build_facts(q, question):
         return (f, "fx") if f.get("usdinr") else (None, None)
     f = index_facts(q, question)
     return (f, "index") if f else (None, None)
+
+
+def router_stop_words():
+    return {"what", "why", "how", "when", "where", "which", "who", "whom", "whose",
+            "top", "best", "worst", "value", "growth", "quality", "momentum", "risk",
+            "sector", "sectors", "regime", "macro", "scorecard", "earnings", "news",
+            "latest", "recent", "outlook", "explain", "summary", "show", "tell", "are",
+            "is", "the", "for", "in", "on", "of", "and", "or", "to", "with", "from",
+            "stocks", "stock", "picks", "nifty", "nifty500", "sp500", "sp400", "sp600",
+            "microcap", "vix", "sensex", "market", "hit", "rate", "cheapest", "expensive",
+            "upcoming", "calendar"}
 
 
 SYSTEM = ("You answer a stock-bot question using ONLY the facts JSON given. Copy numbers exactly as given "
@@ -203,3 +353,40 @@ def _facts_table(facts, subject):
         else:
             lines.append(f"<code>{k}</code> {v}")
     return "\n".join(lines)
+
+
+def summarize_card(card_html, command="", question="", asker=None):
+    """Generate a fact-checked 1-2 sentence AI takeaway for ANY command's output card.
+    Uses ONLY numbers present in `card_html` (verified via factcheck.bad_numbers and
+    factcheck.wrong_directions). Returns '' when AI is disabled, unavailable, or fails check."""
+    if not card_html or card_html.startswith("Usage:"):
+        return ""
+    if asker is None and (os.environ.get("BOT_AI_RESOLVE") != "1" or not os.environ.get("LLM_API_KEY")):
+        return ""
+    plain = re.sub(r"<[^>]+>", " ", card_html)
+    plain = re.sub(r"\s+", " ", plain).strip()
+    nums = factcheck.signed_numbers(plain)
+    if not nums:
+        return ""
+    facts = {"command": command, "numbers": nums, "text": plain[:1200]}
+    q_line = f"User focus: {question[:200]}\n" if question else ""
+    msgs = [
+        {"role": "system", "content": SYSTEM},
+        {"role": "user", "content": f"{q_line}Summarize the key takeaway from this /{command} output in 1-2 short sentences using ONLY the exact numbers present:\n{plain[:1200]}"},
+    ]
+    if asker is None:
+        asker = _ask
+    for _attempt in (1, 2):
+        try:
+            text = asker(msgs)
+        except Exception:  # noqa: BLE001
+            return ""
+        bad = factcheck.bad_numbers(text, facts) + factcheck.wrong_directions(text, facts)
+        if text and len(text) <= 500 and not bad:
+            return f"\n\n<b>AI Takeaway</b> <i>(fact-checked)</i>\n{stocks.esc(text)}"
+        msgs += [
+            {"role": "assistant", "content": json.dumps({"answer": text})},
+            {"role": "user", "content": f"Unsupported numbers/directions: {', '.join(bad) or 'too long'}. "
+                                        "Rewrite using ONLY exact numbers from the card text."},
+        ]
+    return ""

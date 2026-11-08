@@ -60,6 +60,8 @@ spec:
           env:
             - name: BOT_AI_RESOLVE            # forgiving /stock lookup: AI layer on (resolver.py; typed text only)
               value: "1"
+            - name: DIGEST_NARRATIVE          # ML-7a AI summary section on interactive /digest
+              value: "1"
             - name: LLM_BASE_URL
               valueFrom: {secretKeyRef: {name: llm-gateway-key, key: base-url}}
             - name: LLM_API_KEY

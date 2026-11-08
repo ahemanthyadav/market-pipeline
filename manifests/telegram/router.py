@@ -22,6 +22,9 @@ The router itself stays pure: `lookup` is injectable so tests need no database.
 """
 from __future__ import annotations
 
+from difflib import SequenceMatcher
+import json
+import os
 import re
 from typing import Callable, Optional, Tuple
 
@@ -46,6 +49,13 @@ STOP_WORDS = frozenset(nicknames.KEYWORD_COMMANDS) | frozenset({
 })
 
 MAX_LOOKUP_WORDS = 4   # longer strings are sentences, not stock names
+QUESTION_RE = re.compile(
+    r"\?$"
+    r"|\b(outlook|why|explain|analysis|thoughts|opinion|drivers|how did|how has|"
+    r"what happened|which sectors?|cheapest sectors?|expensive sectors?|"
+    r"have the picks|track record)\b",
+    re.I,
+)
 
 
 def _strip(text: str) -> str:
@@ -99,9 +109,106 @@ def _command(cmd: str, commands=None):
     """Bot command for a typed word, or None. `commands` = bot.COMMANDS keys."""
     if cmd in nicknames.KEYWORD_COMMANDS:
         return nicknames.KEYWORD_COMMANDS[cmd]
+    if cmd in nicknames.COMMAND_ALIASES:
+        return nicknames.COMMAND_ALIASES[cmd]
     if commands and cmd in commands:
         return cmd
     return None
+
+
+ADMIN_COMMANDS = frozenset({"users", "adduser", "rmuser"})
+SAFE_AI_COMMANDS = frozenset({
+    "stock", "news", "ask", "top", "multibagger", "movers", "sectors",
+    "earnings", "scorecard", "regime", "track", "world", "index", "sp500",
+    "fx", "macro", "scores", "digest", "status", "vix", "nifty", "sensex",
+    "gold", "fii", "watch",
+})
+_ai_route_cache: dict = {}
+
+
+def fuzzy_command(cmd: str, commands=None) -> Optional[str]:
+    """Deterministic typo correction for /command names (e.g. /stok -> stock, /digst -> digest)."""
+    c = (cmd or "").lower().strip("/")
+    if len(c) < 4:
+        return None
+    pool = (set(commands or ()) | set(nicknames.KEYWORD_COMMANDS)) - ADMIN_COMMANDS
+    scored = sorted(
+        ((SequenceMatcher(None, c, cand).ratio(), cand) for cand in pool),
+        key=lambda x: -x[0],
+    )
+    if not scored:
+        return None
+    top_s, top_cand = scored[0]
+    sec_s = scored[1][0] if len(scored) > 1 else 0.0
+    if top_s >= 0.78 and (top_s - sec_s >= 0.04 or _command(top_cand, commands) == _command(scored[1][1], commands)):
+        return _command(top_cand, commands)
+    return None
+
+
+def ai_route(text: str, commands=None, asker=None) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """AI fallback router when deterministic routing returns (None, None, None).
+    Only maps to read-only SAFE_AI_COMMANDS; never raises."""
+    t = _strip(text)
+    if not t:
+        return None, None, None
+    if asker is None and (os.environ.get("BOT_AI_RESOLVE") != "1" or not os.environ.get("LLM_API_KEY")):
+        return None, None, None
+    key = _norm(t)
+    if key in _ai_route_cache:
+        cmd, args = _ai_route_cache[key]
+    else:
+        prompt = (
+            f'A user of a market data Telegram bot typed: "{t[:200]}". '
+            "Map this request to the single best command from: "
+            "stock (arg: ticker/company), news (arg: ticker/company), top (arg: '<factor> <universe>'), "
+            "multibagger (arg: 'nifty' or 'sp500'), movers (no arg), sectors (arg: universe), "
+            "earnings (no arg), scorecard (no arg), regime (no arg), track (no arg), "
+            "world (arg: optional region), index (arg: index name), sp500 (no arg), fx (no arg), "
+            "macro (no arg), scores (no arg), digest (no arg), status (no arg), vix (no arg), "
+            "nifty (no arg), sensex (no arg), gold (no arg), fii (no arg), watch (no arg), "
+            "ask (arg: free-text question). "
+            'Reply as JSON: {"command": "COMMAND_NAME", "args": "ARGS"} or {"command": null, "args": null} if unrelated.'
+        )
+        try:
+            cmd, args = (asker or _ask_route)(prompt)
+        except Exception:  # noqa: BLE001
+            return None, None, None
+        _ai_route_cache[key] = (cmd, args)
+    if not cmd:
+        return None, None, None
+    cmd = str(cmd).strip().lstrip("/").lower()
+    resolved = _command(cmd, commands) or (cmd if cmd in SAFE_AI_COMMANDS else None)
+    if not resolved or resolved not in SAFE_AI_COMMANDS:
+        return None, None, None
+    if commands and resolved not in commands:
+        return None, None, None
+    clean_args = _strip(str(args or ""))
+    # Never allow AI routing to trigger a watchlist write without explicit user command
+    if resolved == "watch" and clean_args.lower().startswith(("add", "rm", "remove", "del", "delete")):
+        return None, None, None
+    return resolved, clean_args, "ai"
+
+
+def _ask_route(prompt: str) -> Tuple[Optional[str], Optional[str]]:
+    import requests
+    r = requests.post(
+        os.environ["LLM_BASE_URL"].rstrip("/") + "/chat/completions",
+        timeout=20,
+        headers={"Authorization": "Bearer " + os.environ["LLM_API_KEY"]},
+        json={
+            "model": os.environ.get("BOT_AI_MODEL", "general"),
+            "temperature": 0,
+            "max_tokens": 300,
+            "response_format": {"type": "json_object"},
+            "messages": [{"role": "user", "content": prompt}],
+        },
+    )
+    r.raise_for_status()
+    content = (r.json()["choices"][0]["message"]["content"] or "{}").strip()
+    if content.startswith("```"):
+        content = content.split("\n", 1)[-1].rsplit("```", 1)[0]
+    d = json.loads(content)
+    return d.get("command"), d.get("args")
 
 
 def route(text: str, lookup: Optional[Callable[[str], Optional[str]]] = None,
@@ -124,25 +231,31 @@ def route(text: str, lookup: Optional[Callable[[str], Optional[str]]] = None,
     # 1. Exact command prefix (/cmd ...) — pass through unchanged
     m = re.match(r"^/(\w+)(@\w+)?\s*(.*)$", t, re.I)
     if m:
-        cmd = _command(m.group(1).lower(), commands)
+        raw_cmd = m.group(1).lower()
+        cmd = _command(raw_cmd, commands)
+        conf_type = "exact"
+        if not cmd:
+            cmd = fuzzy_command(raw_cmd, commands)
+            conf_type = "fuzzy_cmd"
         args = m.group(3).strip()
         if cmd:
-            # If any word in args is a nickname, route to stock instead
+            # If any word in args is a nickname and the command takes no free-text arg, route to stock
             arg_words = args.split()
-            for word in arg_words:
-                if word in nicknames.NICKNAMES:
-                    sym = nicknames.NICKNAMES[word]
-                    if sym != "none":
-                        return "stock", sym, "nickname"
+            if cmd not in ARG_COMMANDS:
+                for word in arg_words:
+                    if word in nicknames.NICKNAMES:
+                        sym = nicknames.NICKNAMES[word]
+                        if sym != "none":
+                            return "stock", sym, "nickname"
             # A command with no real argument ("/status cub", "/movers cub")
             # whose args name a stock means that stock.
             if args and cmd not in ARG_COMMANDS:
                 sym = _lookup_symbol(lookup, args)
                 if sym:
                     return "stock", sym, "lookup"
-            return cmd, args, "exact"
-        # Not a real command — treat the rest as regular text for nickname/keyword checks
-        t = args
+            return cmd, args, conf_type
+        # Not a real command — treat the command word + args as regular text (e.g. "/tcs" -> "tcs")
+        t = f"{raw_cmd} {args}".strip()
         nt = _norm(t)
         words = nt.split()
 
@@ -160,6 +273,11 @@ def route(text: str, lookup: Optional[Callable[[str], Optional[str]]] = None,
         arg = t[len(best_phrase):].strip()
         args = route_tmpl.replace("{arg}", arg).strip() if "{arg}" in route_tmpl else route_tmpl
         return route_cmd, args, "phrase"
+
+    # 2b. Natural-language question / analysis request ("tcs outlook", "why did infy fall?",
+    #     "which sectors are cheapest?") -> /ask
+    if QUESTION_RE.search(t):
+        return "ask", t.rstrip("?").strip(), "question"
 
     # 3. Nickname-first expansion: "tcs price" → stock TCS,
     #    "hdfc bank price" → stock HDFCBANK (multi-word nickname)
@@ -235,10 +353,13 @@ def format_route(command: str, args: str, confidence: str) -> str:
     """Human-readable explanation of a route (for /route command or debugging)."""
     conf_word = {
         "exact": "exact command",
+        "fuzzy_cmd": "command typo correction",
         "phrase": "phrase match",
+        "question": "question match",
         "keyword": "keyword match",
         "nickname": "nickname expansion",
         "lookup": "universe lookup",
+        "ai": "AI router",
     }.get(confidence, confidence)
     arg_part = f" with args <code>{args}</code>" if args else ""
     return f"Routed to <b>/{command}</b>{arg_part} ({conf_word})."

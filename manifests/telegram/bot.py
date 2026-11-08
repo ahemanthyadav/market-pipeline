@@ -174,8 +174,9 @@ def _help_text() -> str:
         "/digest — your daily digest on demand\n"
         "Daily digest: 08:00 IST · change alerts after the screener run (shared screener "
         "changes + your own watchlist)\n"
-        "You can also type naturally: <code>tcs price</code>, <code>what's nifty at</code>, "
-        "<code>show me fii flows</code>, <code>facebook quote</code>"
+        "AI: append <code>ai</code>, <code>explain</code>, <code>why</code> or <code>?</code> to any command "
+        "(e.g. <code>/regime ai</code>, <code>/sectors sp500 explain</code>, <code>/fii why</code>) for a "
+        "fact-checked AI takeaway, or ask naturally: <code>tcs outlook</code>, <code>why did infy fall?</code>"
     )
 
 
@@ -209,7 +210,15 @@ def cmd_gold(_text: str) -> str:
 
 
 def cmd_index(text: str) -> str:
-    return stocks.index_text(query, text.partition(" ")[2].strip())
+    arg = _arg(text)
+    out = stocks.index_text(query, arg)
+    if arg and out.startswith("No index matching"):
+        row, _problem, note = stocks.pick_one_ex(query, arg)
+        if row and not str(row[0]).startswith("^"):
+            notice = (f"↪️ <i><b>{html.escape(arg)}</b> is a stock, not an index — running "
+                      f"<code>/stock {html.escape(row[0])}</code>:</i>\n")
+            return notice + ((note + "\n") if note else "") + stocks.stock_card(query, row)
+    return out
 
 
 def cmd_sp500(_text: str) -> str:
@@ -251,7 +260,19 @@ def _arg(text: str) -> str:
 
 
 def cmd_stock(text: str) -> str:
-    row, problem, note = stocks.pick_one_ex(query, _arg(text))
+    arg = _arg(text)
+    row, problem, note = stocks.pick_one_ex(query, arg)
+    if row and str(row[0]).startswith("^"):
+        idx = stocks.find_index(query, row[0]) or [(row[0], row[1] or row[0])]
+        notice = (f"↪️ <i><b>{html.escape(arg)}</b> is an index — running "
+                  f"<code>/index {html.escape(idx[0][0])}</code>:</i>\n")
+        return notice + stocks.index_card(query, idx[0][0], idx[0][1])
+    if problem and arg:
+        idx = stocks.find_index(query, arg)
+        if len(idx) == 1:
+            notice = (f"↪️ <i><b>{html.escape(arg)}</b> is an index, not a stock — running "
+                      f"<code>/index {html.escape(idx[0][0])}</code>:</i>\n")
+            return notice + stocks.index_card(query, idx[0][0], idx[0][1])
     return problem or ((note + "\n") if note else "") + stocks.stock_card(query, row)
 
 
@@ -319,17 +340,28 @@ def cmd_fx(_text: str) -> str:
 
 def cmd_watch(text: str, chat: str = None) -> str:
     chat = str(chat or OWNER)          # no chat (runbook one-liners) = the owner
-    action, arg, qty, cost, note, problem = stocks.parse_watch(text)
+    action, arg, qty, cost, user_note, problem = stocks.parse_watch(text)
     try:
+        # Allow "/watch tesla" or "watch tesla" (implicit 'add' when the word after /watch is a stock)
+        if problem == stocks.WATCH_USAGE and _arg(text) and _arg(text).lower() != "add":
+            c_act, c_arg, c_qty, c_cost, c_note, c_prob = stocks.parse_watch("/watch add " + _arg(text))
+            if not c_prob and c_arg:
+                full_q = f"{c_arg} {c_note}".strip() if (c_qty is None and c_note) else c_arg
+                row_check, prob_check, _ = stocks.pick_one_ex(query, full_q)
+                if row_check or (prob_check and not prob_check.startswith("No stock matching")):
+                    action, arg, qty, cost, user_note, problem = (
+                        c_act, full_q if row_check and full_q != c_arg else c_arg,
+                        c_qty, c_cost, None if (row_check and full_q != c_arg) else c_note, None
+                    )
         if problem:
             return problem
         if action == "list":
             return stocks.watch_text(query, chat)
-        row, problem, note = stocks.pick_one_ex(query, arg)
+        row, problem, resolve_note = stocks.pick_one_ex(query, arg)
         if problem:
             return problem
-        if note:   # a corrected/AI guess never writes to a watchlist — confirm with the exact symbol
-            return (f"{note}\nNot changed. If that is right, send it again with the exact symbol: "
+        if resolve_note:   # a corrected/AI guess never writes to a watchlist — confirm with the exact symbol
+            return (f"{resolve_note}\nNot changed. If that is right, send it again with the exact symbol: "
                     f"<code>/watch {html.escape(action)} {html.escape(row[0])}</code>")
         symbol = row[0]
         if action == "rm":
@@ -345,7 +377,7 @@ def cmd_watch(text: str, chat: str = None) -> str:
             "qty = COALESCE(EXCLUDED.qty, watchlist.qty), "
             "avg_cost = COALESCE(EXCLUDED.avg_cost, watchlist.avg_cost), "
             "note = COALESCE(EXCLUDED.note, watchlist.note)",
-            (chat, symbol, qty, cost, note),
+            (chat, symbol, qty, cost, user_note),
         )
         held = f" — {qty:g} @ {cost:,.2f}" if qty else ""
         return f"Watching <b>{html.escape(row[1])}</b> ({html.escape(symbol)}){held}."
@@ -427,6 +459,34 @@ COMMANDS = {
 }
 
 
+AI_FLAGS = frozenset({"ai", "explain", "why", "summary", "?"})
+NO_AI_WRAP = frozenset({"help", "start", "ask", "route", "users", "adduser", "rmuser"})
+
+
+def split_ai_flag(text: str):
+    """Strip a trailing AI request flag ('ai', 'explain', 'why', 'summary', '?') from a command
+    so the underlying handler parses its normal arguments, returning (clean_text, want_ai)."""
+    raw = (text or "").strip()
+    want_env = os.environ.get("BOT_AI_COMMENTARY") == "1"
+    if raw.endswith("?") and len(raw) > 1:
+        return raw[:-1].rstrip(), True
+    parts = raw.split()
+    if len(parts) >= 2 and parts[-1].lower().rstrip("?") in AI_FLAGS:
+        return " ".join(parts[:-1]), True
+    return raw, want_env
+
+
+def with_ai_takeaway(result: str, cmd: str, want_ai: bool, asker=None) -> str:
+    """Append a fact-checked AI takeaway to `result` when requested and supported."""
+    if not want_ai or cmd in NO_AI_WRAP or not isinstance(result, str):
+        return result
+    try:
+        import ask
+        return result + ask.summarize_card(result, command=cmd, asker=asker)
+    except Exception:  # noqa: BLE001 — AI takeaway is optional, never breaks a command
+        return result
+
+
 # ---------------------------------------------------------------- transport
 
 def send(text: str, chat: str = None) -> None:
@@ -457,21 +517,47 @@ def handle(update: dict) -> None:
 
     if not text:
         return
-    cmd = text.split()[0].lstrip("/").split("@")[0].lower()
+    clean_text, want_ai = split_ai_flag(text)
+    typed_slash = clean_text.startswith("/")
+    cmd = clean_text.split()[0].lstrip("/").split("@")[0].lower()
     handler = COMMANDS.get(cmd)
     if handler is None:
-        # Try the natural-language router before giving up ("tcs price" → /stock TCS)
-        r_cmd, r_args, r_conf = router.route(text, symbol_lookup, COMMANDS)
+        # 1. Deterministic router first (exact aliases, fuzzy command typos, nicknames, phrases, universe lookup)
+        r_cmd, r_args, r_conf = router.route(clean_text, symbol_lookup, COMMANDS)
+        # 2. If deterministic routing fails, AI router takes over
+        if not r_cmd:
+            r_cmd, r_args, r_conf = router.ai_route(clean_text, COMMANDS)
         if r_cmd and r_cmd in COMMANDS:
             full_text = f"/{r_cmd} {r_args}".strip() if r_args else f"/{r_cmd}"
+            if r_conf == "ai":
+                notice = f"↪️ <i>Routed by AI to <code>{html.escape(full_text)}</code>:</i>\n"
+            elif typed_slash and r_cmd != cmd:
+                notice = (f"↪️ <i><code>/{html.escape(cmd)}</code> is not a command — "
+                          f"running <code>{html.escape(full_text)}</code>:</i>\n")
+            else:
+                notice = ""
             try:
-                send(COMMANDS[r_cmd](full_text, chat) if r_cmd in PERSONAL else COMMANDS[r_cmd](full_text), chat)
+                out = COMMANDS[r_cmd](full_text, chat) if r_cmd in PERSONAL else COMMANDS[r_cmd](full_text)
+                send(notice + with_ai_takeaway(out, r_cmd, want_ai), chat)
                 print(f"routed /{r_cmd} ({r_conf})", flush=True)
                 return
             except Exception as exc:  # noqa: BLE001 - one bad query must not kill the loop
                 print(f"ERROR routed /{r_cmd}: {exc}", flush=True)
                 send("Command failed — see logs (kubectl logs deploy/telegram-bot).", chat)
                 return
+        # 3. Fallback: if text maps to stored DB facts, answer via /ask (fact-checked AI)
+        try:
+            import ask
+            q_text = clean_text.lstrip("/")
+            facts, _subj = ask.build_facts(query, q_text)
+            if facts:
+                notice = (f"↪️ <i><code>/{html.escape(cmd)}</code> is not a command — "
+                          f"answering via <code>/ask</code>:</i>\n") if typed_slash else ""
+                send(notice + cmd_ask(f"/ask {q_text}"), chat)
+                print("routed /ask (facts-fallback)", flush=True)
+                return
+        except Exception:  # noqa: BLE001
+            pass
         send(f"Unknown command. {chr(10)}" + cmd_help("", chat), chat)
         return
     if cmd in ADMIN and not REGISTRY.is_owner(chat):
@@ -479,29 +565,38 @@ def handle(update: dict) -> None:
         return
     # A no-argument command followed by a stock name means that stock:
     # "/status cub", "/movers cub" → /stock CUB.NS (ARG_COMMANDS keep their args).
-    args_text = text.split(None, 1)[1].strip() if len(text.split()) > 1 else ""
+    args_text = clean_text.split(None, 1)[1].strip() if len(clean_text.split()) > 1 else ""
+    reroute_notice = ""
     sym = router.symbol_from_args(cmd, args_text, symbol_lookup)
     if sym:
-        text, cmd, handler = f"/stock {sym}", "stock", COMMANDS["stock"]
+        reroute_notice = (f"↪️ <i><code>/{html.escape(cmd)}</code> takes no stock argument — "
+                          f"running <code>/stock {html.escape(sym)}</code>:</i>\n")
+        clean_text, cmd, handler = f"/stock {sym}", "stock", COMMANDS["stock"]
         print(f"rerouted /status-style → /stock {sym}", flush=True)
     try:
-        result = handler(text, chat) if cmd in PERSONAL else handler(text)
-        # If the handler returned a usage error (e.g. parse_top couldn't parse
-        # "/top tcs stock"), try the router as a fallback ("tcs stock" → /stock TCS)
-        if isinstance(result, str) and result.startswith("Usage:"):
-            # Strip the command word before passing to router so "/top tcs stock"
-            # becomes "tcs stock" which matches nickname "tcs" → stock TCS.NS
-            router_text = text.split(None, 1)[1] if len(text.split()) > 1 else text
-            r_cmd, r_args, r_conf = router.route(router_text, symbol_lookup, COMMANDS)
-            if r_cmd and r_cmd in COMMANDS:
+        result = handler(clean_text, chat) if cmd in PERSONAL else handler(clean_text)
+        # If the handler returned an argument/usage error (e.g. "/top tcs", "/sectors tcs",
+        # "/world tcs", "/multibagger tcs"), try deterministic router first, then AI router
+        if isinstance(result, str) and result.startswith(
+            ("Usage:", "Unknown universe", "Unknown region", "<b>/watch</b> — list")
+        ) and args_text:
+            r_cmd, r_args, r_conf = router.route(args_text, symbol_lookup, COMMANDS)
+            if not r_cmd or r_cmd == cmd:
+                r_cmd, r_args, r_conf = router.ai_route(args_text, COMMANDS)
+            if r_cmd and r_cmd in COMMANDS and r_cmd != cmd:
                 full_text = f"/{r_cmd} {r_args}".strip() if r_args else f"/{r_cmd}"
+                via = " (routed by AI)" if r_conf == "ai" else ""
+                notice = (f"↪️ <i><code>/{html.escape(cmd)}</code> cannot handle "
+                          f"<code>{html.escape(args_text)}</code> — running "
+                          f"<code>{html.escape(full_text)}</code>{via}:</i>\n")
                 try:
-                    send(COMMANDS[r_cmd](full_text, chat) if r_cmd in PERSONAL else COMMANDS[r_cmd](full_text), chat)
+                    out = COMMANDS[r_cmd](full_text, chat) if r_cmd in PERSONAL else COMMANDS[r_cmd](full_text)
+                    send(notice + with_ai_takeaway(out, r_cmd, want_ai), chat)
                     print(f"routed /{r_cmd} ({r_conf}) after handler failure", flush=True)
                     return
                 except Exception as exc:  # noqa: BLE001
                     print(f"ERROR routed /{r_cmd}: {exc}", flush=True)
-        send(result, chat)
+        send(reroute_notice + with_ai_takeaway(result, cmd, want_ai), chat)
         print(f"answered /{cmd}", flush=True)
     except Exception as exc:  # noqa: BLE001 - one bad query must not kill the loop
         print(f"ERROR /{cmd}: {exc}", flush=True)

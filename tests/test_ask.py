@@ -89,6 +89,51 @@ class Gate(unittest.TestCase):
         out = ask.answer(news_only, "news infosys", asker=lambda m: "Infosys won a 500M dollar deal.")
         self.assertIn("500M", out)
 
+    def test_expanded_topics_screener_sectors_regime_scorecard_earnings(self):
+        def topic_q(sql, args=()):
+            if "FROM stock_scores" in sql and "ORDER BY growth_score" in sql:
+                return [("TCS.NS", 1, 88.5, 0.7, 0.85, 0.8, 0.7, 0.7)]
+            if "FROM sector_metrics" in sql:
+                return [("Financials", 14.2, 2.1, 0.16, 12.5)]
+            if "FROM prediction_outcomes" in sql:
+                return [(91, 50, 62.0, 3.4)]
+            if "FROM earnings_calendar" in sql:
+                return [("INFY.NS", "2026-11-12")]
+            if "FROM index_prices" in sql:
+                return [("^VIX", 15.2), ("^INDIAVIX", 13.8)]
+            return []
+        f_top, s_top = ask.build_facts(topic_q, "what are the top growth stocks in nifty")
+        self.assertEqual(s_top, "screener")
+        self.assertEqual(f_top["top_picks"][0]["symbol"], "TCS.NS")
+        self.assertEqual(f_top["top_picks"][0]["archetype"], "Quality Compounder")
+
+        f_sec, s_sec = ask.build_facts(topic_q, "which sectors are cheapest in sp500")
+        self.assertEqual(s_sec, "sectors")
+        self.assertEqual(f_sec["sectors"][0]["sector"], "Financials")
+
+        f_sc, s_sc = ask.build_facts(topic_q, "how is the scorecard hit rate")
+        self.assertEqual(s_sc, "scorecard")
+        self.assertEqual(f_sc["horizons"][0]["hit_rate_pct"], 62.0)
+
+        f_ec, s_ec = ask.build_facts(topic_q, "upcoming earnings calendar")
+        self.assertEqual(s_ec, "earnings")
+        self.assertEqual(f_ec["upcoming_earnings"][0]["symbol"], "INFY.NS")
+
+        f_reg, s_reg = ask.build_facts(topic_q, "how is market regime and vix")
+        self.assertEqual(s_reg, "regime")
+        self.assertEqual(f_reg["indices"]["^VIX"], 15.2)
+
+    def test_summarize_card_enforces_factcheck(self):
+        card = "<b>Volatility</b>\n<pre>VIX 15.20 +2.1%\nIndia VIX 13.80 -1.4%</pre>"
+        good = ask.summarize_card(card, command="vix",
+                                  asker=lambda m: "VIX rose 2.1% to 15.20 while India VIX fell 1.4% to 13.80.")
+        self.assertIn("AI Takeaway", good)
+        self.assertIn("15.20", good)
+        # Invented number 19.50 must be rejected after retry
+        bad = ask.summarize_card(card, command="vix",
+                                 asker=lambda m: "VIX rose to 19.50.")
+        self.assertEqual(bad, "")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)

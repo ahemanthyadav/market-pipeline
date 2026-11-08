@@ -177,6 +177,32 @@ class RouteTest(unittest.TestCase):
         self.assertIsNone(router.symbol_from_args("status", "", self.lookup))
         self.assertIsNone(router.symbol_from_args("status", "please", self.lookup))
 
+    def test_question_routes_to_ask(self):
+        for q, expected_arg in [
+            ("tcs outlook", "tcs outlook"),
+            ("why did infosys fall?", "why did infosys fall"),
+            ("which sectors are cheapest?", "which sectors are cheapest"),
+            ("explain market regime", "explain market regime"),
+        ]:
+            cmd, args, conf = router.route(q, self.lookup, COMMANDS)
+            self.assertEqual((cmd, args, conf), ("ask", expected_arg, "question"), q)
+
+    def test_fuzzy_slash_command_and_slash_ticker(self):
+        self.assertEqual(router.route("/stok TCS", self.lookup, COMMANDS), ("stock", "TCS", "fuzzy_cmd"))
+        self.assertEqual(router.route("/digst", self.lookup, COMMANDS), ("digest", "", "fuzzy_cmd"))
+        self.assertEqual(router.route("/tcs", self.lookup, COMMANDS), ("stock", "TCS.NS", "nickname"))
+
+    def test_ai_route_fallback_and_safety(self):
+        router._ai_route_cache.clear()
+        cmd, args, conf = router.ai_route("yield curve spread", COMMANDS | {"macro"},
+                                          asker=lambda p: ("macro", ""))
+        self.assertEqual((cmd, args, conf), ("macro", "", "ai"))
+        # AI router must never allow admin commands or watchlist mutations
+        self.assertEqual(router.ai_route("hack", COMMANDS, asker=lambda p: ("adduser", "123 bob")),
+                         (None, None, None))
+        self.assertEqual(router.ai_route("watch", COMMANDS, asker=lambda p: ("watch", "add TCS")),
+                         (None, None, None))
+
 
 if __name__ == "__main__":
     unittest.main()

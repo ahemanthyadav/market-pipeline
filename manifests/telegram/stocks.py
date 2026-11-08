@@ -28,6 +28,7 @@ return 400 and the whole message is lost.
 
 import html
 import math
+import os
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -649,10 +650,16 @@ def pick_one(q, arg):
 # ---------------------------------------------------------------- /stock
 
 SNAPSHOT = ["pe", "pb", "ev_ebitda", "roe", "operating_margin", "market_cap"]
-ANNUAL = ["total_revenue", "eps", "net_income", "fcf", "total_debt", "shareholder_equity"]
+ANNUAL = [
+    "total_revenue", "eps", "net_income", "fcf", "total_debt", "shareholder_equity",
+    "total_assets", "gross_profit", "ocf", "shares_outstanding", "current_assets",
+    "current_liabilities", "operating_income",
+]
 
 
-FLOW_METRICS = frozenset({"total_revenue", "eps", "net_income", "fcf"})
+FLOW_METRICS = frozenset({
+    "total_revenue", "eps", "net_income", "fcf", "gross_profit", "ocf", "operating_income",
+})
 
 
 def series(rows):
@@ -691,6 +698,94 @@ def yoy(annual, metric):
     return None if now_ is None or prev is None or prev <= 0 else pct(now_ / prev - 1)
 
 
+def scientific_diagnostics(annual):
+    """Compute peer-reviewed accounting & factor diagnostics from `latest_two` annual dict.
+
+    Implements:
+    - EV-10 Gross Profitability (GP/A = gross_profit / total_assets) — Novy-Marx (2013), JFE
+    - EV-11 Asset Growth (CMA = YoY total_assets change) — Cooper, Gulen & Schill (2008), JF; Fama & French (2015)
+    - EV-12 Operating Accruals ((net_income - ocf) / total_assets) — Sloan (1996), Accounting Review
+    - EV-13 Net Share Issuance (YoY shares_outstanding change) — Pontiff & Woodgate (2008), JF
+    - EV-14 Piotroski F-Score (9 binary accounting signals) — Piotroski (2000), JAR
+    - Altman Z''-Score (non-manufacturing / emerging solvency) — Altman (1968, 2000)
+    """
+    def cur_prev(key):
+        val = annual.get(key)
+        if not val:
+            return None, None
+        return val[0], val[1]
+
+    ta, ta_p = cur_prev("total_assets")
+    gp, gp_p = cur_prev("gross_profit")
+    ni, ni_p = cur_prev("net_income")
+    ocf, _ = cur_prev("ocf")
+    fcf, _ = cur_prev("fcf")
+    rev, rev_p = cur_prev("total_revenue")
+    debt, debt_p = cur_prev("total_debt")
+    eq, _ = cur_prev("shareholder_equity")
+    ca, ca_p = cur_prev("current_assets")
+    cl, cl_p = cur_prev("current_liabilities")
+    sh, sh_p = cur_prev("shares_outstanding")
+    ebit, _ = cur_prev("operating_income")
+
+    out = {}
+    if gp is not None and ta and ta > 0:
+        out["gpa"] = gp / ta
+    cash_flow = ocf if ocf is not None else fcf
+    if ni is not None and cash_flow is not None and ta and ta > 0:
+        out["accruals"] = (ni - cash_flow) / ta
+    if ta is not None and ta_p and ta_p > 0:
+        out["asset_growth"] = ta / ta_p - 1.0
+    if sh is not None and sh_p and sh_p > 0:
+        out["share_issuance"] = sh / sh_p - 1.0
+
+    # Piotroski (2000) 9-signal F-Score
+    f_pts, f_tested = 0, 0
+    if ni is not None and ta and ta > 0:
+        f_tested += 1
+        f_pts += int((ni / ta) > 0)
+    if cash_flow is not None:
+        f_tested += 1
+        f_pts += int(cash_flow > 0)
+    if ni is not None and ni_p is not None and ta and ta > 0 and ta_p and ta_p > 0:
+        f_tested += 1
+        f_pts += int((ni / ta) > (ni_p / ta_p))
+    if cash_flow is not None and ni is not None:
+        f_tested += 1
+        f_pts += int(cash_flow > ni)
+    if debt is not None and debt_p is not None and ta and ta > 0 and ta_p and ta_p > 0:
+        f_tested += 1
+        f_pts += int((debt / ta) <= (debt_p / ta_p))
+    if ca is not None and cl and cl > 0 and ca_p is not None and cl_p and cl_p > 0:
+        f_tested += 1
+        f_pts += int((ca / cl) > (ca_p / cl_p))
+    if sh is not None and sh_p and sh_p > 0:
+        f_tested += 1
+        f_pts += int(sh <= sh_p * 1.005)
+    if gp is not None and rev and rev > 0 and gp_p is not None and rev_p and rev_p > 0:
+        f_tested += 1
+        f_pts += int((gp / rev) > (gp_p / rev_p))
+    if rev is not None and ta and ta > 0 and rev_p is not None and ta_p and ta_p > 0:
+        f_tested += 1
+        f_pts += int((rev / ta) > (rev_p / ta_p))
+    if f_tested >= 4:
+        ratio = f_pts / f_tested
+        f_lbl = "strong" if ratio >= 0.70 else ("weak" if ratio <= 0.35 else "neutral")
+        out["f_score"] = (f_pts, f_tested, f_lbl)
+
+    # Altman (1968, 2000) Z''-Score for non-manufacturing / general industrials
+    if ta and ta > 0 and ca is not None and cl is not None and eq is not None and ebit is not None:
+        x1 = (ca - cl) / ta
+        x2 = eq / ta
+        x3 = ebit / ta
+        x4 = (eq / debt) if (debt and debt > 0) else 3.0
+        z2 = 6.56 * x1 + 3.26 * x2 + 6.72 * x3 + 1.05 * min(x4, 10.0)
+        zone = "safe" if z2 > 2.60 else ("distress" if z2 < 1.10 else "grey")
+        out["altman_z2"] = (z2, zone)
+
+    return out
+
+
 def reprice(snapshot, close, snapshot_close):
     """Carry price-based ratios from the weekly Yahoo snapshot to today's close.
 
@@ -707,6 +802,176 @@ def reprice(snapshot, close, snapshot_close):
         if out.get(metric) is not None:
             out[metric] = out[metric] * factor
     return out, True
+
+
+def _median(vals):
+    s = sorted(v for v in vals if v is not None and v > 0)
+    if not s:
+        return None
+    m = len(s) // 2
+    return s[m] if len(s) % 2 else (s[m - 1] + s[m]) / 2.0
+
+
+def grouped_valuations(fv_row, f, annual, close, universe=""):
+    """Build grouped Practitioner and Research-Backed (Academic) intrinsic valuation
+    estimates from `v_latest_valuations` (`fv_row`) plus snapshot (`f`) and `annual`.
+
+    Returns dict with:
+      - `methods`: dict of {method_key: per_share_value}
+      - `practitioner_median`, `practitioner_count`, `practitioner_groups`
+      - `academic_median`, `academic_count`, `academic_groups`
+    """
+    by_key = {}
+    r_rate = 0.115 if (universe or "").startswith("NIFTY") else 0.095
+    g_rev = None
+    if fv_row and len(fv_row) >= 13:
+        col_names = ("graham", "peer_multiple", "fcf_yield", "dcf", "ddm",
+                     "epv", "residual_income", "peg_lynch", "damodaran_fcff",
+                     "graham_growth")
+        for k, v in zip(col_names, fv_row[3:13]):
+            if v is not None and v > 0:
+                by_key[k] = float(v)
+        if len(fv_row) >= 14 and fv_row[13]:
+            r_rate = float(fv_row[13])
+        if len(fv_row) >= 15 and fv_row[14] is not None:
+            g_rev = float(fv_row[14])
+
+    f = f or {}
+    annual = annual or {}
+    mcap = f.get("market_cap")
+    shares = (mcap / close) if (mcap and mcap > 0 and close and close > 0) else None
+    eps_ann = annual.get("eps", (None, None))[0]
+    eps = eps_ann if (eps_ann and eps_ann > 0) else (
+        (close / f["pe"]) if (close and f.get("pe") and f["pe"] > 0) else None
+    )
+    eq = annual.get("shareholder_equity", (None, None))[0]
+    bvps = (eq / shares) if (eq and eq > 0 and shares) else (
+        (close / f["pb"]) if (close and f.get("pb") and f["pb"] > 0) else None
+    )
+    fcf = annual.get("fcf", (None, None))[0]
+    debt = annual.get("total_debt", (None, None))[0] or 0.0
+    roe = f.get("roe")
+    gp = annual.get("gross_profit", (None, None))[0]
+    ebit = annual.get("operating_income", (None, None))[0]
+
+    if g_rev is None:
+        rev_now, rev_prev, *_ = annual.get("total_revenue", (None, None, None))
+        if rev_now and rev_prev and rev_prev > 0:
+            g_rev = max(0.0, min(0.15, rev_now / rev_prev - 1.0))
+
+    eps_now, eps_prev, *_ = annual.get("eps", (None, None, None))
+    g_eps = None
+    if eps_now and eps_prev and eps_prev > 0 and eps_now > 0:
+        g_eps = max(0.05, min(0.25, eps_now / eps_prev - 1.0))
+    elif g_rev is not None and g_rev > 0:
+        g_eps = max(0.05, min(0.25, g_rev))
+
+    # Fill standard methods if not already populated from DB row
+    if "graham" not in by_key and eps and bvps:
+        by_key["graham"] = (22.5 * eps * bvps) ** 0.5
+    if "graham_growth" not in by_key and eps and g_eps is not None:
+        gg = min(0.15, g_eps)
+        y_pct = (r_rate - 0.045) * 100.0 + 1.0
+        if y_pct > 0:
+            by_key["graham_growth"] = eps * (8.5 + 2.0 * gg * 100.0) * 4.4 / y_pct
+    if "peg_lynch" not in by_key and eps and g_eps is not None:
+        by_key["peg_lynch"] = eps * g_eps * 100.0
+    if "fcf_yield" not in by_key and fcf and fcf > 0 and shares and r_rate > 0:
+        by_key["fcf_yield"] = (fcf / shares) / r_rate
+    if "dcf" not in by_key and fcf and fcf > 0 and shares and g_rev is not None and r_rate > 0.025:
+        pv, fc = 0.0, fcf
+        for t in range(1, 6):
+            fc *= 1.0 + g_rev
+            pv += fc / ((1.0 + r_rate) ** t)
+        pv += (fc * 1.025 / (r_rate - 0.025)) / ((1.0 + r_rate) ** 5)
+        by_key["dcf"] = pv / shares
+    if "residual_income" not in by_key and roe and bvps and roe > r_rate and r_rate > 0.025:
+        jpb = min((roe - 0.025) / (r_rate - 0.025), 8.0)
+        by_key["residual_income"] = jpb * bvps
+    if "epv" not in by_key and ebit and ebit > 0 and shares and r_rate > 0:
+        epv_eq = (ebit * 0.75 / r_rate) - debt
+        if epv_eq > 0:
+            by_key["epv"] = epv_eq / shares
+    if ("damodaran_fcff" not in by_key and ebit and ebit > 0 and shares
+            and mcap and eq and eq > 0 and g_rev is not None):
+        nopat = ebit * 0.75
+        roc = nopat / (debt + eq)
+        rf = r_rate - 0.045
+        kd = (rf + 0.02) * 0.75
+        wacc = (mcap * r_rate + debt * kd) / (mcap + debt)
+        if roc > 0.025 and wacc > 0.025:
+            rr = max(0.0, min(0.90, g_rev / roc))
+            pv, n = 0.0, nopat
+            for t in range(1, 6):
+                n *= 1.0 + g_rev
+                pv += n * (1.0 - rr) / ((1.0 + wacc) ** t)
+            rr_t = max(0.0, min(0.90, 0.025 / roc))
+            pv += (n * 1.025 * (1.0 - rr_t) / (wacc - 0.025)) / ((1.0 + wacc) ** 5)
+            if pv - debt > 0:
+                by_key["damodaran_fcff"] = (pv - debt) / shares
+
+    # Extended Practitioner & Research-Backed methods
+    if fcf and fcf > 0 and shares and r_rate > 0.025:
+        oe_eq = fcf * 1.025 / (r_rate - 0.025) - debt
+        if oe_eq > 0:
+            by_key["owner_earnings"] = oe_eq / shares
+    if by_key.get("peg_lynch") and r_rate > 0:
+        by_key["easton_mpeg"] = by_key["peg_lynch"] / ((r_rate * 10.0) ** 2)
+    if (gp and ebit is not None and gp > ebit and eq and eq > 0
+            and shares and roe and r_rate > 0.025):
+        ovh = gp - ebit
+        adj_eq = eq + 1.5 * ovh
+        adj_roe = (roe * eq + 0.10 * ovh) / adj_eq
+        if adj_roe > r_rate:
+            adj_jpb = min((adj_roe - 0.025) / (r_rate - 0.025), 8.0)
+            by_key["intangible_ri"] = adj_jpb * (adj_eq / shares)
+    sh_now, sh_prev, *_ = annual.get("shares_outstanding", (None, None, None))
+    if sh_now and sh_prev and sh_prev > 0 and sh_now < sh_prev and mcap and shares and r_rate > 0.025:
+        bb_yield = min(0.08, (sh_prev - sh_now) / sh_prev)
+        bb_cash = bb_yield * mcap
+        if fcf and fcf > 0:
+            bb_cash = min(bb_cash, fcf)
+        gp_rate = min(0.06, max(0.0, g_rev or 0.025))
+        if bb_cash > 0 and r_rate > gp_rate:
+            by_key["total_payout_ddm"] = (bb_cash / shares) * (1.0 + gp_rate) / (r_rate - gp_rate)
+
+    prac_groups = [
+        ("Graham Conservative", [("Graham #", by_key.get("graham")),
+                                 ("Graham 74", by_key.get("graham_growth"))]),
+        ("GARP & Peer Multiples", [("Lynch PEG=1", by_key.get("peg_lynch")),
+                                   ("Sector peer", by_key.get("peer_multiple"))]),
+        ("Cash-Flow & Buffett", [("FCF yield", by_key.get("fcf_yield")),
+                                 ("2-stage DCF", by_key.get("dcf")),
+                                 ("Owner earn.", by_key.get("owner_earnings"))]),
+    ]
+    acad_groups = [
+        ("Clean-Surplus & Intangibles (Ohlson / Peters-Taylor)",
+         [("Residual inc.", by_key.get("residual_income")),
+          ("Intangible RI", by_key.get("intangible_ri"))]),
+        ("Abnormal Earnings Growth (Easton 2004 / OJ 2005)",
+         [("Easton MPEG", by_key.get("easton_mpeg"))]),
+        ("Corporate Finance (Damodaran / Greenwald)",
+         [("Damodaran FCFF", by_key.get("damodaran_fcff")),
+          ("Greenwald EPV", by_key.get("epv"))]),
+        ("Shareholder Payout (Gordon 1956 / Boudoukh 2007)",
+         [("Gordon DDM", by_key.get("ddm")),
+          ("Buyback+Div DDM", by_key.get("total_payout_ddm"))]),
+    ]
+    prac_vals = [v for _, items in prac_groups for _, v in items if v is not None]
+    acad_vals = [v for _, items in acad_groups for _, v in items if v is not None]
+    return {
+        "methods": by_key,
+        "practitioner_median": _median(prac_vals),
+        "practitioner_count": len(prac_vals),
+        "practitioner_groups": [(g, [(l, v) for l, v in items if v is not None])
+                                for g, items in prac_groups
+                                if any(v is not None for _, v in items)],
+        "academic_median": _median(acad_vals),
+        "academic_count": len(acad_vals),
+        "academic_groups": [(g, [(l, v) for l, v in items if v is not None])
+                            for g, items in acad_groups
+                            if any(v is not None for _, v in items)],
+    }
 
 
 def stock_card(q, row):
@@ -779,12 +1044,22 @@ def stock_card(q, row):
         place = f"rank <b>{rank}</b> of {total}" if eligible and rank else "not eligible"
         conf = screener_confidence(coverage, (v, qu, g, mo, r),
                                    rank_history(q, [symbol]).get(symbol, []), total)
+        arch = stock_archetype((v, qu, g, mo, r))
+        acad_arch = academic_archetype((v, qu, g, mo, r))
+        acad_comp = academic_composite((v, qu, g, mo, r))
+        arch_diff = archetype_comparison((v, qu, g, mo, r), comp)
+        drivers = stock_drivers((v, qu, g, mo, r))
         out += [f"<b>Screener</b>  {place}  <i>run of {sts:%d %b}</i>", kv([
             ("Composite score", num(comp, 1)),
             ("Value", num(v)), ("Quality", num(qu)),
             ("Growth", num(g)), ("Momentum", num(mo)),
             ("Risk (higher = steadier)", num(r)),
             ("Confidence", f"{conf} {conf_label(conf)}")]),
+            f"Profile: <b>{esc(arch)}</b> · drivers: {esc(drivers)}",
+            f"<b>Practitioner vs Academic lens:</b> Practitioner = <b>{esc(arch)}</b> "
+            f"(25/25/20/20/10 composite {num(comp, 1)}) · Academic (FF5/QMJ/1/N) = "
+            f"<b>{esc(acad_arch)}</b> (equal-weight 1/N composite {num(acad_comp, 1)}) — "
+            f"<i>{esc(arch_diff)}</i>",
             SCREENER_NOTE, CONF_NOTE]
 
     snap = {metric: (value, fts) for metric, value, fts in q(
@@ -822,18 +1097,35 @@ def stock_card(q, row):
              else share(f["operating_margin"])),
             ("Debt / equity", f"{debt / equity:.2f}"
              if debt is not None and equity and equity > 0 else None)])]
-        # Deterministic fair-value panel (ADR 0026) — labelled, never advice.
+        # Deterministic fair-value panel (ADR 0026/0030) — labelled, never advice.
         try:
-            fv = q("SELECT fair_value, upside_pct, methods FROM v_latest_valuations "
-                   "WHERE symbol = %s", (symbol,))
+            fv = q("SELECT fair_value, upside_pct, methods, graham, peer_multiple, "
+                   "fcf_yield, dcf, ddm, epv, residual_income, peg_lynch, "
+                   "damodaran_fcff, graham_growth, discount_rate, growth_used "
+                   "FROM v_latest_valuations WHERE symbol = %s", (symbol,))
         except Exception as exc:  # noqa: BLE001 - only the missing-table case is expected
             if not table_missing(exc):
                 raise
             fv = []
         if fv and fv[0][0] is not None:
-            fair, up, nm = fv[0]
+            fair, up, nm = fv[0][:3]
             out += [f"Fair value <b>{num(fair)}</b> ({up:+.0f}% vs close, "
                     f"median of {nm} methods — <i>ADR 0026, not advice</i>)"]
+        gv = grouped_valuations(fv[0] if fv else None, f, annual, close, universe)
+        if gv["practitioner_groups"] or gv["academic_groups"]:
+            p_med, a_med = gv["practitioner_median"], gv["academic_median"]
+            p_up = f" ({(p_med / close - 1) * 100:+.0f}%)" if (p_med and close) else ""
+            a_up = f" ({(a_med / close - 1) * 100:+.0f}%)" if (a_med and close) else ""
+            if p_med and a_med:
+                out += [f"<b>Practitioner vs Research-Backed valuations:</b> "
+                        f"Practitioner median <b>{num(p_med)}</b>{p_up} ({gv['practitioner_count']}m) · "
+                        f"Research-Backed median <b>{num(a_med)}</b>{a_up} ({gv['academic_count']}m)"]
+            for grp_name, items in gv["practitioner_groups"]:
+                joined = " · ".join(f"{lbl} <b>{num(val)}</b>" for lbl, val in items)
+                out += [f"• <i>[Practitioner — {esc(grp_name)}]</i> {joined}"]
+            for grp_name, items in gv["academic_groups"]:
+                joined = " · ".join(f"{lbl} <b>{num(val)}</b>" for lbl, val in items)
+                out += [f"• <i>[Research-Backed — {esc(grp_name)}]</i> {joined}"]
     if annual:
         year = max(v[2] for v in annual.values())
         block = kv([("Revenue", yoy(annual, "total_revenue")), ("EPS", yoy(annual, "eps")),
@@ -841,14 +1133,60 @@ def stock_card(q, row):
         if block:
             out += [f"<b>Latest fiscal year</b>  <i>to {year:%b %Y}, vs the year before</i>",
                     block]
+        sci = scientific_diagnostics(annual)
+        if sci:
+            f_str = (f"{sci['f_score'][0]}/{sci['f_score'][1]} {sci['f_score'][2]}"
+                     if "f_score" in sci else None)
+            z_str = (f"{sci['altman_z2'][0]:.2f} {sci['altman_z2'][1]}"
+                     if "altman_z2" in sci else None)
+            sci_block = kv([
+                ("Gross prof / assets", share(sci["gpa"], 1) if "gpa" in sci else None),
+                ("Accruals (Sloan)", pct(sci["accruals"], 1) if "accruals" in sci else None),
+                ("Asset growth (CMA)", pct(sci["asset_growth"], 1) if "asset_growth" in sci else None),
+                ("Share issuance", pct(sci["share_issuance"], 1) if "share_issuance" in sci else None),
+                ("Piotroski F-score", f_str),
+                ("Altman Z''-score", z_str),
+            ])
+            if sci_block:
+                out += [
+                    "<b>Scientific diagnostics</b>  <i>Novy-Marx · Sloan · Fama-French · Piotroski</i>",
+                    sci_block,
+                ]
 
     news = news_rows(q, symbol, days=14, limit=3)
     if news:
         out += ["<b>News</b>  <i>last 14 days</i>"] + [news_line(n) for n in news]
+    ai_note = symbol_narrative(q, symbol)
+    if ai_note:
+        out += ["<b>AI note</b>  <i>(fact-checked)</i>", esc(ai_note)]
     return "\n".join(line for i, line in enumerate(out) if line or i == 2)
 
 
 # ---------------------------------------------------------------- /news
+
+def symbol_narrative(q, symbol):
+    """Latest fact-checked AI summary for `symbol` from llm_narratives (ML-7b per_symbol
+    or ML-7c event_brief, status='ok'). Gated on BOT_AI_RESOLVE=1 or STOCK_NARRATIVE=1."""
+    if os.environ.get("BOT_AI_RESOLVE") != "1" and os.environ.get("STOCK_NARRATIVE") != "1":
+        return None
+    try:
+        rows = q(
+            "SELECT kind, summary FROM llm_narratives "
+            "WHERE status = 'ok' AND ts >= current_date - 14 "
+            "AND ((kind = 'per_symbol' AND symbol = %s) "
+            "  OR (kind = 'event_brief' AND summary LIKE %s)) "
+            "ORDER BY ts DESC, (kind = 'event_brief') DESC LIMIT 1",
+            (symbol, f"[{symbol}:%"),
+        )
+    except Exception as exc:  # noqa: BLE001
+        if not table_missing(exc):
+            return None
+        return None
+    if not rows or not rows[0][1]:
+        return None
+    text = re.sub(r"^\[[^\]]+\]\s*", "", rows[0][1]).strip()
+    return text or None
+
 
 def news_rows(q, symbol, days=14, limit=5):
     """[(ts, headline, source, sentiment or None, 'event, event' or None)]"""
@@ -886,6 +1224,9 @@ def news_text(q, row, days=14):
     if scored:
         out.append(f"Average sentiment <b>{sum(scored) / len(scored):+.2f}</b> "
                    f"over {len(scored)} headline(s)")
+    ai_note = symbol_narrative(q, symbol)
+    if ai_note:
+        out.append(f"AI brief: <i>{esc(ai_note)}</i>")
     return "\n".join(out + [""] + [news_line(r) for r in rows])
 
 
@@ -1013,6 +1354,96 @@ def conf_label(score):
     return "high" if score >= CONF_HIGH else "medium" if score >= CONF_MEDIUM else "low"
 
 
+def stock_archetype(factors):
+    """Classify a stock's factor profile (value, quality, growth, momentum, risk) in [0,1]."""
+    v, qu, g, mo, r = [(x if x is not None else 0.5) for x in factors]
+    if qu >= 0.70 and g >= 0.65 and r >= 0.55:
+        return "Quality Compounder"
+    if g >= 0.70 and v >= 0.55 and qu >= 0.55:
+        return "GARP"
+    if v >= 0.75 and qu >= 0.50:
+        return "Deep Value"
+    if mo >= 0.75 and g >= 0.55:
+        return "Momentum Leader"
+    if g >= 0.75 and v < 0.35:
+        return "High-Growth Speculative"
+    if r >= 0.70 and qu >= 0.65:
+        return "Defensive Quality"
+    if v >= 0.70 and mo >= 0.60 and qu < 0.45:
+        return "Turnaround / Cyclical"
+    if v >= 0.65 and qu < 0.35 and mo < 0.40:
+        return "Value Trap"
+    if qu < 0.35 and r < 0.35:
+        return "High-Risk / Stressed"
+    if (v + qu + g + mo + r) / 5.0 < 0.38 and max(v, qu, g, mo, r) < 0.65:
+        return "Lagging / Weak"
+    return "Balanced"
+
+
+def stock_drivers(factors, top_k=3):
+    """Return top factor drivers (percentile >= 0.55) formatted for human display."""
+    names = ("Value", "Quality", "Growth", "Momentum", "Low-Risk")
+    scored = [(val, name) for name, val in zip(names, factors) if val is not None and val >= 0.55]
+    scored.sort(reverse=True)
+    if not scored:
+        return "none ≥ 55th pct"
+    return ", ".join(f"{name} ({val * 100:.0f}th)" for val, name in scored[:top_k])
+
+
+def academic_composite(factors):
+    """DeMiguel, Garlappi & Uppal (2009) 1/N equal-weighted composite (20% each, 0-100 scale)."""
+    vals = [(x if x is not None else 0.5) for x in factors]
+    return (sum(vals) / len(vals)) * 100.0 if vals else 50.0
+
+
+def academic_archetype(factors):
+    """Peer-reviewed factor-interaction classification (FF5 2015 / Asness QMJ 2019 / Piotroski 2000 / Mohanram 2005)."""
+    v, qu, g, mo, r = [(x if x is not None else 0.5) for x in factors]
+    if qu >= 0.70 and r >= 0.60 and mo >= 0.50:
+        return "QMJ + BAB Compounder (Asness 2019 / Frazzini 2014)"
+    if v >= 0.70 and qu >= 0.60:
+        return "Piotroski-Filtered Value (Piotroski 2000 / Novy-Marx 2013)"
+    if v >= 0.65 and mo >= 0.65:
+        return "Value × Momentum Crossover (Asness et al. 2013)"
+    if g >= 0.70 and qu >= 0.60:
+        return "Mohanram G-Score Growth (Mohanram 2005)"
+    if mo >= 0.75 and r >= 0.45:
+        return "Jegadeesh-Titman Momentum (Jegadeesh & Titman 1993)"
+    if r >= 0.75 and qu >= 0.55 and v >= 0.45:
+        return "Conservative Low-Vol (van Vliet 2018 / Ang 2006)"
+    if g >= 0.65 and v < 0.35 and qu < 0.50:
+        return "Unprofitable Glamour Risk (Lakonishok 1994)"
+    if (v >= 0.65 and qu < 0.35 and mo < 0.40) or (qu < 0.35 and r < 0.35):
+        return "Distress / Value-Trap Puzzle (Campbell et al. 2008)"
+    if (v + qu + g + mo + r) / 5.0 < 0.38 and max(v, qu, g, mo, r) < 0.65:
+        return "Bottom-Quintile Factor Lag"
+    return "1/N Factor-Neutral (DeMiguel 2009)"
+
+
+def archetype_comparison(factors, prac_comp=None):
+    """Explain the difference between the Practitioner and Academic readings for `factors`."""
+    v, qu, g, mo, r = [(x if x is not None else 0.5) for x in factors]
+    prac = stock_archetype(factors)
+    acad = academic_archetype(factors)
+    eq_comp = academic_composite(factors)
+    w_comp = prac_comp if prac_comp is not None else (0.25 * v + 0.25 * qu + 0.20 * g + 0.20 * mo + 0.10 * r) * 100.0
+    gap = eq_comp - w_comp
+    if g >= 0.65 and qu < 0.50:
+        return ("Practitioner rewards headline growth (20% weight); Academic discounts "
+                "unconfirmed growth without high Profitability (RMW, Fama-French 2015)")
+    if v >= 0.70 and qu >= 0.60:
+        return ("Both lenses agree: cheap multiples are backed by high Profitability "
+                "(Novy-Marx 2013), separating true value from value traps")
+    if r >= 0.70 and gap >= 1.5:
+        return (f"Academic 1/N weights Low-Vol 20% vs Practitioner's 10% (+{gap:.1f} pts; "
+                "Ang et al. 2006 / Betting Against Beta)")
+    if qu >= 0.70 and r >= 0.60:
+        return ("Confirmed by both: Practitioner sees growth/quality; Academic attributes "
+                "edge to Quality Minus Junk × Low-Vol (Asness 2019)")
+    return (f"Practitioner ({prac}) weights Value/Quality 25% each and Risk 10%; "
+            f"Academic ({acad.split(' (')[0]}) equal-weights all 5 pillars at 20% (1/N Δ {gap:+.1f} pts)")
+
+
 def screener_confidence(coverage, factors, ranks, universe_size):
     """Confidence in a screener pick.
 
@@ -1093,7 +1524,11 @@ def top_text(q, factor, universe, n=10):
         tbl = table(("", factor.capitalize(), "Rank", "YTD", "Conf"),
                     [(clip(bare(r[0]), 11), num(r[2]), r[4], year(r[0]), conf(r))
                      for r in rows], "lrrrr")
-    names = "\n".join(f"{esc(bare(r[0]))} — {esc(r[1])}" for r in rows[:5])
+    names = "\n".join(
+        f"{esc(bare(r[0]))} — {esc(r[1])} · <i>{esc(stock_archetype(r[6:11]))} "
+        f"({esc(stock_drivers(r[6:11], top_k=2))})</i>"
+        for r in rows[:5]
+    )
     return "\n".join([
         f"<b>Top {len(rows)} by {factor} — {universe}</b>  <i>run of {runs[0]:%d %b}</i>",
         tbl, names, SCREENER_NOTE, CONF_NOTE])
@@ -1182,7 +1617,8 @@ def cagr(points):
     """Compound annual growth from [(ts, value), …] newest first, or None.
 
     Uses the newest and oldest year; both must be positive (growth from a loss
-    is not a rate) and at least MB_MIN_YEARS apart.
+    is not a rate) and at least MB_MIN_YEARS apart. Rejects series where the
+    most recent fiscal year contracted >15% vs the prior year (trough-base bias).
     """
     if len(points) < 2:
         return None
@@ -1190,12 +1626,18 @@ def cagr(points):
     years = (new_ts - old_ts).days / 365.25
     if years < MB_MIN_YEARS or new <= 0 or old <= 0:
         return None
+    if len(points) >= 3 and points[1][1] is not None and points[1][1] > 0:
+        if new < points[1][1] * 0.85:
+            return None
     return (new / old) ** (1 / years) - 1
 
 
 def scaled(value, full):
     """0..1 share of `full`, clamped — one component of the score."""
     return 0.0 if value is None else max(0.0, min(value / full, 1.0))
+
+
+FINANCIAL_SECTORS = ("Financial Services", "Financials")
 
 
 def multibagger_candidate(symbol, sector, annual, snap, metrics, size_pct):
@@ -1221,7 +1663,7 @@ def multibagger_candidate(symbol, sector, annual, snap, metrics, size_pct):
         return None, "return on equity"
     debt = annual.get("total_debt", [(None, None)])[0][1]
     leverage = debt / equity if debt is not None and equity and equity > 0 else None
-    if sector != "Financial Services" and leverage is not None \
+    if sector not in FINANCIAL_SECTORS and leverage is not None \
             and leverage > MB_MAX_DEBT_EQUITY:
         return None, "debt"
     if size_pct is None or size_pct > MB_SIZE_CUT:
@@ -1305,6 +1747,106 @@ def multibagger_rank(universe_rows, fundamentals, metric_rows):
     return sorted(out, key=lambda c: -c["score"]), failed
 
 
+def multibagger_academic_candidate(symbol, sector, annual, snap, metrics, size_pct):
+    """Academic SQM (Size × Quality × 12-1 Momentum) compounder screen.
+
+    Scientific backing vs Practitioner (Lynch PEG-Growth):
+    1. Size control (size_pct <= 0.70): Asness, Frazzini, Israel, Moskowitz & Pedersen (2018)
+       show the size premium is strong ONLY when conditioned on high quality ("Size Matters,
+       If You Control Your Junk").
+    2. Profitability & Accrual Quality (ROE >= 15% AND hard FCF > 0): Novy-Marx (2013),
+       Fama & French (2015 RMW), and Sloan (1996). Unlike the Practitioner screen (where FCF > 0
+       is optional), negative-FCF accrual stories are strictly rejected.
+    3. Safety (D/E <= 1.0, Financials exempt): Asness, Frazzini & Pedersen (2019 QMJ).
+    4. 12-1 Momentum & 52w High Proximity (ret_12_1 > 0, pos_52w >= 0.50, sma200_ratio >= 1.0):
+       Jegadeesh & Titman (1993) and George & Hwang (2004). Skips the reversing 1-month return.
+    5. Cash-Flow / Earnings Yield (FCF yield >= 1.5% or 0 < P/E <= 40): Loughran & Wellman (2011)
+       and Easton (2004). Replaces backward-looking PEG <= 2.0 and 3y CAGR extrapolation, which
+       suffer from mean-reversion (Chan, Karceski & Lakonishok 2003).
+    6. Equal 25/25/25/25 pillar weights (DeMiguel, Garlappi & Uppal 2009 1/N rule).
+    """
+    if size_pct is None or size_pct > MB_SIZE_CUT:
+        return None, "size (SMB)"
+    roe = snap.get("roe")
+    equity = annual.get("shareholder_equity", [(None, None)])[0][1]
+    income = annual.get("net_income", [(None, None)])[0][1]
+    if roe is None and equity and equity > 0 and income is not None:
+        roe = income / equity
+    op_margin = snap.get("operating_margin")
+    if (roe is None or roe < MB_MIN_ROE) and (op_margin is None or op_margin < 0.12):
+        return None, "profitability (RMW)"
+    fcf = annual.get("fcf", [(None, None)])[0][1]
+    if fcf is None or fcf <= 0:
+        return None, "cash flow / accruals (Sloan)"
+    debt = annual.get("total_debt", [(None, None)])[0][1]
+    leverage = debt / equity if debt is not None and equity and equity > 0 else None
+    if sector not in FINANCIAL_SECTORS and leverage is not None and leverage > MB_MAX_DEBT_EQUITY:
+        return None, "leverage (QMJ)"
+    ret_12m = metrics.get("ret_12m")
+    ret_1m = metrics.get("ret_1m")
+    ret_12_1 = metrics.get("ret_12_1")
+    if ret_12_1 is None and ret_12m is not None:
+        ret_12_1 = ((1.0 + ret_12m) / (1.0 + ret_1m) - 1.0) if (ret_1m is not None and ret_1m > -0.95) else ret_12m
+    pos_52w = metrics.get("pos_52w")
+    trend = metrics.get("sma200_ratio")
+    if trend is None or trend < 1.0 or ret_12_1 is None or ret_12_1 <= 0 or pos_52w is None or pos_52w < 0.50:
+        return None, "12-1 momentum / 52w high"
+    cap = snap.get("market_cap")
+    fcf_yield = (fcf / cap) if (cap and cap > 0) else None
+    pe = snap.get("pe")
+    earn_yield = (1.0 / pe) if (pe and pe > 0) else None
+    if (fcf_yield is None or fcf_yield < 0.015) and (pe is None or pe <= 0 or pe > 40.0):
+        return None, "cash/earnings yield"
+
+    # DeMiguel et al. (2009) 1/N equal 25-point weights across the 4 academic pillars
+    p_prof = 15.0 * scaled(roe or op_margin, 0.30) + 10.0 * scaled(fcf_yield, 0.06)
+    p_mom = 15.0 * scaled(ret_12_1, 0.60) + 10.0 * scaled(pos_52w, 1.0)
+    p_val = 15.0 * scaled(fcf_yield, 0.08) + 10.0 * scaled(earn_yield, 0.08)
+    p_size_safe = 15.0 * (1.0 - size_pct / MB_SIZE_CUT) + 10.0 * (
+        1.0 if leverage is None else max(0.0, 1.0 - leverage / MB_MAX_DEBT_EQUITY)
+    )
+    score = p_prof + p_mom + p_val + p_size_safe
+    return {
+        "symbol": symbol,
+        "score": score,
+        "roe": roe or op_margin or 0.0,
+        "fcf_yield": fcf_yield,
+        "ret_12_1": ret_12_1,
+        "pos_52w": pos_52w,
+        "cap": cap,
+        "leverage": leverage,
+    }, None
+
+
+def multibagger_academic_rank(universe_rows, fundamentals, metric_rows):
+    """(academic_candidates best-first, {gate: failures}) for a whole universe."""
+    per, snap, metrics = {}, {}, {}
+    for symbol, metric, source, ts, value in fundamentals:
+        if metric in MB_SNAPSHOT:
+            if value is not None and (metric not in snap.get(symbol, {})
+                                      or ts > snap[symbol][metric][0]):
+                snap.setdefault(symbol, {})[metric] = (ts, value)
+        if metric in MB_ANNUAL:
+            per.setdefault(symbol, []).append((metric, source, ts, value))
+    for symbol, metric, value in metric_rows:
+        metrics.setdefault(symbol, {})[metric] = value
+    snap = {sym: {k: v for k, (_, v) in vals.items()} for sym, vals in snap.items()}
+
+    caps = sorted(v["market_cap"] for v in snap.values() if v.get("market_cap"))
+    out, failed = [], {}
+    for symbol, _name, sector in universe_rows:
+        cap = snap.get(symbol, {}).get("market_cap")
+        size_pct = (sum(c < cap for c in caps) / len(caps)) if cap and caps else None
+        got, reason = multibagger_academic_candidate(
+            symbol, sector, series(per.get(symbol, [])), snap.get(symbol, {}),
+            metrics.get(symbol, {}), size_pct)
+        if got:
+            out.append(got)
+        else:
+            failed[reason] = failed.get(reason, 0) + 1
+    return sorted(out, key=lambda c: -c["score"]), failed
+
+
 def multibagger_text(q, universe, n=10):
     names = q("SELECT symbol, name, sector FROM universe_constituents "
               "WHERE universe = %s AND active", (universe,))
@@ -1320,40 +1862,84 @@ def multibagger_text(q, universe, n=10):
         "INNER JOIN universe_constituents u ON u.symbol = m.symbol AND u.universe = %s "
         "WHERE m.ts >= now() - interval '10 days' AND m.metric = ANY(%s) "
         "ORDER BY m.symbol, m.metric, m.ts DESC",
-        (universe, ["sma200_ratio", "ret_12m", "pos_52w"]))
+        (universe, ["sma200_ratio", "ret_12m", "ret_1m", "ret_12_1", "pos_52w"]))
     ranked, failed = multibagger_rank(names, fundamentals, metric_rows)
+    acad_ranked, acad_failed = multibagger_academic_rank(names, fundamentals, metric_rows)
     head = f"<b>Multibagger candidates — {universe}</b>"
-    if not ranked:
+    if not ranked and not acad_ranked:
         return head + "\nNo company passes every gate right now."
-    top = ranked[:n]
     label = dict((s, nm) for s, nm, _ in names)
-    body = [(clip(bare(c["symbol"]), 9), f"{c['score']:.0f}", pct(c["rev"], 0),
-             pct(c["earn"], 0), share(c["roe"]), str(c["conf"])) for c in top]
-    detail = "\n".join(
-        f"{esc(bare(c['symbol']))} — {esc(label.get(c['symbol'], ''))} · "
-        f"cap {big(c['cap'])} · PEG {c['peg']:.1f} · confidence {conf_label(c['conf'])}"
-        for c in top[:5])
-    order = ["growth history", "growth", "return on equity", "debt", "size",
-             "valuation", "trend"]
-    funnel = ", ".join(f"{failed[k]} on {k}" for k in order if failed.get(k))
-    return "\n".join([
-        head,
-        f"{len(ranked)} of {len(names)} companies pass every gate",
-        table(("", "Score", "Rev", "EPS", "ROE", "Conf"),
-              body, "lrrrrr"),
-        detail,
-        f"<i>Gates: revenue and earnings each compounding {share(MB_MIN_GROWTH)}+ a year "
-        f"over the fiscal years on file (2-3), ROE {share(MB_MIN_ROE)}+, debt/equity under "
-        f"{MB_MAX_DEBT_EQUITY:.0f} (financials exempt), outside the largest "
-        f"{share(1 - MB_SIZE_CUT)} by market cap, PEG under {MB_MAX_PEG:.0f}, price above "
-        f"its 200-day average. Dropped: {funnel}.</i>",
-        f"<i>Rev/EPS = revenue/earnings CAGR over fiscal years on file; ROE = return on equity. "
-        f"Score = growth 35 + quality 25 + valuation 15 + momentum 15 + size 10 (0-100). "
-        f"Conf = history 30 + earnings confirmed 20 + margin above gate 15 + cash flow 15 + "
-        f"ROE as reported 10 + price in upper 52-w half 10.</i>",
+    prac_syms = {c["symbol"] for c in ranked}
+    acad_syms = {c["symbol"] for c in acad_ranked}
+    both_syms = prac_syms & acad_syms
+
+    out = [head]
+    if ranked:
+        top = ranked[:n]
+        body = [(clip(bare(c["symbol"]), 9), f"{c['score']:.0f}", pct(c["rev"], 0),
+                 pct(c["earn"], 0), share(c["roe"]), str(c["conf"])) for c in top]
+        detail = "\n".join(
+            f"{esc(bare(c['symbol']))} — {esc(label.get(c['symbol'], ''))} · "
+            f"cap {big(c['cap'])} · PEG {c['peg']:.1f} · confidence {conf_label(c['conf'])}"
+            for c in top[:5])
+        order = ["growth history", "growth", "return on equity", "debt", "size",
+                 "valuation", "trend"]
+        funnel = ", ".join(f"{failed[k]} on {k}" for k in order if failed.get(k))
+        out += [
+            f"<b>1. Practitioner Lens (Lynch / PEG-Growth)</b> — {len(ranked)} of {len(names)} companies pass every gate",
+            table(("", "Score", "Rev", "EPS", "ROE", "Conf"),
+                  body, "lrrrrr"),
+            detail,
+            f"<i>Gates: revenue and earnings each compounding {share(MB_MIN_GROWTH)}+ a year "
+            f"over the fiscal years on file (2-3), ROE {share(MB_MIN_ROE)}+, debt/equity under "
+            f"{MB_MAX_DEBT_EQUITY:.0f} (financials exempt), outside the largest "
+            f"{share(1 - MB_SIZE_CUT)} by market cap, PEG under {MB_MAX_PEG:.0f}, price above "
+            f"its 200-day average. Dropped: {funnel}.</i>",
+            f"<i>Rev/EPS = revenue/earnings CAGR over fiscal years on file; ROE = return on equity. "
+            f"Score = growth 35 + quality 25 + valuation 15 + momentum 15 + size 10 (0-100). "
+            f"Conf = history 30 + earnings confirmed 20 + margin above gate 15 + cash flow 15 + "
+            f"ROE as reported 10 + price in upper 52-w half 10.</i>",
+        ]
+    else:
+        out.append("<b>1. Practitioner Lens (Lynch / PEG-Growth)</b>: No company passes every gate right now.")
+
+    if acad_ranked:
+        atop = acad_ranked[:5]
+        adetail = "\n".join(
+            f"• <b>{esc(bare(c['symbol']))}</b> ({esc(label.get(c['symbol'], ''))}) — "
+            f"SQM score <b>{c['score']:.0f}</b> · ROE {share(c['roe'])} · "
+            f"FCF yield {share(c['fcf_yield'], 1) if c.get('fcf_yield') else 'n/a'} · "
+            f"12-1 mom {pct(c['ret_12_1'], 0)}"
+            + (" · <b>[Both Lenses]</b>" if c["symbol"] in both_syms else " · <i>[Academic-only]</i>")
+            for c in atop
+        )
+        a_order = ["size (SMB)", "profitability (RMW)", "cash flow / accruals (Sloan)",
+                   "leverage (QMJ)", "12-1 momentum / 52w high", "cash/earnings yield"]
+        a_funnel = ", ".join(f"{acad_failed[k]} on {k}" for k in a_order if acad_failed.get(k))
+        consensus_line = (
+            f"<b>Consensus (pass both lenses):</b> {', '.join(esc(bare(s)) for s in sorted(both_syms))}"
+            if both_syms else "<b>Consensus:</b> none (the two lenses select distinct profiles right now)"
+        )
+        out += [
+            "",
+            f"<b>2. Academic Lens (SQM: Size × Quality × 12-1 Momentum)</b> — "
+            f"{len(acad_ranked)} of {len(names)} pass",
+            adetail,
+            consensus_line,
+            f"<i>How Academic differs from Practitioner: replaces multi-year CAGR extrapolation "
+            f"(Chan et al. 2003 mean-reversion) and backward PEG ≤ 2 with hard FCF &gt; 0 "
+            f"(Sloan 1996 accruals), Profitability RMW (Novy-Marx 2013), 12-1 momentum skipping "
+            f"1m reversal (Jegadeesh &amp; Titman 1993), 52w-high proximity (George &amp; Hwang 2004), "
+            f"and FCF/Earnings yield (Loughran &amp; Wellman 2011) in an equal 25/25/25/25 1/N composite "
+            f"(Asness et al. 2018 'Size Matters, If You Control Your Junk'). Dropped: {a_funnel}.</i>",
+        ]
+
+    out += [
         "<i>This finds companies with the profile multibaggers usually had before the "
         "run. Most such companies still do not become one. Not advice.</i>",
-        CONF_NOTE])
+        CONF_NOTE,
+    ]
+    return "\n".join(out)
 
 
 # The run list and start bound arrive as parameters (chunk-pruning note in the
@@ -1641,7 +2227,11 @@ def sectors_card(q, text=""):
                     f"{f'{up:+.0f}%' if up is not None else '–':>7}")
     return (f"<b>Sectors — {universe}</b>  <i>median fair-value gap, ADR 0026</i>\n"
             f"<pre>{esc(chr(10).join(body))}</pre>\n"
-            f"<i>Lens per sector: /stock &lt;symbol&gt; shows what matters. Not advice.</i>")
+            f"<i>Practitioner vs Academic lens: table ranks by Practitioner intrinsic upside "
+            f"(10-method DCF/Graham/Peer median); Academic sector research (Moskowitz &amp; Grinblatt "
+            f"1999 Industry Momentum + Novy-Marx 2013 Profitability) requires positive 6m/12m trend "
+            f"and high ROE to confirm cheap sectors are not value traps. "
+            f"Lens per sector: /stock &lt;symbol&gt; shows what matters. Not advice.</i>")
 
 
 def alert_sections(q, now=None, chat_id=None):
@@ -1685,6 +2275,10 @@ def alert_watch(q, chat_id, now=None):
         "ORDER BY h.id, e.event_type", (symbols,))
     for symbol, event, headline, _ts in events:
         mine.append(f"<b>{esc(bare(symbol))}</b> · {esc(event)}\n  {esc(headline)}")
+
+    for symbol, edate in sorted(earnings_soon(q, symbols, days=3).items(),
+                                key=lambda kv: (kv[1], kv[0])):
+        mine.append(f"<b>{esc(bare(symbol))}</b> reports earnings {edate:%a %d %b}")
     if mine:
         lines += ["<b>Your watchlist</b>"] + mine
     return lines
@@ -1862,3 +2456,29 @@ def scorecard_text(q):
         lines.append(f"• {esc(kind)} @ {horizon}d: d1 {t} vs d10 {b} (n={n:,})")
     lines.append("<i>Not advice; deciles ranked within each universe.</i>")
     return "\n".join(lines)
+
+
+def scorecard_line(q):
+    """One-line digest summary of the ADR 0028 prediction scorecard."""
+    try:
+        deciles = q(
+            "SELECT s.kind, o.horizon_days, "
+            "avg(CASE WHEN s.dec = 1  THEN o.realized_ret - coalesce(o.bench_ret, 0) END), "
+            "avg(CASE WHEN s.dec = 10 THEN o.realized_ret - coalesce(o.bench_ret, 0) END), "
+            "count(*) "
+            "FROM (SELECT kind, symbol, ts, ntile(10) OVER "
+            "      (PARTITION BY kind, ts, universe ORDER BY value) AS dec "
+            "      FROM prediction_snapshots WHERE kind = 'screener_rank') s "
+            "JOIN prediction_outcomes o ON o.kind = s.kind AND o.symbol = s.symbol "
+            "AND o.ts = s.ts WHERE o.horizon_days = 30 GROUP BY 1, 2 LIMIT 1")
+    except Exception as exc:  # noqa: BLE001
+        if not table_missing(exc):
+            raise
+        return ""
+    if deciles and deciles[0][4]:
+        _kind, horizon, top, bottom, n = deciles[0]
+        t = f"{top * 100:+.1f}%" if top is not None else "–"
+        b = f"{bottom * 100:+.1f}%" if bottom is not None else "–"
+        return (f"<b>Scorecard</b> ({horizon}d excess vs bench): "
+                f"top decile <b>{t}</b> vs bottom <b>{b}</b> (n={n:,})  <i>(/scorecard)</i>")
+    return ""
