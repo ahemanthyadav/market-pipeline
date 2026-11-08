@@ -943,3 +943,248 @@ data:
       verified  BOOLEAN NOT NULL DEFAULT FALSE,
       PRIMARY KEY (kind, scope, ts)
     );
+  24-llm-narratives-symbol.sql: |
+    -- ML-7b per-symbol narratives need symbol in the llm_narratives PK.
+    -- daily_market rows keep symbol = '' (existing rows backfilled with '').
+    ALTER TABLE llm_narratives ADD COLUMN IF NOT EXISTS symbol TEXT NOT NULL DEFAULT '';
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'llm_narratives'::regclass
+          AND contype = 'p'
+          AND pg_get_constraintdef(oid) LIKE '%symbol%'
+      ) THEN
+        ALTER TABLE llm_narratives DROP CONSTRAINT IF EXISTS llm_narratives_pkey;
+        ALTER TABLE llm_narratives ADD PRIMARY KEY (ts, kind, symbol);
+      END IF;
+    END $$;
+  25-valuation-and-metrics-catalog.sql: |
+    -- ADR 0033: Full 15-method Valuation Panel (8 Practitioner + 7 Research-Backed),
+    -- Method/Metric Catalog (`valuation_methods`), Daily Scientific Diagnostics
+    -- (`stock_scientific_metrics`), and Sector Dual-Lens Medians (`sector_metrics`).
+    CREATE TABLE IF NOT EXISTS valuation_methods (
+      method_key    TEXT PRIMARY KEY,
+      method_name   TEXT NOT NULL,
+      category      TEXT NOT NULL DEFAULT 'valuation', -- valuation | scientific_diagnostic | classification
+      lens          TEXT NOT NULL,                     -- Practitioner | Research-Backed
+      sub_school    TEXT NOT NULL,
+      source_ref    TEXT NOT NULL,
+      formula       TEXT NOT NULL,
+      target_table  TEXT NOT NULL DEFAULT 'stock_valuations',
+      display_order SMALLINT NOT NULL DEFAULT 0
+    );
+    GRANT SELECT ON valuation_methods TO grafana_ro;
+    GRANT SELECT ON valuation_methods TO telegram_app;
+
+    INSERT INTO valuation_methods (
+      method_key, method_name, category, lens, sub_school, source_ref, formula, target_table, display_order
+    ) VALUES
+      ('graham', 'Graham Number', 'valuation', 'Practitioner', 'Graham Conservative',
+       'Graham (1949, The Intelligent Investor)', 'sqrt(22.5 * EPS * BVPS)', 'stock_valuations', 1),
+      ('graham_growth', 'Graham 1974 Growth', 'valuation', 'Practitioner', 'Graham Conservative',
+       'Graham (1974, The Decade 1965-1974)', 'EPS * (8.5 + 2 * g_eps%) * 4.4 / Y_AAA%', 'stock_valuations', 2),
+      ('peg_lynch', 'Lynch PEG = 1.0', 'valuation', 'Practitioner', 'GARP & Peer Multiples',
+       'Lynch (1989, One Up On Wall Street)', 'EPS * 100 * clamp(g_eps, 5%, 25%)', 'stock_valuations', 3),
+      ('peer_multiple', 'Sector P/E or P/B Peer', 'valuation', 'Practitioner', 'GARP & Peer Multiples',
+       'Street Comps (ADR 0026)', 'median(PE_sector) * EPS (or median(PB_sector) * BVPS for financials)', 'stock_valuations', 4),
+      ('ev_ebitda_peer', 'EV/EBITDA Sector Peer', 'valuation', 'Practitioner', 'GARP & Peer Multiples',
+       'Koller, Goedhart & Wessels (2020, McKinsey Valuation)', '(median(EV_EBITDA_sector) * implied_EBITDA - total_debt) / shares', 'stock_valuations', 5),
+      ('fcf_yield', 'FCF Perpetuity', 'valuation', 'Practitioner', 'Cash-Flow & Buffett',
+       'Practitioner Cash-Yield Floor (ADR 0026)', '(FCF_0 / shares) / r', 'stock_valuations', 6),
+      ('dcf', 'Two-Stage FCF DCF', 'valuation', 'Practitioner', 'Cash-Flow & Buffett',
+       '5y Revenue-CAGR FCF DCF (ADR 0026)', 'PV(5y FCF at clamp(g_rev, 0%, 15%) + 2.5% terminal, discounted at r) / shares', 'stock_valuations', 7),
+      ('owner_earnings', 'Buffett Owner Earnings', 'valuation', 'Practitioner', 'Cash-Flow & Buffett',
+       'Buffett (1986 Berkshire Shareholder Letter)', '(mean_5y(OCF - Capex) * (1 + g_T) / (r - g_T) - total_debt) / shares', 'stock_valuations', 8),
+      ('residual_income', 'Residual Income (Justified P/B)', 'valuation', 'Research-Backed', 'Clean-Surplus & Intangibles',
+       'Ohlson (1995, CAR); Frankel & Lee (1998, JAE); Penman (2012)', 'min((ROE - g_T) / (r - g_T), 8.0) * BVPS (when ROE > r)', 'stock_valuations', 9),
+      ('intangible_ri', 'Intangible-Adjusted RI (Total q)', 'valuation', 'Research-Backed', 'Clean-Surplus & Intangibles',
+       'Peters & Taylor (2017, JFE); Eisfeldt & Papanikolaou (2013, JF); Arnott et al. (2021, FAJ)', 'min((ROE_adj - g_T) / (r - g_T), 8.0) * ((Equity + 1.5 * (GP - EBIT)) / shares)', 'stock_valuations', 10),
+      ('easton_mpeg', 'Easton Modified PEG (MPEG)', 'valuation', 'Research-Backed', 'Abnormal Earnings Growth',
+       'Easton (2004, The Accounting Review); Ohlson & Juettner-Nauroth (2005, RAST)', '(EPS_0 * g_eps + r * DPS_0 * g_eps) / (r^2)', 'stock_valuations', 11),
+      ('damodaran_fcff', 'Damodaran FCFF (g/ROC)', 'valuation', 'Research-Backed', 'Corporate Finance',
+       'Modigliani & Miller (1958, AER); Damodaran (2012, Investment Valuation)', '(PV(5y NOPAT * (1 - g/ROC) + terminal at WACC) - total_debt) / shares', 'stock_valuations', 12),
+      ('epv', 'Greenwald 5y EPV', 'valuation', 'Research-Backed', 'Corporate Finance',
+       'Greenwald, Kahn, Sonkin & van Biema (2001, Value Investing)', '(mean_5y(EBIT) * (1 - 0.25) / r - total_debt) / shares', 'stock_valuations', 13),
+      ('ddm', 'Gordon Dividend Discount', 'valuation', 'Research-Backed', 'Shareholder Payout',
+       'Williams (1938); Gordon & Shapiro (1956, Mgmt Sci); Gordon (1959, REStat)', 'DPS_0 * (1 + g_div) / (r - g_div)', 'stock_valuations', 14),
+      ('total_payout_ddm', 'Total Payout (Div + Buyback) DDM', 'valuation', 'Research-Backed', 'Shareholder Payout',
+       'Boudoukh, Michaely, Richardson & Roberts (2007, JF); Fama & French (2001, JFE)', '(min(FCF_0, Dividends_0 + Net_Buybacks_0) / shares) * (1 + g_p) / (r - g_p)', 'stock_valuations', 15),
+      ('gpa', 'Gross Profitability (GP/A)', 'scientific_diagnostic', 'Research-Backed', 'Profitability (EV-10)',
+       'Novy-Marx (2013, JFE)', 'gross_profit / total_assets', 'stock_scientific_metrics', 16),
+      ('operating_accruals', 'Operating Accruals', 'scientific_diagnostic', 'Research-Backed', 'Earnings Quality (EV-12)',
+       'Sloan (1996, The Accounting Review)', '(net_income - ocf) / total_assets', 'stock_scientific_metrics', 17),
+      ('asset_growth_cma', 'Asset Growth / Investment (CMA)', 'scientific_diagnostic', 'Research-Backed', 'Conservative Investment (EV-11)',
+       'Cooper, Gulen & Schill (2008, JF); Fama & French (2015, JFE)', 'total_assets_t / total_assets_t1 - 1', 'stock_scientific_metrics', 18),
+      ('net_share_issuance', 'Net Share Issuance', 'scientific_diagnostic', 'Research-Backed', 'Financing Factor (EV-13)',
+       'Pontiff & Woodgate (2008, JF)', 'shares_outstanding_t / shares_outstanding_t1 - 1', 'stock_scientific_metrics', 19),
+      ('piotroski_f_score', 'Piotroski 9-Signal F-Score', 'scientific_diagnostic', 'Research-Backed', 'Accounting Composite (EV-14)',
+       'Piotroski (2000, Journal of Accounting Research)', '9 binary signals across Profitability (4), Leverage/Liquidity (3), Efficiency (2)', 'stock_scientific_metrics', 20),
+      ('altman_z2', 'Altman Z''-Score', 'scientific_diagnostic', 'Research-Backed', 'Solvency & Distress',
+       'Altman (1968, JF; 2000 Z'' non-manufacturing)', '6.56*(WC/TA) + 3.26*(RE/TA) + 6.72*(EBIT/TA) + 1.05*(Eq/Debt)', 'stock_scientific_metrics', 21),
+      ('ret_12_1', '12-1 Month Momentum (ex-1m reversal)', 'scientific_diagnostic', 'Research-Backed', 'Momentum (EV-3)',
+       'Jegadeesh & Titman (1993, JF); Jegadeesh (1990, JF)', 'adj_close[t-21] / adj_close[t-252] - 1', 'stock_metrics_daily', 22),
+      ('near_high', '52-Week High Proximity', 'scientific_diagnostic', 'Research-Backed', 'Anchoring Momentum (EV-4)',
+       'George & Hwang (2004, JF)', 'close[t] / max(close[t-252:t])', 'stock_metrics_daily', 23),
+      ('value_score', 'Value Factor Pillar', 'factor_pillar', 'Research-Backed', 'Cross-Sectional Value',
+       'Fama & French (1992, JF); Basu (1977, JF); Loughran & Wellman (2011, JFQA)', 'mean(pct_rank(-PE), pct_rank(-PB), pct_rank(-EV/EBITDA), pct_rank(FCF_Yield))', 'stock_scores', 24),
+      ('quality_score', 'Quality Factor Pillar', 'factor_pillar', 'Research-Backed', 'Profitability & Safety (RMW / QMJ)',
+       'Fama & French (2015, JFE); Asness, Frazzini & Pedersen (2019, RAST)', 'mean(pct_rank(ROE), pct_rank(Operating_Margin), pct_rank(-Debt/Equity))', 'stock_scores', 25),
+      ('growth_score', 'Growth Factor Pillar', 'factor_pillar', 'Practitioner', 'Historical Revenue & EPS Growth',
+       'Ball & Brown (1968, JAR); Chan, Karceski & Lakonishok (2003, JF)', '0.45*pct_rank(Rev_CAGR_3y) + 0.35*pct_rank(EPS_YoY) + 0.20*pct_rank(EPS_Accel)', 'stock_scores', 26),
+      ('momentum_score', 'Momentum Factor Pillar', 'factor_pillar', 'Research-Backed', 'Cross-Sectional & Trend Momentum (UMD)',
+       'Jegadeesh & Titman (1993, JF); George & Hwang (2004, JF)', 'mean(pct_rank(ret_6m), pct_rank(ret_12m), pct_rank(pos_52w), pct_rank(sma200_ratio))', 'stock_scores', 27),
+      ('risk_score', 'Low-Risk / Stability Factor Pillar', 'factor_pillar', 'Research-Backed', 'Low-Volatility & Drawdown (BAB)',
+       'Ang, Hodrick, Xing & Zhang (2006, JF); Frazzini & Pedersen (2014, JFE)', 'mean(pct_rank(-vol_180d), pct_rank(-max_dd_252d))', 'stock_scores', 28),
+      ('practitioner_composite', 'Practitioner Composite Score (25/25/20/20/10)', 'composite', 'Practitioner', 'Multi-Factor Composite',
+       'House v1 Balanced Multi-Factor Composite', '(0.25*Value + 0.25*Quality + 0.20*Growth + 0.20*Momentum + 0.10*Risk) * 100', 'stock_scientific_metrics', 29),
+      ('academic_composite', 'Academic 1/N Equal-Weighted Composite (20/20/20/20/20)', 'composite', 'Research-Backed', 'Multi-Factor Composite (1/N)',
+       'DeMiguel, Garlappi & Uppal (2009, Review of Financial Studies)', '(0.20*Value + 0.20*Quality + 0.20*Growth + 0.20*Momentum + 0.20*Risk) * 100', 'stock_scientific_metrics', 30),
+      ('practitioner_archetype', 'Practitioner Stock Archetype Profile', 'classification', 'Practitioner', 'Factor Archetype Taxonomy',
+       'Lynch / GARP / Compounder / Value Trap Practitioner Taxonomy (ADR 0033)', '11-bucket decision tree over (Value, Quality, Growth, Momentum, Risk)', 'stock_scientific_metrics', 31),
+      ('academic_archetype', 'Academic Factor-Interaction Profile', 'classification', 'Research-Backed', 'Factor-Interaction Taxonomy',
+       'Asness QMJ (2019) / Piotroski (2000) / Mohanram G-Score (2005) / Campbell Distress (2008)', '10-bucket peer-reviewed factor-interaction taxonomy', 'stock_scientific_metrics', 32),
+      ('multibagger_practitioner', 'Practitioner Multibagger Screen (Lynch / PEG-Growth)', 'multibagger_screen', 'Practitioner', 'Multibagger Discovery',
+       'Lynch (1989) GARP + Terminal-Collapse-Guarded 3y CAGR (ADR 0033)', 'size<=p70, CAGR>=15% (no >15% terminal drop), ROE/OM>=15%, D/E<=1, PEG<=2 or PE<=25, >200d SMA', 'stock_scientific_metrics', 33),
+      ('multibagger_academic', 'Academic SQM Multibagger Screen (Size x Quality x 12-1 Mom)', 'multibagger_screen', 'Research-Backed', 'Multibagger Discovery (SQM)',
+       'Asness et al. (2018, JFE); Novy-Marx (2013); Sloan (1996); Jegadeesh & Titman (1993)', 'size<=p70, ROE>=15%/OM>=12%, FCF>0 (Sloan accruals), D/E<=1, ret_12_1>0 & pos_52w>=0.50, 1/N 25/25/25/25 rank', 'stock_scientific_metrics', 34)
+    ON CONFLICT (method_key) DO UPDATE SET
+      method_name   = EXCLUDED.method_name,
+      category      = EXCLUDED.category,
+      lens          = EXCLUDED.lens,
+      sub_school    = EXCLUDED.sub_school,
+      source_ref    = EXCLUDED.source_ref,
+      formula       = EXCLUDED.formula,
+      target_table  = EXCLUDED.target_table,
+      display_order = EXCLUDED.display_order;
+
+    -- Extend stock_valuations with the 5 new valuation methods + dual lens medians.
+    ALTER TABLE stock_valuations ADD COLUMN IF NOT EXISTS ev_ebitda_peer         DOUBLE PRECISION;
+    ALTER TABLE stock_valuations ADD COLUMN IF NOT EXISTS owner_earnings         DOUBLE PRECISION;
+    ALTER TABLE stock_valuations ADD COLUMN IF NOT EXISTS easton_mpeg            DOUBLE PRECISION;
+    ALTER TABLE stock_valuations ADD COLUMN IF NOT EXISTS intangible_ri          DOUBLE PRECISION;
+    ALTER TABLE stock_valuations ADD COLUMN IF NOT EXISTS total_payout_ddm       DOUBLE PRECISION;
+    ALTER TABLE stock_valuations ADD COLUMN IF NOT EXISTS practitioner_fair_value DOUBLE PRECISION;
+    ALTER TABLE stock_valuations ADD COLUMN IF NOT EXISTS practitioner_methods   INT;
+    ALTER TABLE stock_valuations ADD COLUMN IF NOT EXISTS academic_fair_value    DOUBLE PRECISION;
+    ALTER TABLE stock_valuations ADD COLUMN IF NOT EXISTS academic_methods       INT;
+    ALTER TABLE stock_valuations ADD COLUMN IF NOT EXISTS all_fair_value         DOUBLE PRECISION;
+    ALTER TABLE stock_valuations ADD COLUMN IF NOT EXISTS all_methods            INT;
+
+    -- Dedicated hypertable for per-stock daily scientific diagnostics, dual archetypes & multibagger scores.
+    CREATE TABLE IF NOT EXISTS stock_scientific_metrics (
+      symbol                 TEXT NOT NULL,
+      ts                     TIMESTAMPTZ NOT NULL,
+      universe               TEXT NOT NULL,
+      sector                 TEXT,
+      gpa                    DOUBLE PRECISION,
+      operating_accruals     DOUBLE PRECISION,
+      asset_growth_cma       DOUBLE PRECISION,
+      net_share_issuance     DOUBLE PRECISION,
+      piotroski_f_score      SMALLINT,
+      piotroski_f_tested     SMALLINT,
+      altman_z2              DOUBLE PRECISION,
+      altman_zone            TEXT,
+      practitioner_archetype TEXT,
+      academic_archetype     TEXT,
+      practitioner_composite DOUBLE PRECISION,
+      academic_composite     DOUBLE PRECISION,
+      mb_practitioner_score  DOUBLE PRECISION,
+      mb_academic_score      DOUBLE PRECISION,
+      mb_lens                TEXT,
+      PRIMARY KEY (symbol, ts)
+    );
+    ALTER TABLE stock_scientific_metrics ADD COLUMN IF NOT EXISTS mb_practitioner_score DOUBLE PRECISION;
+    ALTER TABLE stock_scientific_metrics ADD COLUMN IF NOT EXISTS mb_academic_score     DOUBLE PRECISION;
+    ALTER TABLE stock_scientific_metrics ADD COLUMN IF NOT EXISTS mb_lens               TEXT;
+    SELECT create_hypertable('stock_scientific_metrics', 'ts', if_not_exists => TRUE);
+    SELECT set_chunk_time_interval('stock_scientific_metrics', INTERVAL '365 days');
+    GRANT SELECT ON stock_scientific_metrics TO grafana_ro;
+    GRANT SELECT ON stock_scientific_metrics TO telegram_app;
+
+    -- Continuous classification & factor calibration metrics table (ADR 0033 classifier_loop.py).
+    CREATE TABLE IF NOT EXISTS calibration_metrics (
+      ts           TIMESTAMPTZ NOT NULL,
+      horizon_days INT NOT NULL,
+      kind         TEXT NOT NULL,     -- factor_ic | sector_ic | archetype_ret | academic_archetype_ret | mb_gmv | shrunk_weight
+      metric_key   TEXT NOT NULL,
+      universe     TEXT NOT NULL DEFAULT 'ALL',
+      sample_n     INT NOT NULL DEFAULT 0,
+      value        DOUBLE PRECISION,
+      aux_value    DOUBLE PRECISION,
+      status       TEXT,
+      PRIMARY KEY (ts, horizon_days, kind, metric_key, universe)
+    );
+    GRANT SELECT ON calibration_metrics TO grafana_ro;
+    GRANT SELECT ON calibration_metrics TO telegram_app;
+
+    -- Extend sector_metrics with Practitioner vs Research-Backed median upsides & scientific medians.
+    ALTER TABLE sector_metrics ADD COLUMN IF NOT EXISTS median_practitioner_upside_pct DOUBLE PRECISION;
+    ALTER TABLE sector_metrics ADD COLUMN IF NOT EXISTS median_academic_upside_pct     DOUBLE PRECISION;
+    ALTER TABLE sector_metrics ADD COLUMN IF NOT EXISTS median_gpa                     DOUBLE PRECISION;
+    ALTER TABLE sector_metrics ADD COLUMN IF NOT EXISTS median_f_score                 DOUBLE PRECISION;
+
+    -- Append-only contract view updates (ADR 0032: existing column positions unchanged).
+    CREATE OR REPLACE VIEW v_valuation_methods AS
+      SELECT method_key, method_name, category, lens, sub_school, source_ref,
+             formula, target_table, display_order
+      FROM valuation_methods ORDER BY display_order, method_key;
+    GRANT SELECT ON v_valuation_methods TO grafana_ro;
+    GRANT SELECT ON v_valuation_methods TO telegram_app;
+
+    CREATE OR REPLACE VIEW v_latest_scientific_metrics AS
+      SELECT DISTINCT ON (symbol)
+             symbol, ts, universe, sector, gpa, operating_accruals,
+             asset_growth_cma, net_share_issuance, piotroski_f_score,
+             piotroski_f_tested, altman_z2, altman_zone,
+             practitioner_archetype, academic_archetype,
+             practitioner_composite, academic_composite,
+             mb_practitioner_score, mb_academic_score, mb_lens
+      FROM stock_scientific_metrics
+      WHERE ts >= now() - interval '14 days'
+      ORDER BY symbol, ts DESC;
+    GRANT SELECT ON v_latest_scientific_metrics TO grafana_ro;
+    GRANT SELECT ON v_latest_scientific_metrics TO telegram_app;
+
+    CREATE OR REPLACE VIEW v_latest_calibration AS
+      SELECT ts, horizon_days, kind, metric_key, universe, sample_n, value, aux_value, status
+      FROM calibration_metrics
+      WHERE ts = (SELECT max(ts) FROM calibration_metrics);
+    GRANT SELECT ON v_latest_calibration TO grafana_ro;
+    GRANT SELECT ON v_latest_calibration TO telegram_app;
+
+    CREATE OR REPLACE VIEW v_valuations_recent AS
+      SELECT symbol, universe, ts, close, graham, peer_multiple, fcf_yield,
+             dcf, ddm, epv, residual_income, peg_lynch, damodaran_fcff,
+             graham_growth, fair_value, upside_pct, methods, discount_rate,
+             growth_used,
+             (coalesce((graham          > close)::int, 0) +
+              coalesce((peer_multiple   > close)::int, 0) +
+              coalesce((fcf_yield       > close)::int, 0) +
+              coalesce((dcf             > close)::int, 0) +
+              coalesce((ddm             > close)::int, 0) +
+              coalesce((epv             > close)::int, 0) +
+              coalesce((residual_income > close)::int, 0) +
+              coalesce((peg_lynch       > close)::int, 0) +
+              coalesce((damodaran_fcff  > close)::int, 0) +
+              coalesce((graham_growth   > close)::int, 0)) AS methods_above_close,
+             ev_ebitda_peer, owner_earnings, easton_mpeg, intangible_ri,
+             total_payout_ddm, practitioner_fair_value, practitioner_methods,
+             academic_fair_value, academic_methods, all_fair_value, all_methods
+      FROM stock_valuations WHERE ts >= now() - interval '4 days';
+
+    CREATE OR REPLACE VIEW v_latest_valuations AS
+      SELECT DISTINCT ON (symbol) * FROM v_valuations_recent
+      ORDER BY symbol, ts DESC;
+
+    CREATE OR REPLACE VIEW v_sector_latest AS
+      SELECT m.universe, m.sector, m.ts, m.members, m.median_pe, m.median_pb,
+             m.median_ev_ebitda, m.median_roe, m.median_op_margin,
+             m.avg_ret_6m, m.avg_ret_12m, m.median_upside_pct,
+             st.style, st.cyclical, st.note,
+             m.median_practitioner_upside_pct, m.median_academic_upside_pct,
+             m.median_gpa, m.median_f_score
+      FROM (SELECT DISTINCT ON (universe, sector) * FROM sector_metrics
+            WHERE ts >= now() - interval '7 days'
+            ORDER BY universe, sector, ts DESC) m
+      LEFT JOIN sector_styles st ON st.sector = m.sector;

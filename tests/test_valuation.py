@@ -216,6 +216,68 @@ class NewMethodsADR0030(unittest.TestCase):
         self.assertEqual(out["methods"], 10)
 
 
+class ExtendedMethodsTest(unittest.TestCase):
+    def test_ev_ebitda_peer_and_owner_earnings(self):
+        d, hist = tech()
+        d["ev_ebitda"] = 11.0
+        medians = dict(MEDIANS)
+        medians[("SP500", "Information Technology")] = {"pe": 24.0, "pb": 5.0, "ev_ebitda": 15.0}
+        out = va.value_one(d, hist, medians, STYLES, WEIGHTS, RATES)
+        # EV = 100000 + 10000 = 110000; implied EBITDA = 10000; target EV = 15 * 10000 = 150000;
+        # eq = 140000 -> 140.0 per share
+        self.assertAlmostEqual(out["ev_ebitda_peer"], 140.0, places=6)
+        # Owner earnings: 5y FCFs are [7000, 7500, 8000, 9000, 10000] -> mean 8300;
+        # (8300 * 1.025 / (0.095 - 0.025) - 10000) / 1000
+        expect_oe = (8300.0 * 1.025 / (0.095 - 0.025) - 10000.0) / 1000.0
+        self.assertAlmostEqual(out["owner_earnings"], expect_oe, places=6)
+
+    def test_easton_mpeg_intangible_ri_and_total_payout_ddm(self):
+        d, hist = tech()
+        d["gross_profit"] = 32000.0
+        hist["shares_outstanding"] = yrs([1050.0, 1030.0, 1000.0])  # ~2.91% buyback yield
+        out = run_one(d, hist)
+        ge = (5.0 / 3.0) ** 0.25 - 1
+        dps0 = 1100.0 / 1000.0
+        expect_mpeg = (5.0 * ge + 0.095 * dps0 * ge) / (0.095 ** 2)
+        self.assertAlmostEqual(out["easton_mpeg"], expect_mpeg, places=6)
+        self.assertIsNotNone(out["intangible_ri"])
+        self.assertGreater(out["intangible_ri"], out["residual_income"])
+        self.assertIsNotNone(out["total_payout_ddm"])
+        self.assertGreater(out["total_payout_ddm"], out["ddm"])
+        self.assertIsNotNone(out["practitioner_fair_value"])
+        self.assertIsNotNone(out["academic_fair_value"])
+        self.assertGreaterEqual(out["all_methods"], 13)
+
+    def test_valuation_catalog_and_scientific_row(self):
+        self.assertEqual(len(va.VALUATION_CATALOG), 34)
+        keys = {row[0] for row in va.VALUATION_CATALOG}
+        for col in va.PRACTITIONER_COLS + va.ACADEMIC_COLS:
+            self.assertIn(col, keys)
+        for row in va.VALUATION_CATALOG:
+            self.assertIn(row[3], ("Practitioner", "Research-Backed"))
+            self.assertTrue(row[4] and row[5] and row[6])
+        d, hist = tech()
+        d["scores"] = (73.5, 0.65, 0.85, 0.78, 0.65, 0.70)
+        d["ret_12m"] = 0.25
+        hist["total_assets"] = yrs([85000.0, 92000.0, 100000.0])
+        hist["gross_profit"] = yrs([28000.0, 31000.0, 35000.0])
+        hist["net_income"] = yrs([8000.0, 9500.0, 11000.0])
+        hist["total_debt"] = yrs([12000.0, 11000.0, 10000.0])
+        hist["current_assets"] = yrs([30000.0, 35000.0, 40000.0])
+        hist["current_liabilities"] = yrs([15000.0, 15000.0, 15000.0])
+        hist["shares_outstanding"] = yrs([1020.0, 1010.0, 1000.0])
+        srow = va.scientific_row("TECH", datetime(2026, 11, 8), d, hist, size_pct=0.25)
+        self.assertEqual(srow[0], "TECH")
+        self.assertAlmostEqual(srow[4], 0.35, places=4)       # GP/A = 35000 / 100000
+        self.assertAlmostEqual(srow[5], -0.02, places=4)      # Accruals = (11000 - 13000) / 100000
+        self.assertEqual(srow[8], 9)                          # Piotroski F-score 9/9
+        self.assertEqual(srow[11], "safe")                    # Altman Z'' zone
+        self.assertEqual(srow[12], "Quality Compounder")      # Practitioner archetype
+        self.assertEqual(srow[13], "QMJ + BAB Compounder (Asness 2019 / Frazzini 2014)")  # Academic archetype
+        self.assertAlmostEqual(srow[14], 73.5, places=2)      # Practitioner composite
+        self.assertAlmostEqual(srow[15], 72.6, places=2)      # Academic 1/N composite
+        self.assertIsNotNone(srow[17])                        # Academic SQM multibagger score
+
 
 if __name__ == "__main__":
     unittest.main()
