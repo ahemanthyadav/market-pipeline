@@ -117,8 +117,17 @@ class AccuracyCheckTest(unittest.TestCase):
             accuracy_check.urllib.request.urlopen = orig
 
     def test_internal_sqls_are_bounded(self):
-        for name in ("VAL_SQL", "SECTOR_SQL", "BENCH_SQL", "FRESH_SQL"):
+        for name in ("VAL_SQL", "SECTOR_SQL", "BENCH_SQL", "STOCK_SAMPLE_SQL", "FRESH_SQL"):
             self.assertIn("ts >=", getattr(accuracy_check, name), name)
+
+    def test_per_stock_second_source_skips_without_api_key(self):
+        import os
+        orig = os.environ.pop("TIINGO_API_KEY", None)
+        try:
+            self.assertEqual(accuracy_check.per_stock_second_source(None), (0, []))
+        finally:
+            if orig is not None:
+                os.environ["TIINGO_API_KEY"] = orig
 
 
 class UniverseExpansionTest(unittest.TestCase):

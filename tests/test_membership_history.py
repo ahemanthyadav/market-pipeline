@@ -17,6 +17,12 @@ from contextlib import redirect_stdout
 from datetime import date
 from pathlib import Path
 
+try:
+    import lxml.html  # noqa: F401
+except ImportError as exc:
+    print(f"SKIP: {exc}")
+    sys.exit(0)
+
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "manifests/stock-screener/scripts/membership_history.py"
 

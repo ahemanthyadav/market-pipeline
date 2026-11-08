@@ -15,6 +15,8 @@ A failed check is reported, not fatal: the job exits 0 and the report (and
 its WARN lines in the log) carry the findings. Alerting on it stays with the
 daily digest's stale-feeds pattern if it ever matters enough.
 """
+import json
+import os
 import urllib.request
 from datetime import datetime, timezone
 
@@ -82,6 +84,15 @@ BENCH_SQL = """
     ORDER BY ts DESC LIMIT 10
 """
 
+STOCK_SAMPLE_SQL = """
+    SELECT DISTINCT ON (p.symbol) p.symbol, p.ts::date, p.close
+    FROM stock_prices p
+    JOIN universe_constituents c ON c.symbol = p.symbol
+    WHERE c.universe = 'SP500' AND c.active
+      AND p.ts >= now() - interval '10 days' AND p.close > 0
+    ORDER BY p.symbol, p.ts DESC
+"""
+
 FRESH_SQL = """
     SELECT 'stock_prices', max(ts)::date FROM stock_prices
       WHERE ts >= now() - interval '7 days'
@@ -115,8 +126,53 @@ def fred_sp500():
     return out
 
 
+def tiingo_close(symbol, day, api_key):
+    """Fetch single-day unadjusted close from Tiingo REST API for `symbol` on `day`."""
+    sym = symbol.replace(".", "-")
+    url = (f"https://api.tiingo.com/tiingo/daily/{sym}/prices"
+           f"?startDate={day}&endDate={day}")
+    req = urllib.request.Request(url, headers={
+        "Content-Type": "application/json",
+        "Authorization": f"Token {api_key}",
+        "User-Agent": "marketdata-dq5",
+    })
+    try:
+        rows = json.loads(urllib.request.urlopen(req, timeout=15).read().decode())
+        if rows and isinstance(rows, list) and "close" in rows[0]:
+            return float(rows[0]["close"])
+    except Exception as exc:  # noqa: BLE001
+        print(f"WARN tiingo {symbol}: {exc}", flush=True)
+    return None
+
+
+def per_stock_second_source(cur, sample_size=25):
+    """DG-04 / DF-03: Deterministic weekly rotation of `sample_size` SP500 symbols
+    checked against Tiingo when TIINGO_API_KEY is configured. Returns (checked, mismatches)."""
+    api_key = os.environ.get("TIINGO_API_KEY", "").strip()
+    if not api_key:
+        return 0, []
+    cur.execute(STOCK_SAMPLE_SQL)
+    rows = cur.fetchall()
+    if not rows:
+        return 0, []
+    week_num = datetime.now(timezone.utc).isocalendar()[1]
+    start = (week_num * sample_size) % len(rows)
+    rotated = (rows[start:] + rows[:start])[:sample_size]
+    checked, mismatches = 0, []
+    for sym, day, ours in rotated:
+        theirs = tiingo_close(sym, day, api_key)
+        if theirs is None or not ours:
+            continue
+        checked += 1
+        diff = abs(ours / theirs - 1) * 100
+        if diff > TOL_PRICE_PCT:
+            mismatches.append((sym, day, ours, theirs, diff))
+    return checked, mismatches
+
+
 def second_source(cur):
-    """Our ^GSPC closes vs FRED's official S&P 500 level, last 10 bars."""
+    """Our ^GSPC closes vs FRED's official S&P 500 level, last 10 bars, plus
+    optional per-stock Tiingo cross-check when TIINGO_API_KEY is set."""
     fred = fred_sp500()
     cur.execute(BENCH_SQL)
     checked, mismatches = 0, []
@@ -128,6 +184,9 @@ def second_source(cur):
         diff = abs(ours / theirs - 1) * 100
         if diff > TOL_PRICE_PCT:
             mismatches.append(("^GSPC", day, ours, theirs, diff))
+    ps_checked, ps_mismatches = per_stock_second_source(cur)
+    checked += ps_checked
+    mismatches.extend(ps_mismatches)
     return checked, mismatches
 
 

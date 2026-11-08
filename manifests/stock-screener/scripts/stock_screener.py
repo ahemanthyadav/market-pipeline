@@ -49,6 +49,66 @@ def pct_rank(s: pd.Series, negate=False) -> pd.Series:
     return v.rank(pct=True).fillna(NEUTRAL)
 
 
+SECTOR_NEUTRAL = os.environ.get("SECTOR_NEUTRAL", "0").strip().lower()
+REGIME_TILT = os.environ.get("REGIME_TILT", "0").strip().lower()
+
+
+def regime_weights(regime_state: str | None = None) -> dict[str, float]:
+    """Return factor weights, optionally tilted for risk-off ('red') regimes when REGIME_TILT=1."""
+    if REGIME_TILT not in ("1", "true", "yes") or regime_state != "red":
+        return dict(W)
+    return {"value": 0.25, "quality": 0.30, "growth": 0.15, "momentum": 0.15, "risk": 0.15}
+
+
+def construct_portfolio(df: pd.DataFrame, max_names: int = 25,
+                        max_per_sector: int = 5, max_weight: float = 0.08) -> pd.DataFrame:
+    """Build a sector-capped, inverse-volatility weighted portfolio from ranked eligible rows."""
+    if df.empty or "rank" not in df.columns:
+        return pd.DataFrame()
+    el = df[df["rank"].notna()].sort_values("rank")
+    picked = []
+    sec_counts: dict[str, int] = {}
+    for idx, row in el.iterrows():
+        sec = row.get("sector") or "Unknown"
+        if sec_counts.get(sec, 0) >= max_per_sector:
+            continue
+        picked.append(idx)
+        sec_counts[sec] = sec_counts.get(sec, 0) + 1
+        if len(picked) >= max_names:
+            break
+    if not picked:
+        return pd.DataFrame()
+    port = el.loc[picked].copy()
+    vol = port["vol_180d"].astype(float).fillna(0.25).clip(lower=0.12, upper=0.80) \
+        if "vol_180d" in port.columns else pd.Series(0.25, index=port.index)
+    inv_vol = 1.0 / vol
+    raw_w = inv_vol / inv_vol.sum()
+    port["eq_weight"] = 1.0 / len(port)
+    port["risk_weight"] = raw_w.clip(upper=max_weight)
+    port["risk_weight"] = port["risk_weight"] / port["risk_weight"].sum()
+    return port
+
+
+def sector_pct_rank(df: pd.DataFrame, col: str, negate=False, min_group=5) -> pd.Series:
+    """Percentile rank within sector (when sector has >= min_group valid values),
+    falling back to universe-wide pct_rank for small/unmapped sectors.
+    Controlled by SECTOR_NEUTRAL ('0' = universe, 'blend' = 50/50, '1'/'full' = sector)."""
+    if col not in df.columns:
+        return pd.Series([NEUTRAL] * len(df), index=df.index)
+    uni_rank = pct_rank(df[col], negate)
+    if SECTOR_NEUTRAL in ("0", "false", "none", "") or "sector" not in df.columns:
+        return uni_rank.where(df[col].notna(), NEUTRAL)
+    sec_rank = uni_rank.copy()
+    for _sec, grp in df.groupby("sector", dropna=True):
+        if grp[col].notna().sum() >= min_group:
+            sec_rank.loc[grp.index] = pct_rank(grp[col], negate)
+    if SECTOR_NEUTRAL == "blend":
+        out = 0.5 * sec_rank + 0.5 * uni_rank
+    else:
+        out = sec_rank
+    return out.where(df[col].notna(), NEUTRAL)
+
+
 def latest_fundamentals(cur, symbols, as_of):
     """{symbol: {metric: value}} — latest statement facts + live ratios ≤ as_of.
     Flow metrics come from full-year (yfinance) rows only: EDGAR period rows are
@@ -196,9 +256,11 @@ def run_universe(conn, universe, today, limit):
     """One universe leg: read → score → atomic write. Raises OperationalError
     on a dropped connection so the caller can reconnect and retry the leg."""
     with conn.cursor() as cur:
-        cur.execute("SELECT symbol FROM universe_constituents WHERE active AND universe=%s "
+        cur.execute("SELECT symbol, sector FROM universe_constituents WHERE active AND universe=%s "
                     "ORDER BY 1", (universe,))
-        symbols = [r[0] for r in cur.fetchall()]
+        const_rows = cur.fetchall()
+        symbols = [r[0] for r in const_rows]
+        sectors = {r[0]: r[1] for r in const_rows if len(r) > 1}
         if limit:
             symbols = symbols[:limit]
         if not symbols:
@@ -224,7 +286,7 @@ def run_universe(conn, universe, today, limit):
             if not ts:
                 continue
             # derived fundamentals
-            rev_cagr = eps_g = None
+            rev_cagr = eps_g = eps_accel = None
             hist = rev.get(sym, [])
             if len(hist) >= 2:  # annualized: latest vs ~3 annual steps back
                 back = min(3, len(hist) - 1)
@@ -235,6 +297,9 @@ def run_universe(conn, universe, today, limit):
             e = eps.get(sym, [])
             if len(e) >= 2 and e[1][1] and e[1][1] != 0:
                 eps_g = e[0][1] / e[1][1] - 1
+                if len(e) >= 3 and e[2][1] and e[2][1] != 0:
+                    prior_g = e[1][1] / e[2][1] - 1
+                    eps_accel = eps_g - prior_g
             de = None
             if f.get("total_debt") is not None and f.get("shareholder_equity"):
                 if f["shareholder_equity"] != 0:
@@ -245,11 +310,12 @@ def run_universe(conn, universe, today, limit):
                 if f["market_cap"] != 0:
                     fcf_y = fcf_v / f["market_cap"]
             rows.append({
-                "symbol": sym, "ts": ts,
+                "symbol": sym, "ts": ts, "sector": sectors.get(sym),
                 "pe": f.get("pe"), "pb": f.get("pb"), "ev_ebitda": f.get("ev_ebitda"),
                 "fcf_yield": fcf_y, "roe": f.get("roe"),
                 "operating_margin": f.get("operating_margin"), "de": de,
                 "rev_cagr_3y": rev_cagr, "eps_growth_yoy": eps_g,
+                "eps_accel": eps_accel,
                 "ret_6m": m.get("ret_6m"), "ret_12m": m.get("ret_12m"),
                 "pos_52w": m.get("pos_52w"), "sma200_ratio": m.get("sma200_ratio"),
                 "vol_180d": m.get("vol_180d"), "max_dd_252d": m.get("max_dd_252d"),
@@ -269,17 +335,16 @@ def run_universe(conn, universe, today, limit):
                          ("fcf_yield", False), ("roe", False),
                          ("operating_margin", False), ("de", True),
                          ("rev_cagr_3y", False), ("eps_growth_yoy", False),
+                         ("eps_accel", False),
                          ("ret_6m", False), ("ret_12m", False), ("pos_52w", False),
                          ("sma200_ratio", False), ("vol_180d", True),
                          ("max_dd_252d", True)):
-            P[col] = pct_rank(df[col], neg) if col in df.columns else \
-                pd.Series([NEUTRAL] * len(df), index=df.index)
-            P[col] = P[col].where(df[col].notna(), NEUTRAL) if col in df.columns \
-                else P[col]
+            P[col] = sector_pct_rank(df, col, neg)
         factors = {
             "value": (P["pe"] + P["pb"] + P["ev_ebitda"] + P["fcf_yield"]) / 4,
             "quality": (P["roe"] + P["operating_margin"] + P["de"]) / 3,
-            "growth": (P["rev_cagr_3y"] + P["eps_growth_yoy"]) / 2,
+            "growth": (0.45 * P["rev_cagr_3y"] + 0.35 * P["eps_growth_yoy"]
+                       + 0.20 * P["eps_accel"]),
             "momentum": (P["ret_6m"] + P["ret_12m"] + P["pos_52w"]
                          + P["sma200_ratio"]) / 4,
             "risk": (P["vol_180d"] + P["max_dd_252d"]) / 2,

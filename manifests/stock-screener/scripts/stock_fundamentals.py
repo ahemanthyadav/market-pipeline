@@ -60,6 +60,9 @@ EDGAR_MAP = {
                            "WeightedAverageNumberOfDilutedSharesOutstanding"],  # per-period fallback
     "dividends_paid": ["PaymentsOfDividendsCommonStock", "PaymentsOfDividends"],
 }
+# DG-11 / DF-08: Fallback COGS tags to derive gross_profit = total_revenue - cogs when
+# a filer omits the explicit GrossProfit XBRL tag.
+COGS_TAGS = ["CostOfRevenue", "CostOfGoodsAndServicesSold", "CostOfGoodsSold"]
 # yfinance statement row -> metric. yfinance 1.7 renamed rows to CamelCase
 # (e.g. "NetIncome"); candidate lists cover both 0.2.x spaced names and 1.7+.
 YF_MAP = {
@@ -162,6 +165,36 @@ def edgar_fact_rows(facts):
                         (e["filed"], e.get("accn") or "", _norm(metric, float(e["val"])),
                          start, e["form"]))
             seen |= mine
+    # DG-11 / DF-08: Derive gross_profit = total_revenue - COGS when GrossProfit tag is absent
+    cogs_by_key = {}
+    seen_cogs = set()
+    for tag in COGS_TAGS:
+        mine = set()
+        for unit, entries in ((facts.get(tag) or {}).get("units", {})).items():
+            if unit != "USD":
+                continue
+            for e in entries:
+                if e.get("form") not in ("10-K", "10-Q") or not e.get("end") \
+                        or not e.get("filed") or e.get("val") is None:
+                    continue
+                start = e.get("start")
+                dur = _days(start, e["end"]) if start else 0
+                ckey = (e["end"], dur)
+                if ckey in seen_cogs:
+                    continue
+                mine.add(ckey)
+                cogs_by_key.setdefault(ckey, []).append(
+                    (e["filed"], e.get("accn") or "", float(e["val"]), start, e["form"]))
+        seen_cogs |= mine
+    for (end, dur), cogs_entries in cogs_by_key.items():
+        if ("gross_profit", end, dur) in by_key or ("total_revenue", end, dur) not in by_key:
+            continue
+        rev_by_filed = {r[0]: r for r in sorted(by_key[("total_revenue", end, dur)])}
+        for filed, accn, cval, start, form in sorted(cogs_entries):
+            rev_entry = rev_by_filed.get(filed)
+            if rev_entry is not None:
+                by_key.setdefault(("gross_profit", end, dur), []).append(
+                    (filed, accn or rev_entry[1], rev_entry[2] - cval, start, form))
     rows = []
     for (metric, end, dur), entries in by_key.items():
         last_val, last_filed = None, None
@@ -232,12 +265,29 @@ def edgar_facts(cik, symbol, cur):
                     if key not in best or filed > best[key][1]:
                         best[key] = (_norm(metric, float(e["val"])), filed)
     rows = 0
+    cogs_best = {}
+    for tag in COGS_TAGS:
+        for unit, entries in ((facts.get(tag) or {}).get("units", {})).items():
+            if unit != "USD":
+                continue
+            for e in entries:
+                if e.get("form") not in ("10-K", "10-Q") or not e.get("end") or e.get("val") is None:
+                    continue
+                end = e["end"]
+                filed = e.get("filed", "")
+                if end not in cogs_best or filed > cogs_best[end][1]:
+                    cogs_best[end] = (float(e["val"]), filed)
     ends = {end for (_m, end) in best}
     for end in ends:
         ocf = best.get(("ocf", end))
         capex = best.get(("capex", end))
         if ocf and capex:
             best[("fcf", end)] = (ocf[0] - capex[0], max(ocf[1], capex[1]))
+        if ("gross_profit", end) not in best:
+            rev = best.get(("total_revenue", end))
+            cogs = cogs_best.get(end)
+            if rev and cogs:
+                best[("gross_profit", end)] = (rev[0] - cogs[0], max(rev[1], cogs[1]))
     for (metric, end), (val, filed) in best.items():
         if metric in EXCLUDE_LATEST:
             continue  # raw inputs kept out of the metric table (fcf derived)

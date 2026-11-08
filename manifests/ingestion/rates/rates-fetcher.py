@@ -1,7 +1,8 @@
 """Daily US rates via FRED (needs FRED_API_KEY from the fred-api Secret).
 
 DFF (Fed funds effective) -> interest_rates; DGS2/DGS10/DGS30 -> bond_yields
-(official depth alongside the yfinance ^TNX/^FVX/^TYX series). Idempotent
+(official depth alongside the yfinance ^TNX/^FVX/^TYX series). T10Y2Y and
+BAMLH0A0HYM2 -> interest_rates (G-13 macro series). Idempotent
 DELETE+INSERT per (name, ts). Runs 23:20 UTC in the evening batch.
 Exit 1 only if zero rows are written.
 
@@ -19,6 +20,9 @@ SERIES = {
     "DGS2": ("bond_yields", "US 2Y (FRED)"),
     "DGS10": ("bond_yields", "US 10Y (FRED)"),
     "DGS30": ("bond_yields", "US 30Y (FRED)"),
+    # G-13 macro series (ADR 0026 §14)
+    "T10Y2Y": ("interest_rates", "US 10Y-2Y spread"),
+    "BAMLH0A0HYM2": ("interest_rates", "US HY OAS"),
 }
 
 TABLE_COLUMNS = {

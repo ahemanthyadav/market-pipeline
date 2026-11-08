@@ -155,7 +155,10 @@ def parse_old_html(rec, page):
 def parse_xbrl(raw, period_end):
     """2025+ integrated-filing XBRL -> [(metric, start, end, value)] for contexts ending on the
     filing's period end (quarter and year-to-date), without dimensions (entity totals)."""
-    from lxml import etree
+    try:
+        from lxml import etree
+    except ImportError:
+        import xml.etree.ElementTree as etree
     doc = etree.fromstring(raw)
     X = "{http://www.xbrl.org/2003/instance}"
     ctx = {}
@@ -169,7 +172,7 @@ def parse_xbrl(raw, period_end):
     for el in doc:
         if not isinstance(el.tag, str) or el.get("contextRef") not in ctx:
             continue
-        name = etree.QName(el).localname
+        name = el.tag.rsplit("}", 1)[-1]
         for metric, tags in XBRL_MAP.items():
             if name in tags:
                 v = _f(el.text)

@@ -11,8 +11,12 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-import numpy as np
-import pandas as pd
+try:
+    import numpy as np
+    import pandas as pd
+except ImportError as exc:
+    print(f"SKIP: {exc}")
+    sys.exit(0)
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.modules.setdefault("psycopg", types.ModuleType("psycopg"))

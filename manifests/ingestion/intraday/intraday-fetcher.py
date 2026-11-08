@@ -23,7 +23,10 @@ FX_PAIRS = [
     "USDINR=X", "EURUSD=X", "GBPUSD=X", "USDJPY=X",
     "AUDUSD=X", "USDCHF=X", "USDCNY=X", "EURINR=X", "GBPINR=X", "JPYINR=X",
 ]
-TICKERS = ["GC=F", "SI=F", "CL=F", "DX-Y.NYB"]
+TICKERS = [
+    "GC=F", "SI=F", "CL=F", "DX-Y.NYB",
+    "^GSPC", "^IXIC", "^NSEI", "^BSESN", "^VIX", "^INDIAVIX",
+]
 ALL = FX_PAIRS + TICKERS
 
 

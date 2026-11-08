@@ -27,7 +27,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: universe
-              image: local/marketdata-data:v1
+              image: local/marketdata-data:v2
               imagePullPolicy: Never
               command: ["python", "universe_refresh.py"]
               env:
@@ -68,7 +68,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: prices
-              image: local/marketdata-data:v1
+              image: local/marketdata-data:v2
               imagePullPolicy: Never
               command: ["python", "stock_prices.py"]
               env:
@@ -109,7 +109,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: fundamentals
-              image: local/marketdata-data:v1
+              image: local/marketdata-data:v2
               imagePullPolicy: Never
               command: ["python", "stock_fundamentals.py"]
               env:
@@ -152,7 +152,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: metrics
-              image: local/marketdata-data:v1
+              image: local/marketdata-data:v2
               imagePullPolicy: Never
               command: ["python", "stock_metrics.py"]
               env:
@@ -193,7 +193,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: screener
-              image: local/marketdata-data:v1
+              image: local/marketdata-data:v2
               imagePullPolicy: Never
               command: ["python", "stock_screener.py"]
               env:
@@ -239,7 +239,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: report
-              image: local/marketdata-data:v1
+              image: local/marketdata-data:v2
               imagePullPolicy: Never
               command: ["python", "stock_report.py"]
               env:
@@ -271,9 +271,9 @@ metadata:
   name: nse-fundamentals
   namespace: market-data
 spec:
-  # Suspended while the first full backfill (Job backfill-nse-fundamentals) runs — both use the
-  # same job_state cursor. Un-suspend when that Job logs "cursor cleared" (pending-tasks G-6).
-  suspend: true
+  # Un-suspended 2026-11-03 after the first full backfill logged "cursor cleared" (pending-tasks G-6).
+  # Both the CronJob and the backfill Job share the job_state cursor.
+  suspend: false
   schedule: "0 10 * * 0"
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 21600
@@ -290,7 +290,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: nse-fundamentals
-              image: local/marketdata-data:v1
+              image: local/marketdata-data:v2
               imagePullPolicy: Never
               command: ["python", "nse_fundamentals.py"]
               env:
@@ -338,7 +338,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: membership
-              image: local/marketdata-data:v1
+              image: local/marketdata-data:v2
               imagePullPolicy: Never
               command: ["python", "membership_history.py"]
               env:
@@ -384,7 +384,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: valuation
-              image: local/marketdata-data:v1
+              image: local/marketdata-data:v2
               imagePullPolicy: Never
               command: ["python", "valuation.py"]
               env:
@@ -428,7 +428,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: predictions
-              image: local/marketdata-data:v1
+              image: local/marketdata-data:v2
               imagePullPolicy: Never
               command: ["python", "predictions.py"]
               env:
@@ -471,7 +471,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: earnings
-              image: local/marketdata-data:v1
+              image: local/marketdata-data:v2
               imagePullPolicy: Never
               command: ["python", "earnings_calendar.py"]
               env:
@@ -515,7 +515,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: accuracy
-              image: local/marketdata-data:v1
+              image: local/marketdata-data:v2
               imagePullPolicy: Never
               command: ["python", "accuracy_check.py"]
               env:

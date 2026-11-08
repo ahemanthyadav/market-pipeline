@@ -14,7 +14,11 @@ import types
 import unittest
 from pathlib import Path
 
-import pandas as pd
+try:
+    import pandas as pd
+except ImportError as exc:
+    print(f"SKIP: needs pandas ({exc})")
+    sys.exit(0)
 
 for name in ("psycopg", "yfinance"):
     sys.modules.setdefault(name, types.ModuleType(name))
