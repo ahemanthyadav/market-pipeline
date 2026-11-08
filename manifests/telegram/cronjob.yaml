@@ -43,7 +43,7 @@ spec:
             runAsGroup: 1000
           containers:
             - name: digest
-              image: local/telegram-digest:v37
+              image: local/telegram-digest:v38
               imagePullPolicy: Never
               securityContext:
                 allowPrivilegeEscalation: false
@@ -118,7 +118,7 @@ spec:
             runAsGroup: 1000
           containers:
             - name: alerts
-              image: local/telegram-digest:v37
+              image: local/telegram-digest:v38
               imagePullPolicy: Never
               args: ["python", "alerts.py"]
               securityContext:
