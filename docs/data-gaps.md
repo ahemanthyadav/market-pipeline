@@ -61,8 +61,7 @@ and a static 2018–24 research dataset (Mendeley). Neither adopted.
 **Consequence:** No historical FII/DII flow backtests possible until a source is adopted or forward
 history accumulates over years.
 
-**Status:** 🤔 Owner decision — accept forward-only (like news), or adopt a third-party source with
-quality/terms caveats.
+**Status:** ✅ Closed (2026-10-26, owner decision: forward-only — no third-party backfill).
 
 **Source:** `docs/pending-tasks.md` H-6; `docs/market-data-architecture.md` §4.3a ("partly — NSE
 archive depth unverified").
@@ -83,9 +82,9 @@ NSE's side, logged WARN, skipped.
 `nse-fundamentals` CronJob stays suspended until then; India fundamental screens can't be trusted
 until the DRY_RUN diff vs yfinance passes.
 
-**Status:** 🔶 In flight — run to `cursor cleared`, then (1) un-suspend `nse-fundamentals`, (2)
-screener DRY_RUN diff for NIFTY top-50, (3) re-run EV-0 with India fundamentals, (4) update the
-coverage row in `architecture.md` §4.3a.
+**Status:** ✅ Closed (2026-11-03) — `nse_fundamentals` cursor cleared 2026-11-01 03:22 UTC;
+`nse-fundamentals` CronJob un-suspended (live + manifest) 2026-11-03; DRY_RUN diff vs yfinance
+completed; EV-0 re-run completed across all 5 universes.
 
 **Source:** `docs/pending-tasks.md` G-6 history backfills; `manifests/stock-screener/scripts/nse_fundamentals.py`.
 
@@ -96,13 +95,13 @@ coverage row in `architecture.md` §4.3a.
 **Table:** `stock_prices` (validation), DQ-5 `accuracy-check`
 
 **State:** Stooq grew a JS challenge wall in Oct 2026 — the original per-stock second source for
-check D is dead. FRED `SP500` index-level check exists (validates ^GSPC closes, 10/10 within 0.5%),
-but there is **no per-stock independent price source**. FMP free tier for US fundamentals depth is
-schema-ready (`source` keying) but deferred.
+check D is dead. FRED `SP500` index-level check exists (validates ^GSPC closes, 10/10 within 0.5%).
+`accuracy_check.py` now includes `per_stock_second_source()` (deterministic weekly 25-stock S&P 500
+rotation against Tiingo when `TIINGO_API_KEY` is configured).
 
-**Consequence:** DQ-5 can cross-check the index level vs FRED, but not individual stock prices.
+**Consequence:** Code-ready; activates automatically once `TIINGO_API_KEY` is added to the job's environment.
 
-**Status:** 🤔 Owner choice — free API key (Finnhub/Tiingo) needed for per-stock second source.
+**Status:** 🤔 Code-ready (2026-11-08) — awaiting owner-supplied free `TIINGO_API_KEY`.
 
 **Source:** `manifests/stock-screener/scripts/accuracy_check.py` (check D comment),
 `docs/pending-tasks.md` §1 (Stooq wall + FRED benchmark check live),
@@ -135,8 +134,8 @@ effort / blocked until NSE quarterly results feed with filing dates exists.
 
 **Consequence:** Sparse intraday history, few symbols.
 
-**Status:** 🔶 Tier-1 quick-win project — one-list change in `intraday-fetcher` to add ^GSPC, ^NSEI
-etc.; not done.
+**Status:** ✅ Closed in code (2026-11-08) — `intraday-fetcher.py` expanded to 10 tickers (`GC=F`,
+`SI=F`, `CL=F`, `DX-Y.NYB`, `^GSPC`, `^IXIC`, `^NSEI`, `^BSESN`, `^VIX`, `^INDIAVIX`).
 
 **Source:** `docs/market-data-architecture.md` §4.3a; `docs/market-data-finds-and-projects.md` Tier 1 #5.
 
@@ -146,14 +145,14 @@ etc.; not done.
 
 **Tables:** `stock_metrics_daily`, `stock_prices` (has own `adj_close`)
 
-**State:** EV-0 showed small rank effects. Metrics still computed on raw close; switching to the
-own total-return `adj_close` (ADR 0014, recomputed per symbol, 0 NULL of 6.34M rows) is a separate
-decision not yet made.
+**State:** `stock_metrics.py` now reads `adj_close` from `stock_prices` and computes total-return
+and risk series (`ret_1m`, `ret_6m`, `ret_12m`, `vol_180d`, `max_dd_252d`) on `adj_close` (falling
+back to raw `close`), while keeping price-level metrics (`close`, `sma50_ratio`, `sma200_ratio`,
+`pos_52w`, `dol_vol_20d`) on raw `close`.
 
-**Consequence:** Momentum/volatility scores may be slightly distorted by unadjusted corporate
-actions.
+**Consequence:** Momentum, volatility, and drawdown metrics are no longer distorted by dividends or splits.
 
-**Status:** 🤔 Downstream EV-0 decision; small effect.
+**Status:** ✅ Closed in code (2026-11-08) — `stock_metrics.py` uses `adj_close` for return/risk series.
 
 **Source:** `docs/pending-tasks.md` DQ-1 downstream note; `docs/adr/0014-own-total-return-adj-close.md`.
 
@@ -185,7 +184,8 @@ history). Nifty 500 restored via ^CRSLDX.
 
 **Consequence:** No Auto/FMCG index price history in the pipeline.
 
-**Status:** 🔶 NSE direct (session-cookie API like fiidii) or jugaad-data needed; not built.
+**Status:** ✅ Closed (2026-10-26) — shipped in `nse-fetcher:v7` (paginated NSE direct API; series
+live 2015→today).
 
 **Source:** `docs/market-data-pipeline-operations-manual.md` §12 item 2;
 `docs/market-data-finds-and-projects.md` Tier 2 #9, F11.
@@ -202,7 +202,8 @@ INSERT-only writers today.
 **Consequence:** Duplicate headlines possible on re-run (24 same-headline pairs on different days
 are feed republications and intentionally kept).
 
-**Status:** 🔶 Needs `ON CONFLICT DO NOTHING` in scorer/fetcher at next image rebuild.
+**Status:** ✅ Closed (2026-10-18) — `11-news-constraints.sql` applied; `ux_raw_headlines_key` and
+`ux_news_sentiment_key` enforced and writers aligned.
 
 **Source:** `docs/market-data-pipeline-operations-manual.md` §12 item 5.
 
@@ -212,12 +213,14 @@ are feed republications and intentionally kept).
 
 **Table:** `financial_facts` (EDGAR leg), `EDGAR_MAP`
 
-**State:** Many EDGAR filers skip the `GrossProfit` tag. Revenue−COGS derivation is an option if
-EV-10 (gross profitability) needs more coverage.
+**State:** Many EDGAR filers skip the `GrossProfit` tag. `stock_fundamentals.py` now derives
+`gross_profit = total_revenue - COGS` (`CostOfRevenue`, `CostOfGoodsAndServicesSold`,
+`CostOfGoodsSold`) in both `edgar_fact_rows()` and `edgar_facts()` whenever `GrossProfit` is not
+explicitly filed for a period.
 
-**Consequence:** Gross profitability factor (EV-10) has incomplete US coverage.
+**Consequence:** Gross profitability factor (EV-10) now covers US filers that report Revenue + COGS.
 
-**Status:** 🔶 Known limitation — noted in `EDGAR_MAP` extension; derivation is a future option.
+**Status:** ✅ Closed in code (2026-11-08) — `COGS_TAGS` fallback derivation added to `stock_fundamentals.py`.
 
 **Source:** `docs/evidence-based-signals-roadmap.md` EV-9 note;
 `manifests/stock-screener/scripts/stock_fundamentals.py` (EDGAR_MAP comments).

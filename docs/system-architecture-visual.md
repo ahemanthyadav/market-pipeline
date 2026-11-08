@@ -28,7 +28,7 @@ flowchart LR
 
     subgraph K8S["k3s cluster · market-data namespace · Tailscale-only perimeter"]
         direction TB
-        JOBS[("35 CronJobs + 2 Deployments<br/>fetchers · scorers · screener · telegram")]
+        JOBS[("36 CronJobs + 2 Deployments<br/>fetchers · scorers · screener · telegram")]
         TSDB[("TimescaleDB 2.30.1-pg16<br/>single instance · TX2 sda4 SSD")]
         GRAF["Grafana 12<br/>pi3 · 6 dashboards · 3 alert rules"]
         TGB[("Telegram<br/>digest CronJob + two-way listener<br/>pinned pi1")]
@@ -382,7 +382,7 @@ All images: `imagePullPolicy: Never` → a missing tarball is immediately visibl
 
 | From → To | TimescaleDB | Grafana | Telegram | LLM gateway | External feed | k8s API |
 |-----------|-------------|---------|----------|-------------|---------------|---------|
-| **Fetchers** (35 CronJobs) | WRITE (DELETE+INSERT own rows) | — | — | — | READ (pull) | schedule only |
+| **Fetchers** (36 CronJobs) | WRITE (DELETE+INSERT own rows) | — | — | — | READ (pull) | schedule only |
 | **ta-compute** | READ prices → WRITE indicators | — | — | — | — | — |
 | **sentiment-scorer** | READ headlines → WRITE sentiment | — | — | — | — | TX2-only |
 | **headline-ner** | READ headlines → WRITE entities/events | — | — | — | — | TX2-only |

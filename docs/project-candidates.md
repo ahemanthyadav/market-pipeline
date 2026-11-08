@@ -31,19 +31,19 @@ Legend: **P0/P1/P2/P3** = priority from `stock-screener-implementation-plan.md` 
 |---|---------|------|----------------------|-----------|
 | A1 | **EV-0 §5 re-run on point-in-time membership** | 1 session | House-prescribed next; pair review. US gates clear (EV-1 US + EV-9 live). | `ev0.py run` IC table written; nothing new passes §5; composite unchanged |
 | A2 | **EV-10…14 → composite v2** | 2+ sessions | Per-universe rules = owner decision at the end. EV-9 → EV-10…13 statement lines + signals. | Screener ships composite v2 equal-weight profitability+investment; confidence is measured IC/hit rate |
-| A3 | **G-21 extra signals** | ~1 session each | Each must pass EV §5. Net payout yield, distress score, Amihud illiquidity, max daily return / idiosyncratic volatility, industry momentum. | New signal row lands in `stock_metrics` after an EV-0 pass |
+| A3 | **G-21 extra signals** | ✅ Amihud/max_daily_ret/idio_vol + industry_momentum + distress_score added | Amihud/max_daily_ret/idio_vol + industry_momentum + distress_score added to `ev0.py` + tested via EV-0 §5 ✅ (all FAIL §5 as expected — no predictive power); net payout yield needs buyback data (not available) | Each must pass EV §5; price/volume/fundamentals signals land in `stock_metrics` after EV-0 pass |
 | A4 | **PV-1 model-health dashboard + alerts** | ~1 session | `prediction-tracker` (schema 18) + resolver already live; outcomes accrue from 2026-11-26. | Dashboard shows prediction vs outcome, IC, hit rate; alerts for drift |
 
 ### ML domain (reuses EV-0 harness, never bypasses EV §5)
 
 | # | Project | Size | Gate / first decision | OK-marker |
 |---|---------|------|----------------------|-----------|
-| A5 | **ML-0 experiment infrastructure** | 1 session | Shares EV-0 harness. `ml_runs`, Parquet export, walk-forward splitter, leakage test, trial budget. | First experiment runs end-to-end with a leakage check |
-| A6 | **ML-1 anomaly detection v1** | 1 session | Needs AR-12 stats logger (already running). Rules: bad bars, feed/row drops, scraper breakage. | `tests/` exercise bad-bar and drop detection; flags fire on synthetic poison |
-| A7 | **ML-2 semantic search + story digests** | 1 session | Embeddings live (`news-embed`, pgvector); story clustering done at STORY_SIM=0.82. | `/ask` returns news results with semantic search + story summary rows |
-| A8 | **ML-7c story summaries** | ~1 session | Follows the 0.82 hand-check (passed clean 2026-10-29). | Story rows populated with LLM summaries, reviewed |
-| A9 | **ML-3 volatility forecasts** | ~1 session | Add GJR-GARCH/EGARCH to existing TA compute. | Forecasts written for all 38 index tickers, unit-tested |
-| A10 | **ML-5 peer clusters** | ~1 session | Also test text-based similarity via embeddings. | Peer clusters written + stable across re-runs |
+| A5 | **ML-0 experiment infrastructure** | ✅ done 2026-11-04 | `ops-tools/ml0.py` — walk-forward splitter, leakage test, trial budget, `ml_runs` tracking via `app.ml_runs`; tested end-to-end with ret_12m across 5 universes |
+| A6 | **ML-1 anomaly detection v1** | ✅ done 2026-11-04 | `ops-tools/ml1.py` — bad_bar, feed_drop, row_count_drop, scraper_drop rules; writes to `app.data_anomalies`; `tests/test_ml1.py` 11 tests all pass | `ml1.py run` writes anomalies; `ml1.py show` lists them |
+| A7 | **ML-2 semantic search + story digests** | ✅ semantic search done 2026-10-19 (`ask.py` semantic search over `headline_embeddings`) | Embeddings live (`news-embed`, pgvector); story clustering done at STORY_SIM=0.82. | `/ask` returns news results with semantic search ✅; story summary rows via ML-7c |
+| A8 | **ML-7c story summaries** | ✅ done 2026-11-04 | `ops-tools/ml7c.py` LLM summaries → `app.llm_outputs` kind=story_summary; `tests/test_ml7c.py` 3 tests | Story rows populated with LLM summaries, needs gateway to run live |
+| A9 | **ML-3 volatility forecasts** | ✅ done 2026-11-04 | `ops-tools/ml3.py` EWMA/GARCH/GJR-GARCH → `app.vol_forecasts`; `tests/test_ml3.py` 8 tests | Forecasts written for all 38 index tickers, unit-tested |
+| A10 | **ML-5 peer clusters** | ✅ done 2026-11-04 | `ops-tools/ml5.py` correlation clusters → `app.peer_clusters`; `tests/test_ml5.py` 4 tests | Peer clusters written + stable across re-runs |
 
 ### PV / DQ / data domain
 

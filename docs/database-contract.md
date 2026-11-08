@@ -18,9 +18,11 @@ private to the pipeline and may change shape; views only ever gain columns.
 | `v_universe` | active constituents, all five indexes | one row per (universe, symbol) |
 | `v_latest_prices` | latest close/adj_close per symbol | 7-day freshness bound inside |
 | `v_latest_scores` | latest screener row per symbol | 14-day bound; rank is within-universe |
-| `v_valuations_recent` | last 4 days of valuation rows | **`methods_above_close` computed here** — the single definition of the alert agreement count |
-| `v_latest_valuations` | latest valuation per symbol | all 10 method columns, panel assumptions columns |
-| `v_sector_latest` | latest sector aggregates + style lens | 7-day bound; medians need ≥ 5 inputs (else NULL) |
+| `v_valuations_recent` | last 4 days of valuation rows | **`methods_above_close` computed here** — all 15 valuation method columns + Practitioner/Academic medians |
+| `v_latest_valuations` | latest valuation per symbol | all 15 method columns (`10 core + 5 extended`), Practitioner/Academic lens medians, panel assumptions columns |
+| `v_valuation_methods` | catalog of all valuation & scientific metrics | `method_key`, `method_name`, `category`, `lens` (`Practitioner` / `Research-Backed`), `sub_school`, `source_ref`, `formula`, `target_table` (key 25) |
+| `v_latest_scientific_metrics` | latest per-symbol scientific accounting diagnostics | 14-day bound; `gpa`, `operating_accruals`, `asset_growth_cma`, `net_share_issuance`, `piotroski_f_score`, `altman_z2`, dual archetypes (key 25) |
+| `v_sector_latest` | latest sector aggregates + style lens | 7-day bound; medians need ≥ 5 inputs (else NULL); includes Practitioner & Academic sector median upsides |
 | `v_upcoming_earnings` | next 30 days of earnings dates | one row per symbol (earliest date) |
 
 Rules for views: columns are APPEND-ONLY; the rule-9 time bound lives inside
@@ -48,7 +50,7 @@ marketview's screener/sectors/markets/multibagger/strategy queries.
 | `grafana_ro` | SELECT everywhere (default privileges) | Grafana, marketview |
 | `telegram_app` | SELECT + writes ONLY on `watchlist`, `bot_users` | Telegram bot |
 | `litellm` | its own gateway state | llm-gateway |
-| `pipeline_rw` *(pending)* | read/write data tables, no DDL/roles | all 35 CronJobs after AR-8 |
+| `pipeline_rw` *(pending)* | read/write data tables, no DDL/roles | all 36 CronJobs after AR-8 |
 
 **AR-8 is the one open gap** and is owner-run by design (the agent permission
 system refuses secret-store writes): the exact `kubectl create secret` +

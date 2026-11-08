@@ -15,7 +15,7 @@
 > (`sector_styles`/`metric_relevance`), and daily sector aggregates + rendered `__sectors__` analysis
 > (`sector_metrics`) — all descriptive, never in the composite without EV-0 (amended 2026-10-26: the owner-approved VALUATION WATCH alert may fire from it — telegram v25). **UI live:** 11 provisioned Grafana dashboards + the `marketview` web explorer (sibling repo, ADR 0027 — dossiers, comparison charts, sector views, rendered reports, watchlist + scorecard pages; `kubectl -n market-data port-forward svc/marketview 8080:8080`). **Accountability layer live 2026-10-27 (ADR 0028):** prediction scorecard (write-once snapshots, 30/91/182d benchmark-relative outcomes), weekly earnings calendar (digest section, dossier badge, valuation-watch 3-day earnings gate), regime traffic light (digest + /regime + home page; descriptive only), weekly DQ-5 accuracy job (`__accuracy__` report; first run ALL CLEAN, 10/10 FRED cross-checks). AI layer live (shared
 > `llm-gateway`, NVIDIA free tier: daily AI market note, every number checked — ADR 0022/0023).
-> 4 nodes Ready (pi2 cordoned control plane), 35 CronJobs (nse-fundamentals suspended until its first backfill completes), the others
+> 4 nodes Ready (pi2 cordoned control plane), 36 CronJobs (nse-fundamentals suspended until its first backfill completes), the others
 > active, DB `Guaranteed` QoS with readiness probe. Images: consolidated toolkit images `local/marketdata-light:v1`,
 > `local/marketdata-data:v1`, `local/marketdata-ml:v1` (TX2 only), telegram `local/telegram-digest:v37`. Least-privilege DB
 > roles for Grafana and the Telegram bot. Daily second copies of the DB dump
@@ -70,8 +70,8 @@
   every verified change; keep "Last verified" dates true.
 - Feed quirks/symbol deaths → ops manual §4 **and** the fetcher script header.
 - New failure modes → ops manual §8 (copy-paste fix commands).
-- Long-shelf-life decisions → `docs/adr/` via the `adr` skill — 24 written
-  (0001–0024, latest: headline embeddings via gateway); see `docs/adr/` for the format.
+- Long-shelf-life decisions → `docs/adr/` via the `adr` skill — 33 written
+  (0001–0033, latest: classification soundness, continuous calibration loop, and deterministic-first routing); see `docs/adr/` for the format.
 - Secrets never enter docs — see AGENTS.md §7 for where they live. Neither do IP
   addresses (AGENTS.md §8): use node names/placeholders; real values are in the
   gitignored `.hosts.env`.

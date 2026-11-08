@@ -105,7 +105,7 @@ for leftovers).
 
 v33 was built, archived and imported on pi1 but never applied; the in-image
 hash check (§3.4) showed its `stocks.py`/`bot.py` predated commit 36e6529 →
-tag burned. v34: bumped 3 manifests + 4 docs, gates green (35 CronJobs
+tag burned. v34: bumped 3 manifests + 4 docs, gates green (36 CronJobs
 consistent, all tests), fresh `tg-build` on TX2, build 8 s warm, all 8 in-image
 hashes = HEAD, tarball #79 archived + SHA256SUMS regenerated, imported on pi1
 only (22 s), pi2 pre-flight 2.48 (< 3, proceeded), applied cronjobs → verified

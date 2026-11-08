@@ -18,7 +18,7 @@
 | # | Criterion | Question | Why it matters here |
 |---|-----------|----------|---------------------|
 | C1 | **Deployment target** | Does it run outside the `market-data` k8s namespace, or outside k8s entirely? | The monorepo's CI, manifests, and `kubectl` workflow all target `market-data`. Anything else needs its own apply path. |
-| C2 | **Lifecycle / cadence** | Does it have a different release schedule, owner, or breakage blast radius than the cluster CronJobs? | A shared gateway or web app can be rebuilt/rolled back without touching 35 CronJobs. |
+| C2 | **Lifecycle / cadence** | Does it have a different release schedule, owner, or breakage blast radius than the cluster CronJobs? | A shared gateway or web app can be rebuilt/rolled back without touching 36 CronJobs. |
 | C3 | **Dependencies** | Does it need base images, language versions, or system packages that don't fit the 3 consolidated images (`marketdata-light`, `marketdata-data`, `marketdata-ml`)? | AR-5 consolidated all fetchers onto 3 images to avoid rebuilding 20 images per change. A divergent stack breaks that economy. |
 | C4 | **Independent release** | Would it ever be versioned, tagged, or consumed by something outside this cluster? | If the answer is no, a separate repo adds coordination cost with zero benefit. |
 
@@ -30,7 +30,7 @@
 
 Everything that runs in the `market-data` k8s namespace and shares the 3 base images, CI, and pre-commit guard.
 
-### All CronJobs (35 live)
+### All CronJobs (36 live)
 
 | Component | Manifest | Image | Why it stays |
 |-----------|----------|-------|--------------|
@@ -63,7 +63,7 @@ Everything that runs in the `market-data` k8s namespace and shares the 3 base im
 | Component | Path | Why it stays |
 |-----------|------|--------------|
 | `mdjob` shared helper | `manifests/_common/mdjob.py` | AR-2/AR-3; copied into every fetcher build context; one change ripples to all jobs |
-| Build images | `manifests/images/{data,light,ml}/` | AR-5 consolidation — 3 base images for all 35 CronJobs |
+| Build images | `manifests/images/{data,light,ml}/` | AR-5 consolidation — 3 base images for all 36 CronJobs |
 | Cluster ops tools | `ops-tools/{runcmd,putfile,getfile,_creds,ev0,...}.py` | SSH/auth/image-distribution layer for the whole cluster |
 | Tests | `tests/test_*.py` + `run-all.sh` | One suite, one CI entrypoint; `workloads.py --check` verifies docs/manifest drift |
 | Schema | `manifests/timescaledb/schema-configmap.yaml` | Single source of truth for all tables; applied via `schema-job.yaml` |
@@ -147,7 +147,7 @@ Until that's worth the coordination cost, it stays in `ops-tools/`.
 
 | Scope | Repo | Governing principle |
 |-------|------|---------------------|
-| All cluster workloads (35 CronJobs + 2 Deployments + schema + ops-tools + tests + docs) | `marketdata` (monorepo) | One CI, one pre-commit guard, 3 base images, atomic cross-cutting changes |
+| All cluster workloads (36 CronJobs + 2 Deployments + schema + ops-tools + tests + docs) | `marketdata` (monorepo) | One CI, one pre-commit guard, 3 base images, atomic cross-cutting changes |
 | Shared LLM infrastructure | `llm-gateway` (separate) | Own namespace, own key, own release cycle, consumed over tailnet |
 | Web app | `marketview` (separate) | Own Deployment, own image tag, own lifecycle, served via tailscale |
 

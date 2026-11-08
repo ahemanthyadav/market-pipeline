@@ -2,7 +2,7 @@
 
 > **Status:** live in production on the home k3s cluster. Updated 2026-10-18 (screener v12, health v5, roles,
 > chunk merge, data foundations — plan: `engineering-plan-2026-10-18.md`). Reconciled with `manifests/` 2026-10-10
-> (35 CronJobs since 2026-10-26; `ops-tools/workloads.py --check` keeps the tables honest). **Live state re-verified
+> (36 CronJobs since 2026-10-26; `ops-tools/workloads.py --check` keeps the tables honest). **Live state re-verified
 > 2026-10-17: all 4 k8s nodes Ready (pi2 control-plane cordoned), every CronJob then deployed (23) active, TimescaleDB,
 > Grafana, and Telegram bot all Running.** (see ops manual §8 and pending-tasks for known gaps).
 > Doc map: this file = **architecture** (what the system is);
@@ -83,7 +83,7 @@ flowchart LR
     end
 
     subgraph K8S["k3s cluster · namespace market-data · Tailscale-only perimeter"]
-        JOBS["35 CronJobs + 2 Deployments<br/>(fetchers · scorers · screener chain · telegram)"]
+        JOBS["36 CronJobs + 2 Deployments<br/>(fetchers · scorers · screener chain · telegram)"]
         TSDB[("TimescaleDB 2.30.1-pg16<br/>single instance · TX2 sda4 SSD")]
         GRAF["Grafana 12 (pi3)<br/>6 dashboards · 3 alert rules"]
         TGB["Telegram digest CronJob +<br/>two-way listener Deployment (pi1)"]
@@ -260,7 +260,7 @@ whole DB via `pg_dump`.*
 |---|---|---|
 | Orchestration | k3s (server v1.36.4+k3s1; TX2 agent pinned v1.35.3+k3s1) | Whole cluster |
 | DNS | Pi-hole v6.4.3 + unbound | pi0 |
-| Scheduling | k3s CronJobs (35 live); no workflow engine by design (pi2 RAM) | Pi workers / TX2 |
+| Scheduling | k3s CronJobs (36 live); no workflow engine by design (pi2 RAM) | Pi workers / TX2 |
 | Storage | TimescaleDB 2.30.1-pg16 (Postgres 16.15) | TX2, sda4 SSD |
 | Ingestion | Python 3.12-slim images: `yfinance`, `pandas`, `psycopg[binary]`, `feedparser`, `fredapi` | Pi workers |
 | Sentiment/NLP | FinBERT on CPU (TX2 inference needs no GPU at this volume) | TX2 only |
@@ -331,7 +331,7 @@ whole DB via `pg_dump`.*
 | `intraday_prices` | ticker, ts, o/h/l/c, volume | hypertable (hourly candles: gold/silver/oil/DXY) |
 | `ticker_names` | ticker (PK), name | reference table (46 names — dashboard labels + queries) |
 | `pipeline_heartbeat` | feed (PK), last_check, last_data_ts, fresh, rows_total, max_age_hours | health table (written by `pipeline-health` CronJob 01:45; **14 feeds** since image v5, 2026-10-18 — rbi added; stock_prices/stock_scores 96 h so weekends do not page) |
-| `universe_constituents` | universe+symbol (PK), name, sector, isin, cik, exchange, currency, active, membership dates | security master (998: 503 SP500 + 495 NIFTY500) |
+| `universe_constituents` | universe+symbol (PK), name, sector, isin, cik, exchange, currency, active, membership dates | security master (2,251: 503 SP500 + 400 SP400 + 603 SP600 + 496 NIFTY500 + 249 NIFTYMICROCAP250) |
 | `stock_prices` | symbol, ts, o/h/l/c, volume | hypertable — max-history daily stock OHLCV |
 | `stock_fundamentals` | symbol+ts+metric+source (PK), value, filing_published_at | long/narrow point-in-time facts (EDGAR ~2006→ / yfinance NSE ~4y) |
 | `stock_metrics_daily` | symbol, ts, metric, value | hypertable — price-derived daily metrics |
@@ -384,7 +384,7 @@ safe to re-run via the `timescaledb-schema` one-shot Job).
 | headline_events | 453 |
 | corporate_actions (10-18) | 60,927 (58,896 dividends + 2,031 splits, full history) |
 | financial_facts (10-18) | 332,680 (305,422 EDGAR / 502 US cos · 27,258 yfinance) |
-| universe_membership_snapshots (10-18) | 998 (first weekly snapshot) |
+| universe_membership_snapshots (10-18) | 2,251 (first weekly snapshot, 5 universes) |
 | price_anomalies (10-18) | 0 so far (detector live since v12) |
 | raw_headlines / news_sentiment (10-18) | 1,545 / 1,545 |
 
@@ -397,8 +397,11 @@ live (2026-09-29). Query used: `min(ts)/max(ts)/count(*)/count(DISTINCT key)` pe
 
 | Data | From | Detail |
 |---|---|---|
-| `stock_prices` — S&P 500 | 1962 | median first bar 1992; 386/503 ≥ 20 years, 17 < 5 years |
-| `stock_prices` — NIFTY 500 | 1991 | median first bar 2007; 207/494 ≥ 20 years, 97 < 5 years (recent listings) |
+| `stock_prices` — SP500 | 1962 | 503 symbols; median first bar 1992; 395/503 ≥ 20 yrs, 12 < 5 yrs |
+| `stock_prices` — SP400 | 1962 | 400 symbols; median first bar 1992; 259/400 ≥ 20 yrs, 14 < 5 yrs |
+| `stock_prices` — SP600 | 1962 | 603 symbols; median first bar 1992; 339/603 ≥ 20 yrs, 32 < 5 yrs |
+| `stock_prices` — NIFTY500 | 1991 | 496 symbols; median first bar 2007; 228/496 ≥ 20 yrs, 95 < 5 yrs |
+| `stock_prices` — NIFTYMICROCAP250 | 1996 | 249 symbols; median first bar 2007; 73/249 ≥ 20 yrs, 87 < 5 yrs |
 | `index_prices` (38 tickers) | 1985 | ^GSPC ^IXIC ^FTSE ^N225 ^GSPTSE DXY 1985 · ^HSI 1986 · ^GDAXI ^RUT ^STI 1987 · ^FCHI ^SSMI ^VIX 1990 · ^MXX 1991 · ^AEX ^AXJO ^DJI ^RUI 1992 · ^BVSP ^IBEX 1993 · ^KS11 1996 · ^BSESN SSE SZSE FTSEMIB ^TWII 1997 · GC/SI/CL futures 2000 · NIFTY Smallcap 250 + ^CRSLDX 2005 · ^NSEI ^NSEBANK ^CNXIT ^STOXX50E 2007 · ^INDIAVIX 2008 · ^CNXPHARMA 2011 · **NIFTY Midcap 150 2019** (Yahoo's limit) |
 | `corporate_actions` | 1962 | 58,896 dividends + 2,031 splits, 913 symbols (full Yahoo history) |
 | `stock_prices.adj_close` | as `stock_prices` | every row (0 NULL) |
@@ -421,8 +424,7 @@ live (2026-09-29). Query used: `min(ts)/max(ts)/count(*)/count(DISTINCT key)` pe
 | `universe_membership_snapshots` | 2026-10-18 | no — the past needs EV-1 (historical index changes) |
 | `commodity_prices` | empty by design | futures live in `index_prices` |
 
-Consequence for research: EV-0 can test price signals over 25 years (both universes) and US fundamentals from 2006;
-India fundamentals history comes from NSE filings (G-6) once the backfill completes; EV-0 can then test fundamentals in both universes. Backfill plan: pending-tasks
+Consequence for research: EV-0 can test price signals over 25 years (5 universes: SP500, SP400, SP600, NIFTY500, NIFTYMICROCAP250) and US fundamentals from 2006; India fundamentals history comes from NSE filings (G-6) once the backfill completes; EV-0 can then test fundamentals in both universes. Backfill plan: pending-tasks
 "History backfills".
 
 ### 4.4 Backup & durability
@@ -619,6 +621,7 @@ layer (JOINs on ticker/symbol), not in DDL.*
 | membership-history | 30 11 2 * * | local/marketdata-data:v1 | index_membership (EV-1, ADR 0025: point-in-time S&P 500 intervals from Wikipedia; full idempotent rebuild) |
 | stock-valuation | 10 2 * * * | local/marketdata-data:v1 | stock_valuations + sector_metrics (ADR 0026: 10-method intrinsic panel per symbol + daily sector aggregates; descriptive only) |
 | prediction-tracker | 40 2 * * * | local/marketdata-data:v1 | prediction_snapshots + prediction_outcomes (schema 18: write-once daily claims, resolved at 30/91/182d vs adjusted returns, benchmark-relative) |
+| ml7b-per-symbol | 45 2 * * 6 | local/marketdata-light:v1 | ML-7b per-symbol narration for shortlist (~40 names), content-hash cached; writes llm_narratives kind=per_symbol |
 | earnings-calendar | 0 12 * * 0 | local/marketdata-data:v1 | earnings_calendar (schema 19: weekly yfinance refresh of upcoming earnings dates, all active constituents) |
 | accuracy-check | 30 12 * * 0 | local/marketdata-data:v1 | stock_reports `__accuracy__` (DQ-5: valuation internals recomputed in SQL, sector medians, membership drift, Stooq second-source price sample) |
 | research-watcher | 0 13 * * 1 | local/marketdata-light:v1 | research_items (ADR 0031: weekly paper collector — JF/JFE peer-reviewed feeds + NBER + arXiv; venue-tier + keyword scoring; append-only, never edits the curated Strategy Lab tiers) |

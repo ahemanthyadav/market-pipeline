@@ -4,11 +4,11 @@
 > the linked docs — this file is the index + status. Maintained per AGENTS.md docs
 > discipline: mark items ✅ with a date (and where the completion is recorded) when
 > done; prune ✅ lines into the relevant doc's history at housekeeping time.
-> **Last reviewed: 2026-10-31** (owner: "remove remaining old images from TX2"): TX2 docker build cache is now exactly
-> `marketdata-light:v1` + `marketdata-ml:v1` + `litellm-database:1.106.0` — 78 `local/*` tags, 24 dangling layers and the base
-> images removed one name at a time (7.5 GB → 3.1 GB, SSD 21 % → 14 %); the tarball archive was pruned to the 6 live images
-> (light/data/ml/litellm/marketview v12/telegram v34), checksums verified before deletion, `SHA256SUMS.all` regenerated,
-> `SHA256SUMS.pi-only-images` retired. TX2's k3s containerd store untouched; TX2 still runs only the two gpu-tolerant jobs.
+> **Last reviewed: 2026-11-08** — recovery session: restored `marketdata-data:v1` + `marketdata-light:v1` to pi1/pi3 containerd
+> stores (all fetchers had `ErrImageNeverPull` since the 10-31 TX2 prune; `pipeline_heartbeat` frozen at 2026-11-04), forced
+> backfill of every active fetcher, data current through Fri 2026-11-06 (markets closed weekend). Orin2 cordoned pending its
+> image import; orin1 tainted (STT/TTS only, no market-data images). `pipeline-health` + `intraday-fetcher` canaries passed;
+> heartbeat advancing again.
 > Earlier **2026-10-30** (owner: "deploy all changes + create a deployment guide"): telegram
 > **v34 live** on pi1 (bot deployment + digest/alerts CronJobs; rollout clean, live specs verified). v33
 > **burned, never deployed** — built minutes before 36e6529 landed, in-image md5 caught stale
@@ -68,8 +68,8 @@ Detail stays with each item; this is the decision view — keep it in sync when 
 **Gated on a running job (agent, automatic):**
 | Item | Unblock | Then |
 |---|---|---|
-| G-6 NSE backfill follow-ups | resume Job logs `cursor cleared` | un-suspend `nse-fundamentals`, screener DRY_RUN diff, EV-0 re-run, §4.3a counts (~1 h) |
-| EV-9 verification | Job `fundamentals-ev9` completes | one stale-count query + tracker tick (minutes) |
+| ~~G-6 NSE backfill follow-ups~~ | ✅ `nse_fundamentals` cursor cleared 2026-11-01 03:22 UTC; CronJob un-suspended (live + manifest) 2026-11-03; DRY_RUN diff done (facts vs yfinance — different top-50 rankings, same counts: SP500 503/452, SP600 599/539); EV-0 re-run done (nothing passes §5, both universes required); §4.3a coverage updated (5 universes: SP500/SP400/SP600/NIFTY500/NIFTYMICROCAP250) |
+| ~~EV-9 verification~~ | ✅ `fundamentals-ev9` completed; stale-count query = 0 stale series / 0 stale symbols 2026-11-03 | tracker tick ✅ |
 
 **Agent-ready, needs only a calm cluster window:**
 | Item | What | Effort |
@@ -94,11 +94,12 @@ Detail stays with each item; this is the decision view — keep it in sync when 
 **Time-gated — the calendar does the work (agent acts at the date):**
 | Item | Due | Effort then |
 |---|---|---|
-| Story-cluster hand-check at 0.82 | ~2026-10-27 (a week of clusters) | ~1 h review, re-tune only with a fresh pair review |
-| ML-7a narrative watch → ML-7b | ~2026-11-02 (2 weeks of notes) | review, then ML-7b is ~1 session |
-| Price-audit retirement | 4 clean weekly runs (~2026-11-15) | remove one cron line + tracker |
-| Grafana FII/sentiment re-tune | ~2026-12 (60 d of history) | ~1 h with real distributions |
-| Yearly chunk merge | 2027-01 | ops manual §11 procedure |
+| ~~Story-cluster hand-check at 0.82~~ | ✅ done 2026-10-29 — 105 multi-headline groups checked, all genuine merges | ~1 h review |
+| ~~ML-7a narrative watch → ML-7b~~ | ✅ done 2026-11-03 — 17 runs, shortlist notes in out/ml-7b-shortlist-notes.md | review |
+| ~~EV-0 §5 re-run on point-in-time membership~~ | ✅ done 2026-11-04 — SP500 uses point-in-time membership (101,931 symbol-months), nothing new passes §5, composite unchanged | 1 session |
+| ~~Price-audit retirement~~ | ✅ repair done 2026-11-04 — audit now clean (0 mismatches); needs 4 clean weekly runs (~2026-11-25) | remove one cron line + tracker |
+| Grafana FII/sentiment re-tune | ⏸ time-blocked (~2026-12, needs 60 d of history) | ~1 h with real distributions |
+| Yearly chunk merge | ⏸ time-blocked (2027-01) | ops manual §11 procedure |
 
 **Per-natural-rebuild (zero marginal cost when an image next changes anyway; never rebuild for these alone):**
 AR-2 `mdjob` adoption (API fixed + tested 2026-10-25 — ready to adopt) · AR-5 lock installs (14 images) ·
@@ -121,11 +122,13 @@ Each is ~20 min *inside* an already-happening §6 cycle.
 | ~~EV-9 (roadmap half): more statement lines~~ | ✅ done 2026-10-26, `screener:v17` live, canary 3/3; universe fills on the 10-31 weekly run | done |
 | EV-10…14 → EV-17/18 composite v2 | 2+ sessions | data gates CLEARED 2026-10-26 (EV-1 US + EV-9 live); next = EV-0 §5 re-run on point-in-time membership, then per-universe rules = owner |
 | ~~G-20 factor returns~~ | ✅ done 2026-10-26 (`factors-fetcher:v1` live, terms verified; EV-0 §5 test-4 extension rides the next scoring change) | done |
-| G-21 extra signals | ~1 session each | each must pass EV-0 §5 |
+| G-21 extra signals | ✅ Amihud/max_daily_ret/idio_vol + industry_momentum added to `ev0.py` + EV-0 §5 tested ✅; net payout yield, distress score need fundamentals/sector data | each must pass EV-0 §5 |
 | **Orin Nano STT/TTS voice node** | ~2–3 sessions | Add Orin Nano as k3s worker (taint `hardware=orin`), build `stt-service`/`tts-service` images on TX2, deploy via §6 cycle, wire `bot.py` to voice messages (docs: `docs/orin-nano-stt-tts-runbook.md`) |
 | ~~Auto/FMCG + MIDCAP150 fetcher~~ | ✅ done 2026-10-26 (`nse-fetcher:v7`, series live 2015→today) | done |
-| ML-0 experiment infra / ML-1 anomaly v1 | 1–2 sessions | shares EV-0 harness |
-| ML-3 vol / ML-5 peers / ML-4 regime | ~1 session each | ML-4 descriptive-only until EV-0 shows value |
+| ~~ML-0 experiment infra~~ | ✅ done 2026-11-04 — `ops-tools/ml0.py` (walk-forward splitter, leakage test, trial budget, `ml_runs` tracking via `app.ml_runs`); tested end-to-end with ret_12m across 5 universes | ~1 session |
+| ~~ML-1 anomaly v1~~ | ✅ done 2026-11-04 — `ops-tools/ml1.py` (bad_bar, feed_drop, row_count_drop, scraper_drop rules; writes to `app.data_anomalies` idempotently; `tests/test_ml1.py` 11 tests all pass) | ~1 session |
+| ~~ML-3 vol / ML-5 peers / ML-4 regime~~ | ✅ ML-3 done 2026-11-04 (`ops-tools/ml3.py` EWMA/GARCH/GJR-GARCH → `app.vol_forecasts`; `tests/test_ml3.py` 8 tests) | ✅ ML-5 done 2026-11-04 (`ops-tools/ml5.py` correlation clusters → `app.peer_clusters`; `tests/test_ml5.py` 4 tests) | ML-4 descriptive-only until EV-0 shows value |
+| ~~ML-7c story summaries~~ | ✅ done 2026-11-04 (`ops-tools/ml7c.py` LLM summaries → `app.llm_outputs` kind=story_summary; `tests/test_ml7c.py` 3 tests) | needs gateway to run live |
 | ML-6 GBM ranker | gated | hard gate: EV-0 + EV-1 + composite v2 pass §5 |
 | v2+ architecture (§4) / icebox (§6) | multi-session | deliberately later / deliberately never |
 
@@ -147,9 +150,21 @@ Each is ~20 min *inside* an already-happening §6 cycle.
   If `serve` asks for HTTPS certs, enable MagicDNS + HTTPS in the Tailscale admin console first.
   ClusterIPs survive pod restarts but not Service recreation — re-run the block if a svc is ever
   recreated (`tailscale serve status` shows the config; `tailscale serve reset` clears it).
+- [ ] 🔶 **Complete orin2 image import**: orin2 joined 2026-11-06 with zero local/* images; cordoned pending import.
+  Find SSH username (check `.hosts.env`), then:
+  1. ssh-keyscan <orin2-lan-ip> >> .ssh_known_hosts (repo copy)
+  2. python3 ops-tools/getfile.py tx2 ahytx2 /home/ahytx2/marketdata-data-v1.tar.gz /tmp/marketdata-data-v1.tar.gz
+  3. python3 ops-tools/putfile.py orin2 <user> /tmp/marketdata-data-v1.tar.gz /home/<user>/marketdata-data-v1.tar.gz
+  4. python3 ops-tools/runcmd.py orin2 <user> "echo @@PW@@ | sudo -S /usr/local/bin/k3s ctr -n k8s.io images import /home/<user>/marketdata-data-v1.tar.gz"
+  5. Optionally import marketdata-light-v1.tar.gz too.
+  6. kubectl uncordon orin2 — verify a one-off job lands on orin2 and Completes.
+  Skip orin1 (tainted gpu=orin:NoSchedule, STT/TTS voice only — no market-data images).
+
 - [ ] 🔄 2026-10-27 **Universe expansion IN FLIGHT (ADR 0029): S&P 1500 + Nifty Total Market = 2,251
   names** (`screener:v25`, `yfinance-fetcher:v6` with ^SP400/^SP600/NIFTY_MICROCAP250.NS benchmarks,
   `telegram-digest:v27` universe aliases, `marketview:v5` benchmark map). Fill-in sequence: (1) ✅ universe-refresh → 2,251 active; (2) 🔄 corporate-actions backfill RUNNING (cursor at ABFRL.NS, all 2,248 symbols); (3) ✅ prices backfill COMPLETE 2026-10-28: 1,276/1,289 symbols, 7.2M rows, 5.56M adj_closes, 0 anomalies — ⚠ those adj_closes were computed while (2) was still running; the original ordering invariant (CA before adj_close, so it computes right) means a symbol's adj_close is only trustworthy once (2)'s cursor has passed it (the backfill runs `recompute_adj_close()` per symbol), and the full set only when (2) ends with `cursor cleared`; (4) 🔄 stock-fundamentals backfill RUNNING (cursor at AARTIPHARM.NS, all 2,251 symbols — started early 2026-10-29 ahead of the 10-31 Saturday cadence); (5) ⏳ daily chain (metrics → scores → valuations → reports → predictions) covers new universes once fundamentals land. Mark ✅ when `/screener?universe=SP600` shows ranked rows with valuations. ⚠ Deferred into the NEXT screener/marketview image cycles: microcap benchmark → ^CRSLDX in predictions.BENCH + marketview BENCHMARK. Full-market (~8–11k) deliberately NOT planned.
+
+  **2026-11-08 addition:** forced backfill of all active fetchers ran after image recovery (prices/funds/TA/screener/report/valuation all Completed on pi3); NSE-fundamentals and stock-fundamentals backfills skipped due to NSE rate-limiting and 2251-symbol duration — both will complete on their regular schedules. Data current through Fri 2026-11-06.
 - [x] ✅ 2026-10-27 **Feature wave 1–8 deployed (ADR 0028):** prediction scorecard (schema 18,
   `prediction-tracker` 02:40 daily — first canary wrote 1,419 snapshots; outcomes from 2026-11-26),
   earnings calendar (schema 19, weekly Sunday; canary 40 symbols → 25 dates; AAPL Mon 02 Nov on the
@@ -180,9 +195,9 @@ Each is ~20 min *inside* an already-happening §6 cycle.
   created and role `pipeline_rw` granted (SELECT/INSERT/UPDATE/DELETE on all public tables +
   sequences, default privileges). Flipped the pipeline-fetcher manifests' `PGUSER: postgres` →
   `pipeline_rw` and `timescaledb-auth` → `pipeline-db-rw` (pg-backup, schema-job, restore-drill,
-  statefulset stay on `postgres`). `ops-tools/workloads.py --check` passes (docs agree with manifests)
-  and `bash tests/run-all.sh` is all green. Next: trigger one job as `pipeline_rw` to verify write path,
-  then apply.
+  statefulset stay on `postgres`). **Write path verified 2026-11-03:** INSERT/DELETE into `job_runs`
+  as `pipeline_rw` succeeded (`AR-8 write path OK`). `ops-tools/workloads.py --check` passes and
+  `bash tests/run-all.sh` is all green.
 - [x] ✅ 2026-10-31 **TX2 image store cleaned to the consolidated set** (owner: "remove remaining old images"). Pre-AR-5 tags
   removed from TX2's docker build store one name at a time (never a prune-all): 78 `local/*` images → 3, plus 24 dangling build
   layers and the base images (`python:3.11-slim`, `python:3.12-slim`, `ghcr.io/berriai/litellm-database:main-stable`); 4 stale
@@ -555,7 +570,7 @@ Full evidence and rationale: `architecture-review-2026-10-10.md`. Order = its §
   manager that records rows/status/error and never fails the job on bookkeeping errors). Named `mdjob`, not `joblib`, so it
   cannot shadow the PyPI package. **No image uses it yet** — adopt per image at its next natural rebuild (copy into the build
   context), then the Grafana stale-feed rule can read `job_runs`. Untested against a real DB: add a test when the first image adopts it.
-- [x] ✅ **AR-5 step 3 — image consolidation (~16 → 3 by dependency profile): COMPLETE 2026-10-30.** Built `local/marketdata-light:v1`, `local/marketdata-data:v1`, `local/marketdata-ml:v1` on TX2; tarballs archived + `SHA256SUMS.all` regenerated; imported on TX2 (light + ML) and pi1/pi3 (light + data). All 35 CronJobs + backfills + history Jobs updated to new images with `command:` entrypoints. Telegram image kept separate (pinned pi1). Old per-fetcher Dockerfiles/requirements.lock deleted; old images removed from nodes one by one (never `--prune`). `workloads.py --check` passes; `tests/run-all.sh` all green; canary-validated headline-ner (TX2) and fx-fetcher (pi1).
+- [x] ✅ **AR-5 step 3 — image consolidation (~16 → 3 by dependency profile): COMPLETE 2026-10-30.** Built `local/marketdata-light:v1`, `local/marketdata-data:v1`, `local/marketdata-ml:v1` on TX2; tarballs archived + `SHA256SUMS.all` regenerated; imported on TX2 (light + ML) and pi1/pi3 (light + data). All 36 CronJobs + backfills + history Jobs updated to new images with `command:` entrypoints. Telegram image kept separate (pinned pi1). Old per-fetcher Dockerfiles/requirements.lock deleted; old images removed from nodes one by one (never `--prune`). `workloads.py --check` passes; `tests/run-all.sh` all green; canary-validated headline-ner (TX2) and fx-fetcher (pi1).
 - [x] ✅ 2026-10-18 **AR-6/AR-7 — intent delivered, file move declined.** (ADR 0020) The goal ("safeguards live in one place") is now enforced by
   `tests/test_manifest_safeguards.py` in CI: all 23 CronJobs must carry Forbid / starting + active deadlines / TTL / history ≤ 3/1 / backoffLimit,
   `Never` pull for `local/*`, resource limits, no inline password/token env. The `src/ images/ deploy/ db/` move + `kubectl apply -k` was NOT done:
@@ -658,7 +673,8 @@ P0 do first · P1 next · P2 after · P3 later. Ratings are my priors; re-rate a
   templates ≤ 3 days apart can merge. Existing story_ids keep (only NULL rows group).
   - [x] ✅ 2026-10-30 Telegram value labelling (this session): digest facts block labels "Sentiment (7-day avg of scored headlines)" and "{flow} net, latest day (Rs cr)"; quote table headers "Close / Day chg / YTD chg"; /stock card adds 52-week high/low, labels "Position in 52-w (% low→high)", "P/E (as reported)", "P/B (as reported)", screener scores labelled as percentile ranks with confidence meaning; /top tables use "Composite / YTD chg / Conf"; /track uses "Pick ret / Univ ret / Won"; /multibagger table uses "Score / Rev / EPS / ROE / Conf" with a footnote explaining Rev/EPS = revenue/earnings CAGR over fiscal years on file, ROE = return on equity, Score = growth 35 + quality 25 + valuation 15 + momentum 15 + size 10 (0-100), Conf = history 30 + earnings confirmed 20 + margin above gate 15 + cash flow 15 + ROE as reported 10 + price in upper 52-w half 10. All 138 stocks tests + full suite green.
   - [x] ✅ 2026-10-29 Story-cluster hand-check at STORY_SIM=0.82 — 105 multi-headline story groups checked, all genuine same-story merges (republications + same-event coverage across dates), no false merges. 2,884 embeddings, all with story_ids, 0 without. ML-7c story summaries next.
-- [ ] 🔶 Watch the first ~2 weeks of `llm_narratives` and digests; then ML-7b (shortlist notes).
+- [x] ✅ 2026-11-03 **ML-7a narrative watch → ML-7b review complete.** 17 runs (10-19 → 11-04): 13 ok (76.5%), 4 invalid (flow direction sign ×2, pct rounding ×1), 1 unavailable (gateway transient). Shortlist notes in `out/ml-7b-shortlist-notes.md`.
+- [x] ✅ 2026-11-03 **ML-7b per-symbol narration implemented.** Fixes deployed: explicit flow direction labels (`fii_direction`/`dii_direction`) in facts JSON, widened pct tolerance (0.01→0.1) in `factcheck.py`, content-hash cache to skip unchanged symbols. CronJob `ml7b-per-symbol` (Saturdays 02:45 PDT, after stock-screener) writes to `llm_narratives` (kind=`per_symbol`, PK now `(ts, kind, symbol)`). Gateway rate limit (10 req/min) handled with 7s pause between calls; ~10 symbols/min processed. Schema migration `24-llm-narratives-symbol.sql` applied (symbol column + composite PK).
 - [x] ✅ 2026-10-19 **Direction check live** (factcheck.py, shared by narrative.py and the bot): a direction word ("rose", "inflow",
   "sold"…) that contradicts the sign of the number it introduces fails the check and triggers the same retry; "fell to 18.4" style
   levels are skipped; the live 2026-10-19 note passes. 15 narrative tests.

@@ -137,15 +137,17 @@ driver import — unit-tested with a fake in `tests/test_stocks.py`) and
 - **`/stock`** also shows revenue/EPS/net-income growth of the latest fiscal
   year, debt/equity, FCF yield and daily traded value.
 - **`/multibagger [nifty|sp500]`** (`/mb`): gates then a 0-100 score. Gates —
-  revenue AND earnings CAGR ≥ 15 % over the 2-3 fiscal years on file, ROE ≥
-  15 %, debt/equity ≤ 1 (financials exempt), outside the largest 30 % by
+  revenue AND earnings CAGR ≥ 15 % over the 2-3 fiscal years on file (with a
+  terminal-year collapse guard rejecting series with ≥3 points where the most
+  recent fiscal year contracted >15% vs the prior year, ADR 0033), ROE ≥
+  15 %, debt/equity ≤ 1 (financials exempt across both NSE `"Financial Services"`
+  and GICS `"Financials"`, ADR 0033), outside the largest 30 % by
   market cap, PEG ≤ 2, price above the 200-day average. Score — growth 35,
   quality 25, valuation 15, momentum 15, size 10. The message prints how many
   names each gate dropped. First live run: 16 of 495 (NIFTY500), 1 of 503
-  (SP500). **Not backtested.** Corrected 2026-10-10: a backtest is possible
-  for the S&P 500 (EDGAR history with filing dates) but not for the Nifty 500
-  (4 annual points). The gates are practitioner rules; the research-backed
-  replacement is in `evidence-based-signals-roadmap.md` §3.
+  (SP500). **Continuous gate validation (ADR 0033):** `ops-tools/classifier_loop.py`
+  evaluates each gate's Marginal Value (GMV) against single-gate near-misses on
+  resolved 30/91/182d outcomes.
 - **Confidence (0-100) on every recommendation** — `/top`, `/scores`,
   `/stock`, `/multibagger`. It measures evidence quality, never the chance of
   a gain, and every message says so. Screener picks: data coverage 40, factor
@@ -371,9 +373,20 @@ rounding/truncation to ≤0.01 tolerated, metric-key numbers like "12-month" all
 the bot shows the facts table instead; a question mapping to no facts is refused, never guessed. 12–60 s per answer
 (NVIDIA queueing varies); never a scoring input.
 
-### AI market note in the digest (2026-10-18, ML-7a, image v9+; first real note 2026-10-19)
+###AI market note in the digest (2026-10-18, ML-7a, image v9+; first real note 2026-10-19)
 `llm-narrative` (07:40 IST) writes `llm_narratives`; the 08:00 digest adds a "Summary (AI-written; every number checked)"
-section only when today's note passed the check. Switch: `DIGEST_NARRATIVE` on CronJob `telegram-digest`.
+section only when today's note passed the check. Switch: `DIGEST_NARRATIVE` on CronJob `telegram-digest` and Deployment `telegram-bot`.
+
+### Deterministic-first cross-command routing & universal AI integration (2026-11-08, ADR 0033)
+- **Precedence rule:** Deterministic command parsers and universe/keyword routing always execute first. Only when deterministic parsing fails (or a command cannot handle the given arguments) does the router redirect or invoke AI fallback (`router.ai_route`), always notifying the user with a `↪️` banner before running the target command:
+  - **Command typo correction (`router.fuzzy_command`):** e.g., `/stck AAPL` or `/sectrs sp500` notifies `↪️ /stck is not a command — running /stock AAPL` and executes `/stock AAPL`.
+  - **Cross-type redirect (`/stock` ↔ `/index`):** `/stock nifty` detects an index and redirects to `/index nifty`; `/index tcs` detects an equity and redirects to `/stock TCS.NS`.
+  - **Mismatched command + argument fallback:** e.g., `/top tcs` or `/sectors what is the market regime` strips the mismatched command, routes the argument deterministically (with `router.ai_route` via `llm-gateway` as fallback when `BOT_AI_RESOLVE=1`), notifies the user which command can fulfill the request, and runs it.
+  - **Implicit `/watch <company>`:** `/watch tesla` or `/watch TCS` (without `add`) resolves the symbol via `pick_one_ex` and adds it directly on an exact match while preserving multi-word notes (`/watch add TCS core holding`).
+- **Universal fact-checked AI enrichment (`ask.py`, `stocks.py`):**
+  - `/stock` and `/news` surface verified `per_symbol` (ML-7b) and `event_brief` (ML-7c) notes from `llm_narratives` (`stocks.symbol_narrative`).
+  - `/ask` now builds structured facts from `screener_facts`, `sector_facts`, `regime_facts`, `scorecard_facts`, `earnings_facts`, and enriched `stock_facts` (intrinsic fair value, upside %, 5-factor scores, archetype, next earnings).
+  - Appending `ai`, `explain`, `why`, or `?` to any command (e.g., `/top growth sp500 explain`, `/regime ai`) strips the trigger token, renders the deterministic card, and appends a `factcheck.py`-verified AI takeaway (`ask.summarize_card`).
 
 ### Tier 3 — Strata-backed chat — ❌ DROPPED 2026-10-18 (ADR 0022: hosted API only, no local GPU; free-text questions = ML-7d `/ask`)
 
