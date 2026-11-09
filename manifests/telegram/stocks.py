@@ -1086,9 +1086,10 @@ def valuation_text(q, arg):
             f"({practitioner_methods}m) · "
             f"Academic median <b>{num(academic_fair_value)}</b> ({academic_methods}m)")
     if discount_rate is not None:
+        gtxt = f"{growth_used * 100:.1f}%" if growth_used is not None else "n/a"
         out.append(
             f"<i>Discount rate {discount_rate * 100:.1f}% · growth used "
-            f"{growth_used * 100:.1f}% (ADR 0026 assumptions)</i>")
+            f"{gtxt} (ADR 0026 assumptions)</i>")
 
     for lens in ("Practitioner", "Research-Backed"):
         lines = []
@@ -1342,7 +1343,8 @@ def stock_card(q, row):
             fv = []
         if fv and fv[0][0] is not None:
             fair, up, nm = fv[0][:3]
-            out += [f"Fair value <b>{num(fair)}</b> ({up:+.0f}% vs close, "
+            out += [f"Fair value <b>{num(fair)}</b> "
+                    f"({f'{up:+.0f}%' if up is not None else 'n/a'} vs close, "
                     f"median of {nm} methods — <i>ADR 0026, not advice</i>)"]
         gv = grouped_valuations(fv[0] if fv else None, f, annual, close, universe)
         if gv["practitioner_groups"] or gv["academic_groups"]:
