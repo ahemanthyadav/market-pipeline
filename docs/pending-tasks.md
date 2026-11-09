@@ -4,14 +4,35 @@
 > the linked docs — this file is the index + status. Maintained per AGENTS.md docs
 > discipline: mark items ✅ with a date (and where the completion is recorded) when
 > done; prune ✅ lines into the relevant doc's history at housekeeping time.
-> **Last reviewed: 2026-10-26** (deploy + backlog pass — owner said "deploy all" then "implement all"):
+> **Last reviewed: 2026-11-08** — recovery session: restored `marketdata-data:v1` + `marketdata-light:v1` to pi1/pi3 containerd
+> stores (all fetchers had `ErrImageNeverPull` since the 10-31 TX2 prune; `pipeline_heartbeat` frozen at 2026-11-04), forced
+> backfill of every active fetcher, data current through Fri 2026-11-06 (markets closed weekend). Built and deployed
+> `marketdata-data:v2` and `telegram-digest:v40` to pi1/pi3. Orin2 cordoned pending image import; orin1 tainted (STT/TTS only).
+> Earlier **2026-10-30** (owner: "deploy all changes + create a deployment guide"): telegram
+> **v34 live** on pi1 (bot deployment + digest/alerts CronJobs; rollout clean, live specs verified). v33
+> **burned, never deployed** — built minutes before 36e6529 landed, in-image md5 caught stale
+> stocks.py/bot.py; the §6 cycle now carries step 3b (verify image contents vs HEAD) and the new
+> `docs/deployment-guide.md` is the start-to-finish wrapper (indexed in README). Tarball archive at 79
+> images, SHA256SUMS regenerated. No digest canary by policy (off-schedule fan-out to members); owner-side
+> `/sp500` is the functional check for the v34 features (index quant values + /sp500).
+> Earlier **2026-10-26** (deploy + backlog pass — owner said "deploy all" then "implement all"):
 > staged hardening applied · telegram v24 live (probe + non-root canary PASSED) · host keys pinned · H-6
 > decided forward-only · AR-8 ⛔ blocked on an owner-run Secret/role creation (§1) · netpol finding: TX2
 > kernel has no ipset → unenforced on the DB's node (header documents it) · **EV-9 done** (`screener:v17`→
 > v18 same day) · **Auto/FMCG + MIDCAP150 done** (`nse-fetcher:v7`; NSE caps 70 records/call — paginated)
 > · **G-20 done** (`factors-fetcher:v1`, first mdjob adopter) · **EV-1 US done**
 > (ADR 0025, schema 14, `membership-history` CronJob — US signal work unblocked; India deferred, PDFs).
-> House-prescribed next: the EV-0 §5 re-run on point-in-time membership (own session, pair review). Earlier **2026-10-25** (full-project review pass, 3-agent + synthesis; fixes implemented same session:
+> House-prescribed next: the EV-0 §5 re-run on point-in-time membership (own session, pair review).
+> **Later same day (owner: "get all gaps covered / all famous calculations / sector info"):** the ADR 0026
+> valuation layer shipped as `screener:v20` — schemas 15/16/17 applied (`schema-valuation-17` Job), daily
+> `stock-valuation` CronJob (the 29th, 02:10): 10-method intrinsic panel (Graham, peer multiple, FCF
+> perpetuity, 2-stage DCF, DDM, EPV, residual income, Lynch PEG) for every active symbol →
+> `stock_valuations` (canary: 998 symbols, 983 with a fair value), sector→style relevance tables (31
+> sectors, 64 weighted metrics with reasons) driving method selection, `sector_metrics` daily aggregates,
+> and stock-report now renders sector lens + fair-value panel + "what matters in this sector" + a
+> `__sectors__` analysis row (canary: 50 reports + 31 sector rows). v19 burned on a column-name bug
+> (stock_prices.symbol), caught by canary. DDM coverage and reported share counts complete with the
+> 10-31 EV-9 weekly pass. ALL of it descriptive — composite untouched (ADR 0026 hard rule). Earlier **2026-10-25** (full-project review pass, 3-agent + synthesis; fixes implemented same session:
 > pre-commit `@@PW@@` pattern-bypass closed (+2 hook test cases) · `tests/run-all.sh` single entrypoint (AGENTS/CI/CLAUDE.md all point at it) ·
 > `mdjob.write_window` now returns the live conn after a retry (+`tests/test_mdjob.py`, 8 tests) · ops-tools: labeled runcmd timeout (rc 5),
 > getfile/putfile error handling + exit codes, optional `.ssh_known_hosts` pinning, `_creds` unquoted-whitespace warning, `ev0 --start`
@@ -46,8 +67,8 @@ Detail stays with each item; this is the decision view — keep it in sync when 
 **Gated on a running job (agent, automatic):**
 | Item | Unblock | Then |
 |---|---|---|
-| G-6 NSE backfill follow-ups | resume Job logs `cursor cleared` | un-suspend `nse-fundamentals`, screener DRY_RUN diff, EV-0 re-run, §4.3a counts (~1 h) |
-| EV-9 verification | Job `fundamentals-ev9` completes | one stale-count query + tracker tick (minutes) |
+| ~~G-6 NSE backfill follow-ups~~ | ✅ `nse_fundamentals` cursor cleared 2026-11-01 03:22 UTC; CronJob un-suspended (live + manifest) 2026-11-03; DRY_RUN diff done (facts vs yfinance — different top-50 rankings, same counts: SP500 503/452, SP600 599/539); EV-0 re-run done (nothing passes §5, both universes required); §4.3a coverage updated (5 universes: SP500/SP400/SP600/NIFTY500/NIFTYMICROCAP250) |
+| ~~EV-9 verification~~ | ✅ `fundamentals-ev9` completed; stale-count query = 0 stale series / 0 stale symbols 2026-11-03 | tracker tick ✅ |
 
 **Agent-ready, needs only a calm cluster window:**
 | Item | What | Effort |
@@ -72,37 +93,110 @@ Detail stays with each item; this is the decision view — keep it in sync when 
 **Time-gated — the calendar does the work (agent acts at the date):**
 | Item | Due | Effort then |
 |---|---|---|
-| Story-cluster hand-check at 0.82 | ~2026-10-27 (a week of clusters) | ~1 h review, re-tune only with a fresh pair review |
-| ML-7a narrative watch → ML-7b | ~2026-11-02 (2 weeks of notes) | review, then ML-7b is ~1 session |
-| Price-audit retirement | 4 clean weekly runs (~2026-11-15) | remove one cron line + tracker |
-| Grafana FII/sentiment re-tune | ~2026-12 (60 d of history) | ~1 h with real distributions |
-| Yearly chunk merge | 2027-01 | ops manual §11 procedure |
+| ~~Story-cluster hand-check at 0.82~~ | ✅ done 2026-10-29 — 105 multi-headline groups checked, all genuine merges | ~1 h review |
+| ~~ML-7a narrative watch → ML-7b~~ | ✅ done 2026-11-03 — 17 runs, shortlist notes in out/ml-7b-shortlist-notes.md | review |
+| ~~EV-0 §5 re-run on point-in-time membership~~ | ✅ done 2026-11-04 — SP500 uses point-in-time membership (101,931 symbol-months), nothing new passes §5, composite unchanged | 1 session |
+| ~~Price-audit retirement~~ | ✅ repair done 2026-11-04 — audit now clean (0 mismatches); needs 4 clean weekly runs (~2026-11-25) | remove one cron line + tracker |
+| Grafana FII/sentiment re-tune | ⏸ time-blocked (~2026-12, needs 60 d of history) | ~1 h with real distributions |
+| Yearly chunk merge | ⏸ time-blocked (2027-01) | ops manual §11 procedure |
 
 **Per-natural-rebuild (zero marginal cost when an image next changes anyway; never rebuild for these alone):**
 AR-2 `mdjob` adoption (API fixed + tested 2026-10-25 — ready to adopt) · AR-5 lock installs (14 images) ·
 F401 import cleanups · per-job heartbeat v2 · telegram `stocks.py` `series()` onto the facts path ·
 news-fetcher `timegm` fix (in repo 2026-10-25; identical behavior in-cluster, so next natural news rebuild) ·
 per-image `securityContext` (runAsNonRoot + drop caps — **telegram canary PASSED with v24 2026-10-26**; roll out to the
-other images per natural rebuild, news next).
+other images per natural rebuild, news next) ·
+~~telegram v25 riders~~ → **v25 SHIPPED 2026-10-26**: valuation-watch buy alert (ADR 0026 amendment,
+owner-approved — entering names, reasoning in the line, ≤5/run; first live lines land with the next
+02:45 alerts run), `/sectors` command, fair-value line on `/stock` (16 new tests, 120 in the file;
+no-send validation green). Still queued for v26: `stocks.py series()` onto the facts path ·
+marketview deep-links from the card (needs the owner's exposure decision first).
 Each is ~20 min *inside* an already-happening §6 cycle.
+**Done in-repo, rides the next telegram-digest §6 cycle:** `/valuation <symbol>` command
+(stocks.py `valuation_text`, bot.py `cmd_valuation`, router/nicknames wiring, 6 new tests in
+tests/test_stocks.py) — shows all 15 intrinsic valuation methods + fair value/upside for a stock.
+**Also done in-repo:** `/calibration` (stocks.py `calibration_text`, reads `v_latest_calibration`,
+factor ICs / archetype returns / MB gate margins / shrunk weights) and `/methods`
+(stocks.py `methods_text`, reads `v_valuation_methods`, 34-row catalog with formulas + sources).
+Both wired into bot.py COMMANDS + MENU, router SAFE_AI_COMMANDS, and nicknames.
 
 **Projects — each needs its own session(s) plus a decision or ADR (order per §16 priorities):**
 | Project | Size | Gate / first decision |
 |---|---|---|
 | **EV-1 historical index membership** | ✅ US done 2026-10-26 (ADR 0025, `index_membership` live, drift 0) — US signal work UNBLOCKED; 🔶 India half deferred (NSE PDFs, own session) | India: ~1 session |
+| ~~**UI / Analysis Explorer**~~ | ✅ BOTH PHASES LIVE 2026-10-26: 4 new Grafana dashboards (24 queries validated as grafana_ro pre-apply; 11 total) + the **marketview** web app in its own repo (ADR 0027, `local/marketview:v4` on pi1, all routes canaried 200, bad input 404s) — port-forward exposure; NodePort/`tailscale serve` = 🤔 owner choice | done |
 | ~~EV-9 (roadmap half): more statement lines~~ | ✅ done 2026-10-26, `screener:v17` live, canary 3/3; universe fills on the 10-31 weekly run | done |
 | EV-10…14 → EV-17/18 composite v2 | 2+ sessions | data gates CLEARED 2026-10-26 (EV-1 US + EV-9 live); next = EV-0 §5 re-run on point-in-time membership, then per-universe rules = owner |
 | ~~G-20 factor returns~~ | ✅ done 2026-10-26 (`factors-fetcher:v1` live, terms verified; EV-0 §5 test-4 extension rides the next scoring change) | done |
-| G-21 extra signals | ~1 session each | each must pass EV-0 §5 |
+| G-21 extra signals | ✅ Amihud/max_daily_ret/idio_vol + industry_momentum added to `ev0.py` + EV-0 §5 tested ✅; net payout yield, distress score need fundamentals/sector data | each must pass EV-0 §5 |
+| **Orin Nano STT/TTS voice node** | ~2–3 sessions | Add Orin Nano as k3s worker (taint `hardware=orin`), build `stt-service`/`tts-service` images on TX2, deploy via §6 cycle, wire `bot.py` to voice messages (docs: `docs/orin-nano-stt-tts-runbook.md`) |
 | ~~Auto/FMCG + MIDCAP150 fetcher~~ | ✅ done 2026-10-26 (`nse-fetcher:v7`, series live 2015→today) | done |
-| ML-0 experiment infra / ML-1 anomaly v1 | 1–2 sessions | shares EV-0 harness |
-| ML-3 vol / ML-5 peers / ML-4 regime | ~1 session each | ML-4 descriptive-only until EV-0 shows value |
+| ~~ML-0 experiment infra~~ | ✅ done 2026-11-04 — `ops-tools/ml0.py` (walk-forward splitter, leakage test, trial budget, `ml_runs` tracking via `app.ml_runs`); tested end-to-end with ret_12m across 5 universes | ~1 session |
+| ~~ML-1 anomaly v1~~ | ✅ done 2026-11-04 — `ops-tools/ml1.py` (bad_bar, feed_drop, row_count_drop, scraper_drop rules; writes to `app.data_anomalies` idempotently; `tests/test_ml1.py` 11 tests all pass) | ~1 session |
+| ~~ML-3 vol / ML-5 peers / ML-4 regime~~ | ✅ ML-3 done 2026-11-04 (`ops-tools/ml3.py` EWMA/GARCH/GJR-GARCH → `app.vol_forecasts`; `tests/test_ml3.py` 8 tests) | ✅ ML-5 done 2026-11-04 (`ops-tools/ml5.py` correlation clusters → `app.peer_clusters`; `tests/test_ml5.py` 4 tests) | ML-4 descriptive-only until EV-0 shows value |
+| ~~ML-7c story summaries~~ | ✅ done 2026-11-04 (`ops-tools/ml7c.py` LLM summaries → `app.llm_outputs` kind=story_summary; `tests/test_ml7c.py` 3 tests) | needs gateway to run live |
 | ML-6 GBM ranker | gated | hard gate: EV-0 + EV-1 + composite v2 pass §5 |
 | v2+ architecture (§4) / icebox (§6) | multi-session | deliberately later / deliberately never |
 
 ---
 
 ## 1. Immediate (next checkpoint: tomorrow's `/health`)
+
+- [ ] 🔶 **Roll out ADR 0033 & Schema 25 (`25-valuation-and-metrics-catalog.sql`) to the cluster (§6 cycle):**
+  Code and hermetic unit tests are committed across `marketdata` and `marketview`:
+  1. **Apply TimescaleDB Schema 25:** `kubectl apply -f manifests/timescaledb/schema-configmap.yaml` and run the schema job (or trigger one `stock-valuation` job, as `valuation.ensure_schema_and_catalog()` idempotently creates `valuation_methods`, `stock_scientific_metrics`, `calibration_metrics`, additive columns on `stock_valuations` and `sector_metrics`, contract views `v_valuation_methods`, `v_latest_scientific_metrics`, `v_latest_calibration`, and grants `SELECT` to `grafana_ro` and `telegram_app`).
+  2. **Update `stock-screener` scripts/image:** Apply the updated `stock-screener` ConfigMap (`valuation.py` 15-method engine + 34-row catalog + `scientific_row()`, `stock_metrics.py` `adj_close` total-return series + `ret_12_1` + `near_high`, `stock_fundamentals.py` `COGS_TAGS` fallback for `gross_profit`, `stock_report.py` dual-lens report) and run a canary `stock-valuation` job.
+  3. ✅ **Build & roll out `local/telegram-digest:v40`:** Build on TX2, archive tarball to `/mnt/tx2-ssd/image-tarballs/telegram-digest-v40.tar.gz`, import on `pi1`, and apply `manifests/telegram/deployment.yaml` + `manifests/telegram/cronjob.yaml`. Fixes `/valuation` `UndefinedColumn` on `ev_ebitda_peer` — degrades gracefully until Schema 25 is applied. Canary `DIGEST-DONE rc=0`.
+  4. **Build & roll out `local/marketview:v13`:** Bump `deploy/deployment.yaml` to `local/marketview:v13`, build on TX2, import on `pi1`, roll out, and canary `/stock/AAPL`, `/multibagger`, and `/strategies`.
+  5. **Run continuous calibration loop (`ops-tools/classifier_loop.py`):** Run `python3 ops-tools/classifier_loop.py run --horizon 91` from the workstation once `prediction_outcomes` has ≥6 resolved cross-sections to populate `__calibration__` in `stock_reports` and structured rows in `calibration_metrics`.
+- [ ] 🔶 **MarketView UI surface extensions for Schema 25 tables (follow-up):**
+  `/stock/{symbol}`, `/multibagger`, `/strategies`, and `/reports/__calibration__` already render the dual-lens models; three optional UI enhancements remain:
+  1. **`/sectors` (`sectors.html` + `SQLS["sectors"]` in `marketview/app/db.py`):** Expose the 4 new `sector_metrics` columns (`median_practitioner_upside_pct`, `median_academic_upside_pct`, `median_gpa`, `median_f_score`) alongside `median_upside_pct`.
+  2. **`/scorecard` (`scorecard.html`):** Render a structured calibration table directly from `v_latest_calibration` (`calibration_metrics`: Factor Rank ICs, Archetype Cohort Excess Returns, Multibagger Gate Marginal Value GMV, and Shrinkage-Proposed Factor Weights) in addition to the `/reports/__calibration__` markdown link.
+  3. **34-Row Method & Metric Reference Drawer (`v_valuation_methods`):** Render the full 34-row `valuation_methods` catalog (15 valuations, 8 scientific diagnostics, 5 factor pillars, 2 composites, 2 archetype taxonomies, 2 multibagger screens with formulas and peer-reviewed sources) on `/strategies` or `/scorecard`.
+- [ ] 🔶 **Open Data & Accounting Enhancements (`DG-20`, `EV-19`, `EV-20`):**
+  1. **Cash & Short-Term Investments (`cash_and_equivalents`, `DG-20`):** Add `CashAndCashEquivalentsAtCarryingValue` / `CashCashEquivalentsAndShortTermInvestments` to `EDGAR_MAP` in `stock_fundamentals.py` and `nse_fundamentals.py` if exact `net_debt = total_debt - cash` is desired for `ev_ebitda_peer`, `damodaran_fcff`, `epv`, and `owner_earnings` (currently uses gross `total_debt` without cash credit by design per ADR 0026 / ADR 0030).
+  2. **Post-Earnings-Announcement Drift (`EV-19` PEAD / SUE):** Compute standardized quarterly EPS surprise (`SUE = (EPS_q - EPS_{q-4}) / sigma`) on the filing date using `earnings_calendar` (Schema 19) + quarterly `financial_facts` (`duration_days BETWEEN 75 AND 105`), and test against `ev0.py` §5 acceptance rules.
+  3. **Point-in-Time Fundamental Panel Backtest (`EV-20`):** Reconstruct historical Value and Quality factor sleeves at each month-end from first-filed `financial_facts` in `ops-tools/ev0.py` to test fundamental sleeves with the same Newey-West / Fama-MacBeth rigor as price signals.
+- [ ] 🔑 **OWNER-RUN: tailnet exposure of marketview + Grafana** (feature wave #3, ADR 0028 §6 — the
+  agent permission system refuses to widen network exposure, by design). pi1 is on the tailnet.
+  From the workstation (resolves the ClusterIPs, then configures serve on pi1 over ssh):
+  ```bash
+  export KUBECONFIG=~/.kube/pi-cluster.yaml
+  MV=$(kubectl -n market-data get svc marketview -o jsonpath='{.spec.clusterIP}')
+  GF=$(kubectl -n market-data get svc grafana    -o jsonpath='{.spec.clusterIP}')
+  ssh pi1@pi1 "sudo tailscale serve --bg --https=443  http://$MV:8080 && \
+               sudo tailscale serve --bg --https=8443 http://$GF:3000"
+  ```
+  Then `https://pi1.<tailnet>.ts.net/` (marketview) and `:8443` (Grafana) from any tailnet device.
+  If `serve` asks for HTTPS certs, enable MagicDNS + HTTPS in the Tailscale admin console first.
+  ClusterIPs survive pod restarts but not Service recreation — re-run the block if a svc is ever
+  recreated (`tailscale serve status` shows the config; `tailscale serve reset` clears it).
+- [ ] 🔶 **Complete orin2 image import**: orin2 joined 2026-11-06 with zero local/* images; cordoned pending import.
+  orin2 joined 2026-11-06 with zero local/* images; cordoned pending import. Find SSH username (check `.hosts.env`), then:
+  1. ssh-keyscan orin2 >> .ssh_known_hosts (repo copy)
+  2. python3 ops-tools/getfile.py tx2 <user> /home/<user>/marketdata-data-v1.tar.gz /tmp/marketdata-data-v1.tar.gz
+  3. python3 ops-tools/putfile.py orin2 <user> /tmp/marketdata-data-v1.tar.gz /home/<user>/marketdata-data-v1.tar.gz
+  4. python3 ops-tools/runcmd.py orin2 <user> "echo @@PW@@ | sudo -S /usr/local/bin/k3s ctr -n k8s.io images import /home/<user>/marketdata-data-v1.tar.gz"
+  5. Optionally import marketdata-light-v1.tar.gz too.
+  6. kubectl uncordon orin2 — verify a one-off job lands on orin2 and Completes.
+  Skip orin1 (tainted gpu=orin:NoSchedule, STT/TTS voice only — no market-data images).
+
+- [ ] 🔄 2026-10-27 **Universe expansion IN FLIGHT (ADR 0029): S&P 1500 + Nifty Total Market = 2,251
+  names** (`screener:v25`, `yfinance-fetcher:v6` with ^SP400/^SP600/NIFTY_MICROCAP250.NS benchmarks,
+  `telegram-digest:v27` universe aliases, `marketview:v5` benchmark map). Fill-in sequence: (1) ✅ universe-refresh → 2,251 active; (2) 🔄 corporate-actions backfill RUNNING (cursor at ABFRL.NS, all 2,248 symbols); (3) ✅ prices backfill COMPLETE 2026-10-28: 1,276/1,289 symbols, 7.2M rows, 5.56M adj_closes, 0 anomalies — ⚠ those adj_closes were computed while (2) was still running; the original ordering invariant (CA before adj_close, so it computes right) means a symbol's adj_close is only trustworthy once (2)'s cursor has passed it (the backfill runs `recompute_adj_close()` per symbol), and the full set only when (2) ends with `cursor cleared`; (4) 🔄 stock-fundamentals backfill RUNNING (cursor at AARTIPHARM.NS, all 2,251 symbols — started early 2026-10-29 ahead of the 10-31 Saturday cadence); (5) ⏳ daily chain (metrics → scores → valuations → reports → predictions) covers new universes once fundamentals land. Mark ✅ when `/screener?universe=SP600` shows ranked rows with valuations. ⚠ Deferred into the NEXT screener/marketview image cycles: microcap benchmark → ^CRSLDX in predictions.BENCH + marketview BENCHMARK. Full-market (~8–11k) deliberately NOT planned.
+
+  **2026-11-08 addition:** forced backfill of all active fetchers ran after image recovery (prices/funds/TA/screener/report/valuation all Completed on pi3); NSE-fundamentals and stock-fundamentals backfills skipped due to NSE rate-limiting and 2251-symbol duration — both will complete on their regular schedules. Data current through Fri 2026-11-06.
+- [x] ✅ 2026-10-27 **Feature wave 1–8 deployed (ADR 0028):** prediction scorecard (schema 18,
+  `prediction-tracker` 02:40 daily — first canary wrote 1,419 snapshots; outcomes from 2026-11-26),
+  earnings calendar (schema 19, weekly Sunday; canary 40 symbols → 25 dates; AAPL Mon 02 Nov on the
+  dossier), DQ-5 `accuracy-check` weekly (first full run **ALL CLEAN**: 983 valuation rows 0 bad
+  medians/upsides, sector medians 0 off with the engine-mirrored filter, membership drift 0, FRED
+  SP500 vs our ^GSPC 10/10 within 0.5%), regime traffic light (digest + /regime + marketview home),
+  telegram v26 (earnings digest section + 3-day earnings gate on the valuation watch; no-send
+  validated), marketview v4 (/watchlist, /scorecard, dossier badges + closest-mcap peers + earnings
+  badge). 32 CronJobs; screener v24 on all 4 nodes. Stooq grew a JS challenge wall → per-stock
+  second source needs a free API key (Finnhub/Tiingo) = 🤔 owner choice; FRED benchmark check live.
 
 - [x] ✅ 2026-10-26 **Staged manifest hardening APPLIED** (owner said "deploy all"; cluster-mutation discipline,
   one change verified at a time): grafana probes live (new pod healthy, `/api/health` ok) → all 26 CronJobs
@@ -119,16 +213,23 @@ Each is ~20 min *inside* an already-happening §6 cycle.
   bot polling (owner + 2 members), heartbeat 21 s fresh; cronjobs on v24; no-send validation job ran
   `digest.build_message()` against the live DB → `DIGEST-BUILD-OK 873 chars`. First scheduled v24
   digest/alerts: 2026-10-27 cycle — glance at `ALERTS-OK`/`DIGEST-DONE` markers.
-- [ ] ⛔ **AR-8 completion: writer role `pipeline_rw` — blocked on a permission gate, needs the OWNER to run
-  two commands.** Owner approved 2026-10-26 ("implement all"), fetcher code verified DML-only (no DDL
-  anywhere), but the agent permission classifier denies secret-store writes, so the Secret + role must be
-  created by hand. Run (never echo the password):
-  1. `PW=$(openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | head -c 32)`
-  2. `kubectl -n market-data create secret generic pipeline-db-rw --from-file=password=<(printf %s "$PW")`
-  3. `printf "CREATE ROLE pipeline_rw LOGIN PASSWORD '%s';\nGRANT USAGE ON SCHEMA public TO pipeline_rw;\nGRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO pipeline_rw;\nGRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO pipeline_rw;\nALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO pipeline_rw;\nALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO pipeline_rw;\n" "$PW" | kubectl -n market-data exec -i timescaledb-0 -- psql -U postgres -d postgres -f -`
-  Then any session can flip the 21 manifest files' `PGUSER: postgres` → `pipeline_rw` +
-  `timescaledb-auth` → `pipeline-db-rw` (pattern precedent: telegram already runs as `telegram_app`),
-  verify with one triggered job, and apply. pg-backup + schema-job stay on `postgres` (pg_dump/DDL).
+- [x] ✅ **AR-8 completion: writer role `pipeline_rw` — DONE 2026-10-30.** Secret `pipeline-db-rw`
+  created and role `pipeline_rw` granted (SELECT/INSERT/UPDATE/DELETE on all public tables +
+  sequences, default privileges). Flipped the pipeline-fetcher manifests' `PGUSER: postgres` →
+  `pipeline_rw` and `timescaledb-auth` → `pipeline-db-rw` (pg-backup, schema-job, restore-drill,
+  statefulset stay on `postgres`). **Write path verified 2026-11-03:** INSERT/DELETE into `job_runs`
+  as `pipeline_rw` succeeded (`AR-8 write path OK`). `ops-tools/workloads.py --check` passes and
+  `bash tests/run-all.sh` is all green.
+- [x] ✅ 2026-10-31 **TX2 image store cleaned to the consolidated set** (owner: "remove remaining old images"). Pre-AR-5 tags
+  removed from TX2's docker build store one name at a time (never a prune-all): 78 `local/*` images → 3, plus 24 dangling build
+  layers and the base images (`python:3.11-slim`, `python:3.12-slim`, `ghcr.io/berriai/litellm-database:main-stable`); 4 stale
+  build containers removed first (they blocked the dangling rmi). 7.5 GB → 3.1 GB. Tarball archive pruned to the 6 live images
+  (`marketdata-light-v1`, `marketdata-data-v1`, `marketdata-ml-v1`, `litellm-database-1.106.0`, `marketview-v12`,
+  `telegram-digest-v34`) — checksums verified `OK` before deleting anything, `SHA256SUMS.all` regenerated and re-verified,
+  `SHA256SUMS.pi-only-images` retired; 7.0 GB → 1.4 GB, SSD 21 % → 14 %. TX2's k3s containerd store untouched (light + ml +
+  litellm + timescaledb + system images); TX2 schedules only `headline-ner` (light) and `sentiment-scorer` (ml) via the
+  `gpu=true` taint, and both completed on schedule after the change. Note for the next §6 cycle: `marketdata-data:v1` and the
+  litellm base must be re-pulled/rebuilt on TX2 — the tarballs are the recovery path. Detail: ops manual §6.
 - [x] ✅ 2026-10-26 **SSH host keys pinned:** all 5 nodes ssh-keyscanned into gitignored `.ssh_known_hosts`
   (15 keys, 5 hosts); `_creds.host_key_policy` now RejectPolicy; runcmd verified against every node after.
 
@@ -491,9 +592,7 @@ Full evidence and rationale: `architecture-review-2026-10-10.md`. Order = its §
   manager that records rows/status/error and never fails the job on bookkeeping errors). Named `mdjob`, not `joblib`, so it
   cannot shadow the PyPI package. **No image uses it yet** — adopt per image at its next natural rebuild (copy into the build
   context), then the Grafana stale-feed rule can read `job_runs`. Untested against a real DB: add a test when the first image adopts it.
-- [ ] 🔶 **AR-5 (Phase 1→2)** ✅ step 1 done 2026-10-12: a `requirements.lock` for every Python image (16/16, verified 2026-10-17).
-  Step 2: the screener (v10/v11) and `pipeline-health` (v5, 2026-10-18 — freeze == lock) Dockerfiles install from their locks; the other 14 still use inline `pip install` —
-  switch each at its next natural rebuild. Step 3: consolidate ~16 images to ~3 by dependency profile (ADR candidate; touches ADR 0004) — not started.
+- [x] ✅ **AR-5 step 3 — image consolidation (~16 → 3 by dependency profile): COMPLETE 2026-10-30.** Built `local/marketdata-light:v1`, `local/marketdata-data:v1`, `local/marketdata-ml:v1` on TX2; tarballs archived + `SHA256SUMS.all` regenerated; imported on TX2 (light + ML) and pi1/pi3 (light + data). All 36 CronJobs + backfills + history Jobs updated to new images with `command:` entrypoints. Telegram image kept separate (pinned pi1). Old per-fetcher Dockerfiles/requirements.lock deleted; old images removed from nodes one by one (never `--prune`). `workloads.py --check` passes; `tests/run-all.sh` all green; canary-validated headline-ner (TX2) and fx-fetcher (pi1).
 - [x] ✅ 2026-10-18 **AR-6/AR-7 — intent delivered, file move declined.** (ADR 0020) The goal ("safeguards live in one place") is now enforced by
   `tests/test_manifest_safeguards.py` in CI: all 23 CronJobs must carry Forbid / starting + active deadlines / TTL / history ≤ 3/1 / backoffLimit,
   `Never` pull for `local/*`, resource limits, no inline password/token env. The `src/ images/ deploy/ db/` move + `kubectl apply -k` was NOT done:
@@ -594,8 +693,10 @@ P0 do first · P1 next · P2 after · P3 later. Ratings are my priors; re-rate a
   the evidence). Measured NN-distance distribution over 1,651 vectors + manual pair review: 0.86 caught only the near-duplicate spike
   (49 merges); the 0.10–0.16 distance band is same-story rewrites; 0.20+ unreviewed, so not 0.75. Accepted cost: date-bearing daily
   templates ≤ 3 days apart can merge. Existing story_ids keep (only NULL rows group).
-  - [ ] 🔶 After ~a week at 0.82: hand-check clusters against the ML-2 acceptance rule, then ML-7c story summaries.
-- [ ] 🔶 Watch the first ~2 weeks of `llm_narratives` and digests; then ML-7b (shortlist notes).
+  - [x] ✅ 2026-10-30 Telegram value labelling (this session): digest facts block labels "Sentiment (7-day avg of scored headlines)" and "{flow} net, latest day (Rs cr)"; quote table headers "Close / Day chg / YTD chg"; /stock card adds 52-week high/low, labels "Position in 52-w (% low→high)", "P/E (as reported)", "P/B (as reported)", screener scores labelled as percentile ranks with confidence meaning; /top tables use "Composite / YTD chg / Conf"; /track uses "Pick ret / Univ ret / Won"; /multibagger table uses "Score / Rev / EPS / ROE / Conf" with a footnote explaining Rev/EPS = revenue/earnings CAGR over fiscal years on file, ROE = return on equity, Score = growth 35 + quality 25 + valuation 15 + momentum 15 + size 10 (0-100), Conf = history 30 + earnings confirmed 20 + margin above gate 15 + cash flow 15 + ROE as reported 10 + price in upper 52-w half 10. All 138 stocks tests + full suite green.
+  - [x] ✅ 2026-10-29 Story-cluster hand-check at STORY_SIM=0.82 — 105 multi-headline story groups checked, all genuine same-story merges (republications + same-event coverage across dates), no false merges. 2,884 embeddings, all with story_ids, 0 without. ML-7c story summaries next.
+- [x] ✅ 2026-11-03 **ML-7a narrative watch → ML-7b review complete.** 17 runs (10-19 → 11-04): 13 ok (76.5%), 4 invalid (flow direction sign ×2, pct rounding ×1), 1 unavailable (gateway transient). Shortlist notes in `out/ml-7b-shortlist-notes.md`.
+- [x] ✅ 2026-11-03 **ML-7b per-symbol narration implemented.** Fixes deployed: explicit flow direction labels (`fii_direction`/`dii_direction`) in facts JSON, widened pct tolerance (0.01→0.1) in `factcheck.py`, content-hash cache to skip unchanged symbols. CronJob `ml7b-per-symbol` (Saturdays 02:45 PDT, after stock-screener) writes to `llm_narratives` (kind=`per_symbol`, PK now `(ts, kind, symbol)`). Gateway rate limit (10 req/min) handled with 7s pause between calls; ~10 symbols/min processed. Schema migration `24-llm-narratives-symbol.sql` applied (symbol column + composite PK).
 - [x] ✅ 2026-10-19 **Direction check live** (factcheck.py, shared by narrative.py and the bot): a direction word ("rose", "inflow",
   "sold"…) that contradicts the sign of the number it introduces fails the check and triggers the same retry; "fell to 18.4" style
   levels are skipped; the live 2026-10-19 note passes. 15 narrative tests.
@@ -652,6 +753,23 @@ P0 do first · P1 next · P2 after · P3 later. Ratings are my priors; re-rate a
   (needs EV-1), India fundamentals beyond ~4 years (G-6).
 
 ### Data correctness — prerequisite for EV-0 and every ML backtest (found 2026-10-10)
+
+- [ ] 🆕 2026-10-26 **P2 · DQ-5 recurring accuracy cross-checks** — proposed after the on-screen-values review
+  (which found+fixed F33 chart.js and F34 news-matching, finds §1.1b; the values themselves verified clean:
+  Graham/peer/fair-value/upside recomputed exact from inputs for AAPL/ALL/HDFCBANK, closes & yfinance ratios
+  consistent with public quotes within date tolerance, S&P membership dates AAPL 1982-11-30 / MSFT 1994-06-01 /
+  ALL 1995-07-13 all correct). Candidate job `accuracy-check` (weekly, SELECT-only + one assertions report row):
+  1. **Second-source price check**: rotating ~25-symbol sample, `stock_prices.close` vs Stooq free CSV
+     (`stooq.com/q/d/l/?s=aapl.us`) on matching dates; flag |Δ| > 0.5%.
+  2. **Internal consistency SQL**: `fair_value == median(method cols)` recomputed in SQL; `upside_pct` from
+     fair/close; `market_cap/close` (shares) drift < 2% day-over-day without a split row; `pe × eps(yf TTM) ≈ close`
+     where both legs are yfinance-sourced.
+  3. **Sector-median recompute**: `sector_metrics.median_pe` vs a fresh `percentile_cont(0.5)` over members.
+  4. **Membership spot-check**: `index_membership` current set == `universe_constituents` (drift guard already
+     exists at write; this reads it back daily).
+  Display note (no code change yet): the dossier "Fundamentals (latest)" table mixes EDGAR filing-basis rows
+  (eps 21.73 for ALL) with yfinance TTM snapshots (pe 5.07 ⇒ TTM eps ≈ 50) — correct data, two bases; consider
+  a basis column or footnote in marketview.
 
 - [x] ✅ 2026-10-18 **P0 · DQ-1 (G-1) corporate actions / adjusted prices — DONE.** (ADR 0014) History: CTVA proven 2026-10-12 and repaired 10-13
   (`audit-price-adjustments.py`); split detection + resync in v10 (10-14); `corporate_actions` recording in v11 (10-17).
@@ -750,24 +868,25 @@ P0 do first · P1 next · P2 after · P3 later. Ratings are my priors; re-rate a
 Labels = research backing of the idea (legend in the roadmap): 🟢 research-backed · 🟡 conditional · 🔵 engineering
 practice · ⚪ unproven here · ⚠️ citation not verified.
 
-- [ ] 🔶 **ML-0 🟢** experiment infrastructure (`ml_runs`, Parquet export, walk-forward splitter, leakage test, trial
-  budget) — shares the EV-0 harness. **ML-1 🔵** anomaly detection (v1 rules: bad bars, feed/row drops, scraper
-  breakage; the node wedge signature is ⚪ — one outage) — needs the stats logger repaired (AR-12).
-- [ ] 🔶 **ML-2 🔵** news embeddings + story clustering on the TX2 (return benefit ⚪) — **start storing embeddings now**
-  (`float4[]`; pgvector not bundled in the DB image — verify). **ML-3 🟢** volatility forecasts (add GJR-GARCH/EGARCH),
-  **ML-5 🟡** peer clusters (also test text-based similarity), **ML-4 ⚪** regime model (descriptive only until EV-0
-  shows an out-of-sample difference).
-- [ ] 🔶 **ML-7 🔵 (LLM via hosted API — decided 2026-10-10; "never in scoring" is 🟢)** ML-7a daily narrative first; provider-agnostic
-  adapter, `LLM_API_KEY` only in the gitignored local file + an out-of-band cluster Secret, facts-JSON grounding +
-  number verifier, hard $ cap, `llm_calls`/`llm_outputs` tables, deterministic digest as fallback. Needs a new ADR
-  (provider, data-retention terms, what may be sent). **ML-7d** `/ask` stays gated.
-- [ ] 🔶 **ML-6 🟡** cross-sectional GBM ranker — **hard-gated** on EV-0, EV-1 and composite v2 passing EV §5; weakest
-  fit for large caps, expect small/null; a documented "no" is an acceptable outcome. **ML-8 🔵** TX2 stays CPU; DB move (AR-10) frees it for ML.
-- [ ] 🤔 **Provide the LLM provider choice and place the key yourself** (`LLM_API_KEY` in the local credentials
-  file; cluster Secret created out-of-band — never paste it into chat or a file in git). **Decided 2026-10-18 (ADR 0022):
-  hosted API only — no 3090/Strata; no agent framework (plain jobs + a small tool loop for `/ask`).** Still needed from the
-  owner: ~~which provider~~ **NVIDIA build.nvidia.com free tier (owner, 2026-10-18; terms + caveats in ADR 0022)** — place the
-  `nvapi-…` key in `.secrets.env` (`LLM_API_KEY`, with `LLM_PROVIDER=nvidia`, `LLM_BASE_URL`); model ids come from the bake-off.
+- [x] ✅ **AI-assisted stock name resolution** — `manifests/telegram/nicknames.py` (nickname → symbol map, zero network), `manifests/telegram/resolver.py` (nickname → fuzzy → AI gateway layers), `manifests/telegram/ml0_splitter.py` / `ml0_leakage.py` (ML-0 experiment infra). `tests/test_nicknames.py` / `tests/test_router.py` / `tests/test_resolver.py` all green.
+- [x] ✅ **Natural-language command routing** — `manifests/telegram/router.py` (free text → command + args), `manifests/telegram/bot.py` (unknown text auto-routed; `/route` command for explicit testing), `manifests/telegram/Dockerfile` (router.py + nicknames.py copied into image).
+- [x] ✅ **Command trigger simplification** — users can type "tcs price", "facebook quote", "what's nifty at", "show me fii flows" instead of memorising /command syntax. Router checks nicknames → phrases → keywords → single words.
+- [x] ✅ 2026-10-31 **Symbol-aware routing** (image `telegram-digest:v37`, deployed pi1) — `/status cub`, `/movers cub`, `/top tcs stock`, `/statsus cub` all reach `/stock`. Router got a DB-backed last layer (`bot.symbol_lookup` → `stocks.pick_one_ex`, so the live universe wins over the static map), `ARG_COMMANDS` so `/news|/watch|/top` keep their arguments, `router.symbol_from_args` for the pre-dispatch check, longest-nickname-prefix matching, and an exact-command match against `bot.COMMANDS` (not only the keyword map). Nickname entries that pointed at dead symbols were realigned (CUB, ETERNAL, TMPV/TMCV, POLICYBZR, NYKAA, RBA, LTF, KARURVYSYA, UJJIVANSFB, UTIAMC) and four no-longer-listed ones dropped. Tests: `tests/test_router.py` (26 cases, fake lookup, no DB); live resolver verified in the v37 pod.
+- [ ] 🔶 **ML-2 🔵** news embeddings + story clustering — already LIVE
+  (`headline_embeddings` + `news-embed` CronJob since 2026-10-19). Remaining:
+  threshold tuning, ML-7c story summaries.
+- [ ] 🔶 **ML-4 ⚪** regime model — descriptive only until EV-0 shows out-of-sample
+  difference; needs longer index history.
+- [ ] 🔶 **ML-5 🟡** peer clusters — `app.peer_clusters` table created in schema 23;
+  workstation batch → table. Tests against official sectors; must pass EV-0 §5.
+- [ ] 🔶 **ML-6 🟡** GBM ranker — `app.model_scores` table created in schema 23;
+  **hard-gated** on EV-0 + EV-1 + composite v2 passing EV §5; weakest fit for
+  large caps, expect small/null.
+- [ ] 🔶 **ML-8 🔵** TX2 stays CPU; DB move (AR-10) frees it for ML.
+- [x] ✅ **LLM provider key placed — verified 2026-10-30.** Provider key present in the gateway secret,
+  gateway `ready=1/1`, readiness probe 200, all 12 models/capabilities listed via authenticated
+  `/v1/models` (fast-json/.2/.3, general/.2, reasoning/.2, long-context/.2, embed/.2, selftest/.2).
+  Provider free tier (ADR 0022) is live; model ids come from the bake-off.
 
 ## 2. Security & hygiene (this week) — restored 2026-10-12
 
@@ -788,9 +907,7 @@ practice · ⚪ unproven here · ⚠️ citation not verified.
   port-forwarding page is empty — no rules exist, so the "stale WireGuard forward" in the old docs no longer describes this router.
   Nothing was reachable; nothing to remove. (If the panel has a UPnP active-mappings table, one glance there is a free extra check.)
   Detail: roadmap §11; ops manual §12.9.
-- [ ] 🔶 **Find out who messaged the bot** — the old `telegram-bot` pod's log showed a chat NOT on the allow-list sending `/status`
-  (ignored; the allow-list works). Worth knowing who it was. 2026-10-12 08:46 UTC: the current pod's log shows a group chat (`/top`, `/status`,
-  `/gold`) and a private chat (`/start`) being ignored just before the two `/adduser` calls — probably the person now added as `sailu`; owner to confirm, then close.
+- [x] ✅ **Find out who messaged the bot — resolved 2026-10-31.** It was `sailu`; `bot_users` already has 2 active rows named `sailu` (one private chat, one group chat). Allow-list confirmed working (the stranger chat was ignored). Item closed.
 - [x] ✅ 2026-10-12 pi2 cordon dated: taint `node.kubernetes.io/unschedulable` `timeAdded` = 2026-10-10 06:11:25 UTC (during the outage
   recovery). Reason inferred from timing, not recorded — owner may confirm; **keep it cordoned** (1 GB control plane).
 

@@ -19,6 +19,8 @@ TICKERS = [
     # US
     "^GSPC", "^IXIC", "^DJI", "^RUT", "^VIX",
     "^RUI",  # Russell 1000 (added 2026-10-10; Yahoo probe: 251 daily bars over 1y)
+    # ADR 0029 universe benchmarks (probed live 2026-10-27, all three serve):
+    "^SP400", "^SP600", "NIFTY_MICROCAP250.NS",
     # Europe
     "^FTSE", "^GDAXI", "^FCHI", "^STOXX50E", "^IBEX",
     "FTSEMIB.MI", "^SSMI", "^AEX",

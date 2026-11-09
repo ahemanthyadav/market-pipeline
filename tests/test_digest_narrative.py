@@ -59,5 +59,29 @@ class Narrative(unittest.TestCase):
             digest.narrative(Cur(exc=other))
 
 
+PHONE_WIDTH = 38   # widest <pre> line a phone shows without wrapping
+
+
+class FactsBlock(unittest.TestCase):
+    """The FX/sentiment/flows table must stay phone-width: kv() pads every
+    line to the longest key, so one long label wraps the whole block."""
+
+    ROWS = ([("USD/INR", None, 96.7812), ("EUR/USD", None, 1.0845)],
+            -0.123, [("DII", 112345.0), ("FII", -98765.0)])
+
+    def test_fits_a_phone_and_explains_the_sentiment_scale(self):
+        import html
+        import re
+        block = digest.facts_block(*self.ROWS)
+        self.assertIn("FinBERT", block[1])          # derivation shown to the user
+        for part in re.findall(r"<pre>(.*?)</pre>", block[0], re.S):
+            for line in html.unescape(part).split("\n"):
+                self.assertLessEqual(len(line), PHONE_WIDTH, line)
+
+    def test_no_facts_no_block_and_no_legend_without_a_gauge(self):
+        self.assertEqual(digest.facts_block([], None, []), [])
+        self.assertEqual(len(digest.facts_block(self.ROWS[0], None, [])), 1)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

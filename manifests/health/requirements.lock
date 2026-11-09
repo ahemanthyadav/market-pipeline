@@ -1,5 +1,0 @@
-# Frozen 2026-10-12 from the running image local/pipeline-health:v4 (`ctr run --rm … pip freeze`) — what is actually deployed.
-# Consumed by the Dockerfile since v5 (2026-10-18, AR-5 step 2). Re-freeze after any rebuild.
-psycopg-binary==3.3.6
-psycopg==3.3.6
-typing_extensions==4.16.0

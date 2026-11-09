@@ -17,14 +17,14 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: bakeoff
-          image: local/pipeline-health:v6
+          image: local/marketdata-light:v1
           imagePullPolicy: Never
           command: ["python", "/scripts/bakeoff.py"]
           env:
             - {name: PYTHONPATH, value: /scripts}
             - {name: PGHOST, value: timescaledb.market-data.svc.cluster.local}
-            - {name: PGUSER, value: postgres}
-            - {name: PGPASSWORD, valueFrom: {secretKeyRef: {name: timescaledb-auth, key: password}}}
+            - {name: PGUSER, value: pipeline_rw}
+            - {name: PGPASSWORD, valueFrom: {secretKeyRef: {name: pipeline-db-rw, key: password}}}
             - {name: PGDATABASE, value: postgres}
             - {name: LLM_BASE_URL, valueFrom: {secretKeyRef: {name: llm-bakeoff-key, key: base-url}}}
             - {name: LLM_API_KEY, valueFrom: {secretKeyRef: {name: llm-bakeoff-key, key: api-key}}}

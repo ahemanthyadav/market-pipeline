@@ -1,5 +1,5 @@
 # Stock-screener CronJobs (Phases B-G). All use the single toolkit image
-# local/screener:v18 (imagePullPolicy: Never — import on pi1/pi2/pi3 first).
+# local/screener:v28 (imagePullPolicy: Never — import on pi1/pi2/pi3 first).
 # Schedules slot into the existing UTC chain without disturbing it:
 #   Sun 09:00 universe · daily 23:30 prices · Sat 06:00 fundamentals ·
 #   daily 02:00 metrics → 02:15 screener → 02:30 report
@@ -19,7 +19,7 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 2
-      activeDeadlineSeconds: 900
+      activeDeadlineSeconds: 1800
       ttlSecondsAfterFinished: 604800
       template:
         spec:
@@ -27,18 +27,18 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: universe
-              image: local/screener:v18
+              image: local/marketdata-data:v3
               imagePullPolicy: Never
               command: ["python", "universe_refresh.py"]
               env:
                 - name: PGHOST
                   value: timescaledb.market-data.svc.cluster.local
                 - name: PGUSER
-                  value: postgres
+                  value: pipeline_rw
                 - name: PGPASSWORD
                   valueFrom:
                     secretKeyRef:
-                      name: timescaledb-auth
+                      name: pipeline-db-rw
                       key: password
                 - name: PGDATABASE
                   value: postgres
@@ -60,7 +60,7 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 2
-      activeDeadlineSeconds: 7200
+      activeDeadlineSeconds: 10800
       ttlSecondsAfterFinished: 604800
       template:
         spec:
@@ -68,18 +68,18 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: prices
-              image: local/screener:v18
+              image: local/marketdata-data:v3
               imagePullPolicy: Never
               command: ["python", "stock_prices.py"]
               env:
                 - name: PGHOST
                   value: timescaledb.market-data.svc.cluster.local
                 - name: PGUSER
-                  value: postgres
+                  value: pipeline_rw
                 - name: PGPASSWORD
                   valueFrom:
                     secretKeyRef:
-                      name: timescaledb-auth
+                      name: pipeline-db-rw
                       key: password
                 - name: PGDATABASE
                   value: postgres
@@ -101,7 +101,7 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 1
-      activeDeadlineSeconds: 14400
+      activeDeadlineSeconds: 32400
       ttlSecondsAfterFinished: 604800
       template:
         spec:
@@ -109,7 +109,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: fundamentals
-              image: local/screener:v18
+              image: local/marketdata-data:v3
               imagePullPolicy: Never
               command: ["python", "stock_fundamentals.py"]
               env:
@@ -118,11 +118,11 @@ spec:
                 - name: PGHOST
                   value: timescaledb.market-data.svc.cluster.local
                 - name: PGUSER
-                  value: postgres
+                  value: pipeline_rw
                 - name: PGPASSWORD
                   valueFrom:
                     secretKeyRef:
-                      name: timescaledb-auth
+                      name: pipeline-db-rw
                       key: password
                 - name: PGDATABASE
                   value: postgres
@@ -144,7 +144,7 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 1
-      activeDeadlineSeconds: 1200
+      activeDeadlineSeconds: 2400
       ttlSecondsAfterFinished: 604800
       template:
         spec:
@@ -152,18 +152,18 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: metrics
-              image: local/screener:v18
+              image: local/marketdata-data:v3
               imagePullPolicy: Never
               command: ["python", "stock_metrics.py"]
               env:
                 - name: PGHOST
                   value: timescaledb.market-data.svc.cluster.local
                 - name: PGUSER
-                  value: postgres
+                  value: pipeline_rw
                 - name: PGPASSWORD
                   valueFrom:
                     secretKeyRef:
-                      name: timescaledb-auth
+                      name: pipeline-db-rw
                       key: password
                 - name: PGDATABASE
                   value: postgres
@@ -193,7 +193,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: screener
-              image: local/screener:v18
+              image: local/marketdata-data:v3
               imagePullPolicy: Never
               command: ["python", "stock_screener.py"]
               env:
@@ -205,11 +205,11 @@ spec:
                 - name: PGHOST
                   value: timescaledb.market-data.svc.cluster.local
                 - name: PGUSER
-                  value: postgres
+                  value: pipeline_rw
                 - name: PGPASSWORD
                   valueFrom:
                     secretKeyRef:
-                      name: timescaledb-auth
+                      name: pipeline-db-rw
                       key: password
                 - name: PGDATABASE
                   value: postgres
@@ -239,7 +239,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: report
-              image: local/screener:v18
+              image: local/marketdata-data:v3
               imagePullPolicy: Never
               command: ["python", "stock_report.py"]
               env:
@@ -248,11 +248,11 @@ spec:
                 - name: PGHOST
                   value: timescaledb.market-data.svc.cluster.local
                 - name: PGUSER
-                  value: postgres
+                  value: pipeline_rw
                 - name: PGPASSWORD
                   valueFrom:
                     secretKeyRef:
-                      name: timescaledb-auth
+                      name: pipeline-db-rw
                       key: password
                 - name: PGDATABASE
                   value: postgres
@@ -271,9 +271,9 @@ metadata:
   name: nse-fundamentals
   namespace: market-data
 spec:
-  # Suspended while the first full backfill (Job backfill-nse-fundamentals) runs — both use the
-  # same job_state cursor. Un-suspend when that Job logs "cursor cleared" (pending-tasks G-6).
-  suspend: true
+  # Un-suspended 2026-11-03 after the first full backfill logged "cursor cleared" (pending-tasks G-6).
+  # Both the CronJob and the backfill Job share the job_state cursor.
+  suspend: false
   schedule: "0 10 * * 0"
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 21600
@@ -290,7 +290,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: nse-fundamentals
-              image: local/screener:v18
+              image: local/marketdata-data:v3
               imagePullPolicy: Never
               command: ["python", "nse_fundamentals.py"]
               env:
@@ -299,11 +299,11 @@ spec:
                 - name: PGHOST
                   value: timescaledb.market-data.svc.cluster.local
                 - name: PGUSER
-                  value: postgres
+                  value: pipeline_rw
                 - name: PGPASSWORD
                   valueFrom:
                     secretKeyRef:
-                      name: timescaledb-auth
+                      name: pipeline-db-rw
                       key: password
                 - name: PGDATABASE
                   value: postgres
@@ -338,18 +338,195 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: membership
-              image: local/screener:v18
+              image: local/marketdata-data:v3
               imagePullPolicy: Never
               command: ["python", "membership_history.py"]
               env:
                 - name: PGHOST
                   value: timescaledb.market-data.svc.cluster.local
                 - name: PGUSER
-                  value: postgres
+                  value: pipeline_rw
                 - name: PGPASSWORD
                   valueFrom:
                     secretKeyRef:
-                      name: timescaledb-auth
+                      name: pipeline-db-rw
+                      key: password
+                - name: PGDATABASE
+                  value: postgres
+              resources:
+                requests: {memory: 128Mi, cpu: 100m}
+                limits: {memory: 512Mi, cpu: 500m}
+---
+# ADR 0026: daily intrinsic-valuation panel + sector aggregates for every
+# active symbol (stock_valuations + sector_metrics). Runs after stock-metrics
+# (02:00) so returns are fresh, before stock-report (02:30) which renders the
+# fair-value and sector blocks. DESCRIPTIVE ONLY — never feeds the composite
+# without an EV-0 pass.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: stock-valuation
+  namespace: market-data
+spec:
+  schedule: "10 2 * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1800
+      ttlSecondsAfterFinished: 604800
+      template:
+        spec:
+          restartPolicy: OnFailure
+          automountServiceAccountToken: false
+          containers:
+            - name: valuation
+              image: local/marketdata-data:v3
+              imagePullPolicy: Never
+              command: ["python", "valuation.py"]
+              env:
+                - name: PGHOST
+                  value: timescaledb.market-data.svc.cluster.local
+                - name: PGUSER
+                  value: pipeline_rw
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: pipeline-db-rw
+                      key: password
+                - name: PGDATABASE
+                  value: postgres
+              resources:
+                requests: {memory: 128Mi, cpu: 100m}
+                limits: {memory: 512Mi, cpu: 500m}
+---
+# Prediction scorecard (schema 18): snapshots today's screener ranks +
+# valuation upsides write-once, resolves 30/91/182d outcomes against adjusted
+# forward returns. After stock-screener (02:15) and stock-valuation (02:10).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: prediction-tracker
+  namespace: market-data
+spec:
+  schedule: "40 2 * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 900
+      ttlSecondsAfterFinished: 604800
+      template:
+        spec:
+          restartPolicy: OnFailure
+          automountServiceAccountToken: false
+          containers:
+            - name: predictions
+              image: local/marketdata-data:v3
+              imagePullPolicy: Never
+              command: ["python", "predictions.py"]
+              env:
+                - name: PGHOST
+                  value: timescaledb.market-data.svc.cluster.local
+                - name: PGUSER
+                  value: pipeline_rw
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: pipeline-db-rw
+                      key: password
+                - name: PGDATABASE
+                  value: postgres
+              resources:
+                requests: {memory: 128Mi, cpu: 100m}
+                limits: {memory: 512Mi, cpu: 500m}
+---
+# Earnings calendar (schema 19): weekly yfinance refresh of upcoming earnings
+# dates for all active constituents (~1k throttled calls — generous deadline).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: earnings-calendar
+  namespace: market-data
+spec:
+  schedule: "0 12 * * 0"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 10800
+      ttlSecondsAfterFinished: 604800
+      template:
+        spec:
+          restartPolicy: OnFailure
+          automountServiceAccountToken: false
+          containers:
+            - name: earnings
+              image: local/marketdata-data:v3
+              imagePullPolicy: Never
+              command: ["python", "earnings_calendar.py"]
+              env:
+                - name: PGHOST
+                  value: timescaledb.market-data.svc.cluster.local
+                - name: PGUSER
+                  value: pipeline_rw
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: pipeline-db-rw
+                      key: password
+                - name: PGDATABASE
+                  value: postgres
+              resources:
+                requests: {memory: 128Mi, cpu: 100m}
+                limits: {memory: 512Mi, cpu: 500m}
+---
+# DQ-5 accuracy cross-checks (weekly): valuation internals recomputed in SQL,
+# sector medians, membership drift, Stooq second-source price sample; writes
+# the '__accuracy__' report row.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: accuracy-check
+  namespace: market-data
+spec:
+  schedule: "30 12 * * 0"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 1800
+      ttlSecondsAfterFinished: 604800
+      template:
+        spec:
+          restartPolicy: OnFailure
+          automountServiceAccountToken: false
+          containers:
+            - name: accuracy
+              image: local/marketdata-data:v3
+              imagePullPolicy: Never
+              command: ["python", "accuracy_check.py"]
+              env:
+                - name: PGHOST
+                  value: timescaledb.market-data.svc.cluster.local
+                - name: PGUSER
+                  value: pipeline_rw
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: pipeline-db-rw
                       key: password
                 - name: PGDATABASE
                   value: postgres

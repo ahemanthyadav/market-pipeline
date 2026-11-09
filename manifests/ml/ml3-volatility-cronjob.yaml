@@ -1,0 +1,47 @@
+# ML-3 volatility forecasts — EWMA + GARCH(1,1) + GJR-GARCH baselines.
+# Runs nightly at 03:00 UTC, after all price fetches complete.
+# Writes to app.vol_forecasts table (schema 23).
+# Image: marketdata-data:v1 (pandas, numpy, scipy, psycopg) — unpinned,
+# import to pi1/pi3.
+# Validate with:
+#   kubectl create job -n market-data ml3-volatility-validate --from=cronjob/ml3-volatility
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ml3-volatility
+  namespace: market-data
+spec:
+  schedule: "0 3 * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 7200
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 3600
+      ttlSecondsAfterFinished: 604800
+      template:
+        spec:
+          restartPolicy: OnFailure
+          automountServiceAccountToken: false
+          containers:
+            - name: volatility
+              image: local/marketdata-data:v3
+              imagePullPolicy: Never
+              command: ["python", "-m", "ml3_volatility"]
+              env:
+                - name: PGHOST
+                  value: timescaledb.market-data.svc.cluster.local
+                - name: PGUSER
+                  value: pipeline_rw
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: pipeline-db-rw
+                      key: password
+                - name: PGDATABASE
+                  value: postgres
+              resources:
+                requests: {memory: 512Mi, cpu: 250m}
+                limits: {memory: 1Gi, cpu: "1"}

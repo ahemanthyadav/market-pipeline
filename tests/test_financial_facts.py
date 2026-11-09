@@ -12,6 +12,12 @@ from pathlib import Path
 
 for name in ("psycopg", "yfinance", "requests"):
     sys.modules.setdefault(name, types.ModuleType(name))
+try:
+    import pandas  # noqa: F401
+except ImportError:
+    pd_stub = types.ModuleType("pandas")
+    pd_stub.Series = object
+    sys.modules["pandas"] = pd_stub
 SCRIPTS = Path(__file__).resolve().parent.parent / "manifests" / "stock-screener" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 import stock_fundamentals as sf  # noqa: E402

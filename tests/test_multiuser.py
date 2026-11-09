@@ -387,6 +387,35 @@ class BotFlowTest(unittest.TestCase):
         self.assertEqual(self.db.watch, {})                          # nothing written
         self.assertIn("/watch add INFY.NS", self.out[-1][1])         # asks to confirm with the exact symbol
 
+    def test_watch_without_add_verb_resolves_and_watches_stock(self):
+        stocks.pick_one_ex = lambda q, arg, asker=None: (("TSLA", "Tesla, Inc."), None, None)
+        self.say(OWNER, "/watch tesla")
+        self.assertIn((OWNER, "TSLA"), self.db.watch)
+        self.assertIn("Watching <b>Tesla, Inc.</b> (TSLA).", self.out[-1][1])
+
+    def test_wrong_command_notifies_user_and_runs_target_command(self):
+        orig_card = stocks.stock_card
+        stocks.stock_card = lambda q, row: f"<b>{row[1]}</b> ({row[0]})"
+        stocks.pick_one_ex = lambda q, arg, asker=None: (("TCS.NS", "TCS Ltd.", "IT", "NIFTY500", "INR"), None, None)
+        try:
+            # 1. Misspelled command (/stok TCS -> /stock TCS)
+            self.say(OWNER, "/stok TCS")
+            reply1 = self.out[-1][1]
+            self.assertIn("<code>/stok</code> is not a command — running <code>/stock TCS</code>", reply1)
+            self.assertIn("TCS Ltd.", reply1)
+            # 2. Wrong command for argument (/sectors tcs -> /stock TCS.NS)
+            self.say(OWNER, "/sectors tcs")
+            reply2 = self.out[-1][1]
+            self.assertIn("<code>/sectors</code> cannot handle <code>tcs</code> — running <code>/stock TCS.NS</code>", reply2)
+            self.assertIn("TCS Ltd.", reply2)
+            # 3. No-arg command given a stock (/status tcs -> /stock TCS.NS)
+            self.say(OWNER, "/status tcs")
+            reply3 = self.out[-1][1]
+            self.assertIn("<code>/status</code> takes no stock argument — running <code>/stock TCS.NS</code>", reply3)
+            self.assertIn("TCS Ltd.", reply3)
+        finally:
+            stocks.stock_card = orig_card
+
     def test_watchlists_are_private_per_chat(self):
         self.say(OWNER, f"/adduser {ALICE} Alice")
         self.say(OWNER, f"/adduser {BOB} Bob")
@@ -452,6 +481,24 @@ class BotFlowTest(unittest.TestCase):
     def test_runbook_one_liners_still_work_without_a_chat(self):
         self.assertIn("Watchlist is empty", bot.COMMANDS["watch"]("/watch"))
         self.assertIn("Marketfredbot", bot.COMMANDS["help"]("/help"))
+
+
+class MenuSyncTest(unittest.TestCase):
+    """The Telegram command menu (setMyCommands) follows the code — v28's new
+    commands were missing because MENU was not updated with COMMANDS."""
+
+    ALIASES = {"start", "mb", "usdinr"}      # same handler under another name
+    HIDDEN = {"users", "adduser", "rmuser"}  # owner-only, deliberately unlisted
+
+    def test_every_menu_entry_is_a_real_command(self):
+        for cmd, _desc in bot.MENU:
+            self.assertIn(cmd, bot.COMMANDS)
+
+    def test_every_user_command_is_in_the_menu(self):
+        menu = {c for c, _ in bot.MENU}
+        missing = set(bot.COMMANDS) - menu - self.ALIASES - self.HIDDEN
+        self.assertEqual(missing, set(), f"commands missing from MENU: {missing}")
+
 
 
 if __name__ == "__main__":

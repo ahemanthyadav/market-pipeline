@@ -25,18 +25,18 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: narrative
-              image: local/pipeline-health:v6
+              image: local/marketdata-light:v1
               imagePullPolicy: Never
               command: ["python", "/scripts/narrative.py"]
               env:
                 - name: PGHOST
                   value: timescaledb.market-data.svc.cluster.local
                 - name: PGUSER
-                  value: postgres
+                  value: pipeline_rw
                 - name: PGPASSWORD
                   valueFrom:
                     secretKeyRef:
-                      name: timescaledb-auth
+                      name: pipeline-db-rw
                       key: password
                 - name: PGDATABASE
                   value: postgres
@@ -88,18 +88,18 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: embed
-              image: local/pipeline-health:v6
+              image: local/marketdata-light:v1
               imagePullPolicy: Never
               command: ["python", "/scripts/news_embed.py"]
               env:
                 - name: PGHOST
                   value: timescaledb.market-data.svc.cluster.local
                 - name: PGUSER
-                  value: postgres
+                  value: pipeline_rw
                 - name: PGPASSWORD
                   valueFrom:
                     secretKeyRef:
-                      name: timescaledb-auth
+                      name: pipeline-db-rw
                       key: password
                 - name: PGDATABASE
                   value: postgres

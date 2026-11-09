@@ -27,6 +27,13 @@
 | F9 | **No-registry image cycle has a pi2 tax** | `ctr images import` is slow on pi2 and blocks the SSH channel | Run pi2 imports detached (nohup + poll `/tmp/*.log`). |
 | F10 | **CGNAT is structural, not fixable at home** | Router WAN ≠ public IP; WireGuard handshakes received but replies dropped | Tailscale is the only remote path; any public-serving ambition needs a VPS/tunnel (see decision log). |
 
+### 1.1b UI/report accuracy finds (2026-10-26 — found by reviewing on-screen values)
+
+| # | Find | Fix |
+|---|---|---|
+| F33 | **Docker `ADD <url>` creates files root:0600** → unreadable by a `runAsUser: 1000` pod. Starlette StaticFiles stats the file (stat needs only dir perms), sends `200` + `content-length`, then fails on open — **empty body behind a green status**. marketview's vendored Chart.js served 0 bytes; every chart silently dead while all route canaries passed | `chmod -R a+rX` after the ADD (marketview v2); §6 canary must fetch the static asset and CHECKSUM it, not just check routes (marketview `docs/OPERATIONS.md` §4) |
+| F34 | **Ticker-vs-headline `ILIKE '%SYM%'` substring matching**: "ALL" matched every "f**all**s"/"r**all**y" headline; word boundaries (`\mALL\M`) still match the English word "All". Skewed per-stock news sentiment averages in stock_reports and showed unrelated headlines on dossiers | Ticker matches only `ticker_relevance` (where it IS a symbol); headlines match the company NAME, word-bounded (`stock_report.py` v22, marketview v3). Same trap waits for ON, IT, A, SO, KEY, COST… |
+
 ### 1.2 Data & feed quirks
 
 | # | Find | Status |
@@ -156,6 +163,31 @@ Lifting the ceiling entirely = JetPack 5 reflash (icebox — recovery-mode, full
 - Longhorn/OpenEBS, Loki, Argo/Tekton, Citus (pi2 1 GB ceiling)
 - 4th Pi worker (optional; cluster has capacity)
 - Public website/VPS-in-front (tracked in `REMOTE-ACCESS-DECISION-LOG.md`, separate effort)
+
+---
+
+## 2b. External quant repos — evaluated 2026-10-30
+
+Owner supplied a prioritised list of seven open-source quant repos; each was judged against the
+standing ADRs (0018 EV-0 gate, 0026 deterministic valuation, 0031 no-LLM research scoring,
+0022/DG-19 TX2 ML ceiling) and `data-gaps.md`. Verdict: the list's ranking is roughly inverted
+for this pipeline — the two smallest libraries fit, the four platforms conflict with decisions
+already recorded. None becomes cluster infrastructure; adopted ones are **workstation research
+tools** reading via the ADR 0032 `v_*` contract views, with EV-0 still the gate.
+
+| Repo | Verdict | Why |
+|---|---|---|
+| **QuantStats** | ✅ Adopt (workstation) | Pandas tearsheets (Sharpe, drawdown, rolling stats) over the returns series `ev0.py` / Strategy Lab already produce; replaces hand-rolled stats. Smallest dep, clearest win. |
+| **VectorBT** | ✅ Adopt (workstation, pinned) | Vectorized numba backtesting for Strategy Lab testables (EV-19 PEAD, EV-20 panels) — parameter sweeps the hand-written harness can't do cheaply. Augments EV-0, never replaces it; acceptance criteria still written first. OSS version is maintenance-mode (maintained fork is paid `vectorbt.pro`) — pin the version, treat as tool not infrastructure. |
+| **Riskfolio-Lib** | 🧊 Icebox | Portfolio optimization is premature: ADR 0026 keeps scoring descriptive and nothing has passed EV-0 into an allocation decision. Revisit only with multiple validated signals to weight. |
+| **Qlib** (Microsoft) | ⛔ Skip platform; mine Alpha158 | Competing platform: own data format/pipeline, x86/GPU workflows the TX2 can't serve (DG-19). Would duplicate TimescaleDB + fetcher architecture to feed it. The salvageable asset is the **Alpha158 factor library**: public, well-documented expressions over plain OHLCV — cherry-pick candidates, implement natively in SQL/pandas over `stock_prices`/`stock_metrics_daily`, gate each through EV-0. Pure-price factors dodge the India fundamentals gaps (DG-03/DG-17) entirely. Qlib's own benchmarks also show its DL zoo barely beats a tuned LightGBM — if ML ranking is ever wanted, that is the ceiling to aim at with our own features, not the platform. |
+| **RD-Agent** | ⛔ Skip | Autonomous LLM factor discovery — the direct opposite of the house rules: ADR 0031 scoring is deterministic (no LLM in the loop) and acceptance tests precede testing. A data-snooping machine (McLean & Pontiff); also sits on Qlib. |
+| **TradingAgents** | ⛔ Skip | Multi-agent LLM narrative. The Telegram layer already does LLM narrative *with* `factcheck.py` gating every number — a stronger design. Adding it = ungated LLM opinions + gateway API spend. |
+| **OpenBB** | ⛔ Skip (as infra) | The 26 fetchers with idempotent writers already are the ingestion layer; closes no real gap (DG-01 needs NSE PDFs, DG-02 needs a nonexistent archive, DG-04 needs a Finnhub/Tiingo key). Free providers are mostly the same yfinance. At most a workstation exploration tool when hunting a new source. |
+
+**Framing note:** the limiting factor is data, not tooling — the top of `data-gaps.md` (DG-01
+India point-in-time membership, DG-03 NSE fundamentals backfill) blocks India backtests no matter
+which backtester is adopted. A session on DG-01 buys more research capability than any repo above.
 
 ---
 

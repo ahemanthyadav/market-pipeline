@@ -1,0 +1,47 @@
+# ML-1 anomaly detection — data quality + node health flags.
+# Runs after pipeline-health (01:45 UTC), at 02:00 UTC.
+# Uses rule-based detection (MAD z-scores, freshness drops) — no model.
+# Writes to app.data_anomalies table (schema 23).
+# Image: marketdata-data:v1 (pandas, psycopg) — unpinned, import to pi1/pi3.
+# Validate with:
+#   kubectl create job -n market-data ml1-anomalies-validate --from=cronjob/ml1-anomalies
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ml1-anomalies
+  namespace: market-data
+spec:
+  schedule: "0 2 * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 900
+      ttlSecondsAfterFinished: 604800
+      template:
+        spec:
+          restartPolicy: OnFailure
+          automountServiceAccountToken: false
+          containers:
+            - name: anomalies
+              image: local/marketdata-data:v3
+              imagePullPolicy: Never
+              command: ["python", "-m", "ml1_anomalies"]
+              env:
+                - name: PGHOST
+                  value: timescaledb.market-data.svc.cluster.local
+                - name: PGUSER
+                  value: pipeline_rw
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: pipeline-db-rw
+                      key: password
+                - name: PGDATABASE
+                  value: postgres
+              resources:
+                requests: {memory: 256Mi, cpu: 100m}
+                limits: {memory: 512Mi, cpu: 500m}

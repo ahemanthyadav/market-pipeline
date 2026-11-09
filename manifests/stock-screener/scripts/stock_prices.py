@@ -267,6 +267,15 @@ def main() -> int:
     conn = connect()
     with conn.cursor() as cur:
         symbols = get_symbols(cur, limit)
+        if mode == "max" and os.environ.get("ONLY_MISSING"):
+            # ADR 0029 expansion: backfill only symbols without real history,
+            # instead of refetching the whole (grown) universe from Yahoo.
+            cur.execute("SELECT symbol FROM (SELECT symbol, count(*) AS c "
+                        "FROM stock_prices WHERE ts >= '1900-01-01' "
+                        "GROUP BY symbol) t WHERE c > 300")
+            have = {r[0] for r in cur.fetchall()}
+            symbols = [s for s in symbols if s not in have]
+            print(f"ONLY_MISSING: {len(symbols)} symbols lack history", flush=True)
         cur.execute("SELECT last_key FROM job_state WHERE job_name=%s", (job,))
         row = cur.fetchone()
         if row and row[0] and mode == "max":

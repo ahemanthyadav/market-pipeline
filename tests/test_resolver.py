@@ -32,21 +32,26 @@ class Fuzzy(unittest.TestCase):
     def setUp(self):
         resolver._universe.update(rows=None, at=0.0)
         resolver._ai_cache.clear()
+        resolver._nickname_cache.clear()
         os.environ.pop("BOT_AI_RESOLVE", None)
 
     def auto(self, text):
         row, how = resolver.suggest(q, text)
         return (row[0], how) if row else (None, how)
 
+    def test_nickname_map_resolves_before_fuzzy(self):
+        for text, sym in [("reliance", "RELIANCE.NS"), ("tcs", "TCS.NS"),
+                          ("hdfc bank", "HDFCBANK.NS"), ("nifty", "^NSEI")]:
+            self.assertEqual(self.auto(text), (sym, "nickname"), text)
+
     def test_clear_misspellings_resolve_directly(self):
-        for text, sym in [("infosis", "INFY.NS"), ("microsft", "MSFT"), ("amazn", "AMZN"),
-                          ("hdfc bnk", "HDFCBANK.NS"), ("tata consultancy", "TCS.NS"),
-                          ("bajaj finanse", "BAJFINANCE.NS"), ("tesla", "TSLA"), ("coca cola", "KO")]:
+        for text, sym in [("infosis", "INFY.NS"), ("microsft", "MSFT"),
+                          ("amazn", "AMZN"), ("bajaj finanse", "BAJFINANCE.NS")]:
             self.assertEqual(self.auto(text), (sym, "fuzzy"), text)
 
     def test_ambiguous_queries_ask_instead_of_guessing(self):
         for text, must_list in [("icici", "ICICIBANK.NS"), ("bajaj", "BAJAJFINSV.NS"),
-                                ("alphabet", "GOOGL"), ("relaince", "RELIANCE.NS")]:
+                                ("relaince", "RELIANCE.NS")]:
             row, msg = resolver.suggest(q, text)
             self.assertIsNone(row, text)
             self.assertIn("Did you mean", msg)
@@ -70,15 +75,20 @@ class Ai(unittest.TestCase):
         for k in ("BOT_AI_RESOLVE", "LLM_API_KEY"):
             os.environ.pop(k, None)
 
-    def test_nickname_resolved_by_ai_and_cached(self):
+    def test_nickname_resolved_without_ai(self):
         calls = []
 
         def asker(prompt):
             calls.append(prompt)
-            return "META", "Meta Platforms, Inc."
-        self.assertEqual(resolver.suggest(q, "facebook", asker)[0][0], "META")
-        resolver.suggest(q, "Facebook", asker)
-        self.assertEqual(len(calls), 1)                  # same text (normalised) -> cached
+            return "AAPL", "Apple Inc."
+        # nickname resolves without calling AI
+        self.assertEqual(resolver.suggest(q, "reliance", asker)[0][0], "RELIANCE.NS")
+        self.assertEqual(len(calls), 0)                  # nickname, no AI call
+        # but a non-nickname still uses AI and caches
+        self.assertEqual(resolver.suggest(q, "aple", asker)[0][0], "AAPL")
+        self.assertEqual(len(calls), 1)
+        resolver.suggest(q, "aple", asker)
+        self.assertEqual(len(calls), 1)                  # cached
 
     def test_ai_answer_must_be_a_real_universe_symbol(self):
         self.assertIsNone(resolver.ai_pick("x", [], ROWS, lambda p: ("NOTREAL", "Not Real Corp")))

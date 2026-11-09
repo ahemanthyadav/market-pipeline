@@ -31,8 +31,9 @@ spec:
             runAsGroup: 1000
           containers:
             - name: fetcher
-              image: local/factors-fetcher:v1
+              image: local/marketdata-light:v1
               imagePullPolicy: Never
+              command: ["python", "factors-fetcher.py"]
               securityContext:
                 allowPrivilegeEscalation: false
                 capabilities:
@@ -41,11 +42,11 @@ spec:
                 - name: PGHOST
                   value: timescaledb.market-data.svc.cluster.local
                 - name: PGUSER
-                  value: postgres
+                  value: pipeline_rw
                 - name: PGPASSWORD
                   valueFrom:
                     secretKeyRef:
-                      name: timescaledb-auth
+                      name: pipeline-db-rw
                       key: password
                 - name: PGDATABASE
                   value: postgres

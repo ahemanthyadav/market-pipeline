@@ -3,7 +3,36 @@
 > **Purpose:** everything about the Marketfredbot Telegram channel — how the
 > deployed digest + alert pipeline is wired, how to operate and change it, and
 > the tiered menu of two-way/next-step upgrades with their real constraints.
-> **Repo + live state 2026-10-26:** `local/telegram-digest:v24` LIVE (deployment + both
+> **Repo state 2026-10-31 (v37):** `local/telegram-digest:v37` — symbol-aware routing
+> (`/status cub`, `/movers cub`, `/top tcs stock` → `/stock`) with a live-universe lookup
+> layer, longest-nickname-prefix matching, and nickname entries realigned to the current
+> tickers (CUB.NS, ETERNAL.NS, TMPV/TMCV, POLICYBZR.NS …). v34 — v33's review fixes plus
+> index quant values in /sp500 & friends (P/E, P/B, market cap from stock_metrics_daily) and
+> the /sp500 command itself (36e6529). The v33 image was built before 36e6529 landed and was
+> never deployed (stale stocks.py/bot.py — caught by an in-image md5 check); the tag is burned,
+> do not reuse it. v33 (never live): clearer
+> labels on every derived number (repriced P/E/P/B say so; sentiment, screener scores and
+> track columns carry how-they-are-computed legends), 52-week range from daily closes (same
+> basis as pos_52w), phone-width fixes in the digest facts block and /track table, one shared
+> SCREENER_NOTE. Earlier: v29 registers
+> the new commands in the Telegram "/" menu (MENU list updated + a menu-sync test so the
+> menu can never drift from COMMANDS again). v28 adds
+> /earnings (watchlist ★ + core top-25, 14d), /scorecard (ADR 0028 summary), and fixes
+> /sectors universe parsing ('sp' substring sent sp600 to SP500; now the UNIVERSES alias
+> map with an explicit error). v27 added the ADR 0029 universe aliases
+> (sp400/sp600/midcap/smallcap/microcap) + core/extended tier separation (movers and the
+> digest earnings section stay flagship; valuation-watch lines tag their universe).
+> v26 added the REGIME
+> line in the digest + /regime command (breadth / benchmark-trend / factor-momentum traffic
+> light per market, descriptive only), the "Earnings this week" digest section (watchlist +
+> top-25, schema 19), and a new valuation-watch gate: entries reporting within 3 days are
+> suppressed (`VAL_EARNINGS_GAP_DAYS`, ADR 0028). No-send validation 10-27: digest 1383 chars
+> with Regime + Earnings sections present, 3 live watch lines, regime_text renders.
+> Earlier v25 (2026-10-26): VALUATION
+> WATCH alert (ADR 0026 amendment: entering names with rank<=50, upside>=25%, >=3 methods above
+> close — reasoning in the line, max 5), /sectors command, and the fair-value line on /stock.
+> No-send validation same day: digest 954 chars, 4 real watch lines, sectors card renders.
+> Earlier v24 (deployment + both
 > CronJobs): HTML-safe truncation, getMe retry, rule-9 bounds, `/tmp/bot-alive` liveness
 > heartbeat + exec probe, non-root securityContext (the per-image canary — passed).
 > Deploy-verified same day: bot polling on pi1 (owner + 2 members), heartbeat fresh,
@@ -67,6 +96,9 @@ driver import — unit-tested with a fake in `tests/test_stocks.py`) and
 | Command | Answers from | Notes |
 |---|---|---|
 | `/stock TCS` | `stock_prices`, `stock_metrics_daily`, `stock_scores`, `stock_fundamentals`, `headline_*` | symbol or name fragment (bare NSE symbols get `.NS` tried); close, day %, 1m/6m/12m/YTD, 50/200DMA, 52w position, RSI14 (computed in Python — `technical_indicators` covers indices only), factor scores, valuation, 3 headlines |
+| `/valuation PLTR` | `v_latest_valuations` (Schema 25, ADR 0026/0033) | all 15 intrinsic valuation methods (Graham, PEG, DCF, DDM, EPV, residual income, Damodaran FCFF, owner earnings, …), median fair value + upside vs close, practitioner vs academic medians, methods flagged above close; descriptive only — not advice |
+| `/calibration` | `v_latest_calibration` | factor ICs, archetype excess returns, multibagger gate marginal value, shrunk factor weights (classifier loop, ADR 0033) |
+| `/methods` | `v_valuation_methods` | valuation & scientific method catalog — formulas, lens, peer-reviewed sources (Schema 25) |
 | `/news TCS` | `headline_entities` → `raw_headlines`, `news_sentiment`, `headline_events` | last 14 d, sentiment per headline, event tags |
 | `/top growth sp500` | `stock_scores` | best 10 eligible by `value\|quality\|growth\|momentum\|risk\|composite`; default composite / NIFTY500 |
 | `/movers` | `stock_scores` | entered / left the top-20 between the last two FULL runs (≥40 eligible rows — canary runs ignored) |
@@ -108,15 +140,17 @@ driver import — unit-tested with a fake in `tests/test_stocks.py`) and
 - **`/stock`** also shows revenue/EPS/net-income growth of the latest fiscal
   year, debt/equity, FCF yield and daily traded value.
 - **`/multibagger [nifty|sp500]`** (`/mb`): gates then a 0-100 score. Gates —
-  revenue AND earnings CAGR ≥ 15 % over the 2-3 fiscal years on file, ROE ≥
-  15 %, debt/equity ≤ 1 (financials exempt), outside the largest 30 % by
+  revenue AND earnings CAGR ≥ 15 % over the 2-3 fiscal years on file (with a
+  terminal-year collapse guard rejecting series with ≥3 points where the most
+  recent fiscal year contracted >15% vs the prior year, ADR 0033), ROE ≥
+  15 %, debt/equity ≤ 1 (financials exempt across both NSE `"Financial Services"`
+  and GICS `"Financials"`, ADR 0033), outside the largest 30 % by
   market cap, PEG ≤ 2, price above the 200-day average. Score — growth 35,
   quality 25, valuation 15, momentum 15, size 10. The message prints how many
   names each gate dropped. First live run: 16 of 495 (NIFTY500), 1 of 503
-  (SP500). **Not backtested.** Corrected 2026-10-10: a backtest is possible
-  for the S&P 500 (EDGAR history with filing dates) but not for the Nifty 500
-  (4 annual points). The gates are practitioner rules; the research-backed
-  replacement is in `evidence-based-signals-roadmap.md` §3.
+  (SP500). **Continuous gate validation (ADR 0033):** `ops-tools/classifier_loop.py`
+  evaluates each gate's Marginal Value (GMV) against single-gate near-misses on
+  resolved 30/91/182d outcomes.
 - **Confidence (0-100) on every recommendation** — `/top`, `/scores`,
   `/stock`, `/multibagger`. It measures evidence quality, never the chance of
   a gain, and every message says so. Screener picks: data coverage 40, factor
@@ -307,6 +341,32 @@ Outbound-only, survives CGNAT, no VPS.
 with the universe (live: facebook → META, big blue → IBM, hul → HINDUNILVR.NS, coke → KO); `/watch` never writes on a corrected symbol — it asks for
 the exact one. Switch: `BOT_AI_RESOLVE` on the Deployment.
 
+### Symbol-aware routing (2026-10-31, image v37)
+Every command now understands a stock name, not just `/stock`:
+
+- **A no-argument command followed by a stock** means that stock —
+  `/status cub`, `/movers cub`, `/digest tcs` → `/stock CUB.NS`. Commands that genuinely take
+  free text keep it (`/news tcs` is news *about* TCS, `/watch cub` adds CUB, `/top growth sp500`
+  keeps its factor/universe); that list is `router.ARG_COMMANDS`.
+- **A command whose parse fails** falls back to the router with the command word stripped, so
+  `/top tcs stock` and `/top cub` → `/stock TCS.NS` / `/stock CUB.NS` instead of a usage error.
+- **Unknown commands are read as text** (`/statsus cub` → `/stock CUB.NS`) — `/statsus` is not a
+  command, so the args go through the normal nickname/keyword/lookup path.
+- **The router's last layer is the live universe, not the static nickname map.**
+  `bot.symbol_lookup` calls `stocks.pick_one_ex`, i.e. the same layers as `/stock`
+  (exact symbol/name → fuzzy → AI when `BOT_AI_RESOLVE=1`), so symbols missing from
+  `nicknames.py` still resolve: `cub` → CUB.NS, `karnataka bank` → KTKBANK.NS,
+  `tata motors pv` → TMPV.NS. `/route cub` now reports `universe lookup`; why this matters —
+  the hardcoded map had drifted (CITYUNION.NS, ZOMATO.NS, PBFINTECH.NS, TATAMOTORS.NS,
+  UTIAM.NS, UJJIVAN.NS, L&TFH.NS, FSN ECOMM.NS, BURGERKING.NS, KVTBANK.NS were all dead
+  symbols; repco/suryoday/esaf/capital-small are no longer in the universe and were dropped).
+  Chosen over "add more nicknames" because the map will always lag: the universe table is the
+  truth (ADR 0029), and the lookup is one cached query per message.
+- **Longest nickname prefix wins**, so a 3-word name is never truncated to its first two
+  (`tata motors pv` → TMPV.NS, not TMCV.NS).
+- Tests: `tests/test_router.py` (fake lookup — no DB) covers all of the above; the live
+  resolver was verified inside the v37 pod with `kubectl exec … python -c "import bot; …"`.
+
 ### /ask — questions answered from stored facts only (2026-10-19, ML-7d family, image v14–v23)
 `/ask TCS outlook`, `/ask news infosys`, `/ask usdinr`, `/ask fii flows`. Flow: find the subject (stock via the forgiving
 resolver — word-by-word, so "TCS outlook" is about TCS; index/FX/flows/news by keyword), gather a small facts JSON (public
@@ -316,9 +376,20 @@ rounding/truncation to ≤0.01 tolerated, metric-key numbers like "12-month" all
 the bot shows the facts table instead; a question mapping to no facts is refused, never guessed. 12–60 s per answer
 (NVIDIA queueing varies); never a scoring input.
 
-### AI market note in the digest (2026-10-18, ML-7a, image v9+; first real note 2026-10-19)
+###AI market note in the digest (2026-10-18, ML-7a, image v9+; first real note 2026-10-19)
 `llm-narrative` (07:40 IST) writes `llm_narratives`; the 08:00 digest adds a "Summary (AI-written; every number checked)"
-section only when today's note passed the check. Switch: `DIGEST_NARRATIVE` on CronJob `telegram-digest`.
+section only when today's note passed the check. Switch: `DIGEST_NARRATIVE` on CronJob `telegram-digest` and Deployment `telegram-bot`.
+
+### Deterministic-first cross-command routing & universal AI integration (2026-11-08, ADR 0033)
+- **Precedence rule:** Deterministic command parsers and universe/keyword routing always execute first. Only when deterministic parsing fails (or a command cannot handle the given arguments) does the router redirect or invoke AI fallback (`router.ai_route`), always notifying the user with a `↪️` banner before running the target command:
+  - **Command typo correction (`router.fuzzy_command`):** e.g., `/stck AAPL` or `/sectrs sp500` notifies `↪️ /stck is not a command — running /stock AAPL` and executes `/stock AAPL`.
+  - **Cross-type redirect (`/stock` ↔ `/index`):** `/stock nifty` detects an index and redirects to `/index nifty`; `/index tcs` detects an equity and redirects to `/stock TCS.NS`.
+  - **Mismatched command + argument fallback:** e.g., `/top tcs` or `/sectors what is the market regime` strips the mismatched command, routes the argument deterministically (with `router.ai_route` via `llm-gateway` as fallback when `BOT_AI_RESOLVE=1`), notifies the user which command can fulfill the request, and runs it.
+  - **Implicit `/watch <company>`:** `/watch tesla` or `/watch TCS` (without `add`) resolves the symbol via `pick_one_ex` and adds it directly on an exact match while preserving multi-word notes (`/watch add TCS core holding`).
+- **Universal fact-checked AI enrichment (`ask.py`, `stocks.py`):**
+  - `/stock` and `/news` surface verified `per_symbol` (ML-7b) and `event_brief` (ML-7c) notes from `llm_narratives` (`stocks.symbol_narrative`).
+  - `/ask` now builds structured facts from `screener_facts`, `sector_facts`, `regime_facts`, `scorecard_facts`, `earnings_facts`, and enriched `stock_facts` (intrinsic fair value, upside %, 5-factor scores, archetype, next earnings).
+  - Appending `ai`, `explain`, `why`, or `?` to any command (e.g., `/top growth sp500 explain`, `/regime ai`) strips the trigger token, renders the deterministic card, and appends a `factcheck.py`-verified AI takeaway (`ask.summarize_card`).
 
 ### Tier 3 — Strata-backed chat — ❌ DROPPED 2026-10-18 (ADR 0022: hosted API only, no local GPU; free-text questions = ML-7d `/ask`)
 

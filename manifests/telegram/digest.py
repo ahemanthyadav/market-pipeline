@@ -138,6 +138,52 @@ def watchlist(cur, chat_id=None):
         return []
 
 
+TOP_SQL = """
+    SELECT symbol FROM (
+      SELECT DISTINCT ON (symbol) symbol, rank FROM stock_scores
+      WHERE ts >= now() - interval '7 days' AND eligible
+        AND universe IN ('SP500', 'NIFTY500')
+      ORDER BY symbol, ts DESC) s
+    WHERE rank <= 25
+"""
+# Flagships only (ADR 0029): the digest's earnings section tracks the core
+# top-25s + the user's own watchlist; extended universes appear on request.
+
+
+def earnings_week(cur, chat_id=None):
+    """Upcoming-earnings lines for the user's watchlist + the top-25s."""
+    def q(sql, args=()):
+        cur.execute(sql, args)
+        return cur.fetchall()
+    try:
+        symbols = {r[0] for r in q(stocks.WATCH_SQL, (chat_id,))}
+        symbols |= {r[0] for r in q(TOP_SQL)}
+        return stocks.earnings_lines(q, sorted(symbols), days=7)
+    except psycopg.Error as exc:
+        if not stocks.table_missing(exc):
+            raise
+        print("WARN earnings_calendar missing — section skipped", flush=True)
+        return []
+
+
+def facts_block(fx_rows, gauge, flow_rows):
+    """FX / sentiment / flows <pre> block + its legend; pure, so tests can
+    hold every line to the phone width. Keep kv() keys short: the longest key
+    pads every line of the block, and past ~38 chars phones wrap the table."""
+    facts = [(label, f"{rate:,.4f}") for label, _ts, rate in fx_rows]
+    if gauge is not None:
+        facts.append(("Sentiment, 7-day", f"{gauge:+.3f}"))
+    facts += [(f"{flow} net, latest day (Rs cr)", f"{amount:+,.0f}")
+              for flow, amount in flow_rows]
+    if not facts:
+        return []
+    out = [stocks.kv(facts)]
+    if gauge is not None:
+        out.append("<i>Sentiment = 7-day average of FinBERT-scored headlines, "
+                   "−1 most negative to +1 most positive.</i>")
+    return out
+
+
 def build_message(chat_id=None):
     """The digest for one user (their own watchlist); chat_id None = the owner."""
     chat_id = str(chat_id or os.environ.get("TELEGRAM_CHAT_ID", ""))
@@ -149,18 +195,28 @@ def build_message(chat_id=None):
 
         lines = [f"<b>Market digest</b>  <i>{datetime.now(IST):%d %b %Y, %H:%M IST}</i>",
                  stocks.quote_table(q, stocks.DIGEST_QUOTES)]
+        try:
+            light = stocks.regime_line(q)
+            if light:
+                lines.append(light)
+        except psycopg.Error as exc:
+            if not stocks.table_missing(exc):
+                raise
+            print("WARN regime inputs missing — line skipped", flush=True)
+        try:
+            sc_line = stocks.scorecard_line(q)
+            if sc_line:
+                lines.append(sc_line)
+        except psycopg.Error as exc:
+            if not stocks.table_missing(exc):
+                raise
+            print("WARN scorecard inputs missing — line skipped", flush=True)
         note = narrative(cur)
         if note:
             lines.append("<b>Summary</b> <i>(AI-written; every number checked against the data)</i>\n"
                          + html.escape(note))
 
-        facts = [(label, f"{rate:,.4f}") for label, _ts, rate in fx(cur)]
-        gauge = sentiment(cur)
-        if gauge is not None:
-            facts.append(("Sentiment, 7-day avg", f"{gauge:+.3f}"))
-        facts += [(f"{flow} net, Rs cr", f"{amount:+,.0f}") for flow, amount in flows(cur)]
-        if facts:
-            lines.append(stocks.kv(facts))
+        lines += facts_block(fx(cur), sentiment(cur), flows(cur))
 
         stale = stale_feeds(cur)
         lines.append(
@@ -173,6 +229,11 @@ def build_message(chat_id=None):
         watched = watchlist(cur, chat_id)
         if watched:
             lines.append("\n<b>Watchlist</b>\n" + "\n".join(watched))
+
+        upcoming = earnings_week(cur, chat_id)
+        if upcoming:
+            lines.append("\n<b>Earnings this week</b> <i>(watchlist + top 25)</i>\n"
+                         + "\n".join(upcoming))
 
         tops = headlines(cur)
         if tops:

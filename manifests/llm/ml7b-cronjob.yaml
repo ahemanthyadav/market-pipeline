@@ -1,0 +1,70 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ml7b-per-symbol
+  namespace: market-data
+  labels:
+    app: ml7b-per-symbol
+spec:
+  schedule: "45 2 * * 6"   # Saturdays 02:45 PDT, 30 min after stock-screener (node-local PDT)
+  concurrencyPolicy: Forbid
+  failedJobsHistoryLimit: 1
+  successfulJobsHistoryLimit: 3
+  startingDeadlineSeconds: 7200
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 600
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 604800
+      template:
+        metadata:
+          labels:
+            app: ml7b-per-symbol
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: ml7b
+              image: local/marketdata-light:v1
+              imagePullPolicy: Never
+              command: ["python", "/scripts/ml7b_per_symbol.py"]
+              env:
+                - name: PGHOST
+                  value: timescaledb.market-data.svc.cluster.local
+                - name: PGUSER
+                  value: pipeline_rw
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      key: password
+                      name: pipeline-db-rw
+                - name: PGDATABASE
+                  value: postgres
+                - name: LLM_BASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      key: base-url
+                      name: llm-gateway-key
+                - name: LLM_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      key: api-key
+                      name: llm-gateway-key
+                - name: LLM_CAPABILITY
+                  value: fast-json
+                - name: MAX_SYMBOLS
+                  value: "40"
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: "128Mi"
+                limits:
+                  cpu: "500m"
+                  memory: "512Mi"
+              volumeMounts:
+                - mountPath: /scripts
+                  name: script
+                  readOnly: true
+          volumes:
+            - name: script
+              configMap:
+                name: llm-narrative-script

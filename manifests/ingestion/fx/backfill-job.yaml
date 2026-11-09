@@ -19,18 +19,18 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: backfill
-          image: local/fx-fetcher:v1
+          image: local/marketdata-data:v1
           imagePullPolicy: Never
           command: ["python", "/scripts/fx-backfill.py"]
           env:
             - name: PGHOST
               value: timescaledb.market-data.svc.cluster.local
             - name: PGUSER
-              value: postgres
+              value: pipeline_rw
             - name: PGPASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: timescaledb-auth
+                  name: pipeline-db-rw
                   key: password
             - name: PGDATABASE
               value: postgres

@@ -1,0 +1,48 @@
+# Research watcher (ADR 0031): weekly collector of factor-investing papers
+# from peer-reviewed journal feeds + NBER + arXiv into research_items.
+# Append-only, deterministic keyword/venue scoring; NEVER edits the curated
+# Strategy Lab tiers. Surfaced at marketview /strategies.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: research-watcher
+  namespace: market-data
+spec:
+  schedule: "0 13 * * 1"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 900
+      ttlSecondsAfterFinished: 604800
+      template:
+        spec:
+          restartPolicy: OnFailure
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+          containers:
+            - name: research
+              image: local/marketdata-light:v1
+              imagePullPolicy: Never
+              command: ["python", "research-fetcher.py"]
+              env:
+                - name: PGHOST
+                  value: timescaledb.market-data.svc.cluster.local
+                - name: PGUSER
+                  value: pipeline_rw
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: pipeline-db-rw
+                      key: password
+                - name: PGDATABASE
+                  value: postgres
+              resources:
+                requests: {memory: 64Mi, cpu: 50m}
+                limits: {memory: 256Mi, cpu: 300m}

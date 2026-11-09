@@ -36,7 +36,7 @@ spec:
         runAsGroup: 1000
       containers:
         - name: listener
-          image: local/telegram-digest:v24
+          image: local/telegram-digest:v41
           imagePullPolicy: Never
           securityContext:
             allowPrivilegeEscalation: false
@@ -59,6 +59,8 @@ spec:
             failureThreshold: 5
           env:
             - name: BOT_AI_RESOLVE            # forgiving /stock lookup: AI layer on (resolver.py; typed text only)
+              value: "1"
+            - name: DIGEST_NARRATIVE          # ML-7a AI summary section on interactive /digest
               value: "1"
             - name: LLM_BASE_URL
               valueFrom: {secretKeyRef: {name: llm-gateway-key, key: base-url}}

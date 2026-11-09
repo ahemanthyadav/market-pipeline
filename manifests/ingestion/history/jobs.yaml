@@ -20,14 +20,14 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: backfill
-          image: local/fx-fetcher:v1
+          image: local/marketdata-data:v1
           imagePullPolicy: Never
           command: ["python", "/scripts/history_backfill.py"]
           env:
             - {name: MODE, value: "fx"}
             - {name: PGHOST, value: timescaledb.market-data.svc.cluster.local}
-            - {name: PGUSER, value: postgres}
-            - {name: PGPASSWORD, valueFrom: {secretKeyRef: {name: timescaledb-auth, key: password}}}
+            - {name: PGUSER, value: pipeline_rw}
+            - {name: PGPASSWORD, valueFrom: {secretKeyRef: {name: pipeline-db-rw, key: password}}}
             - {name: PGDATABASE, value: postgres}
           resources:
             requests: {memory: 128Mi, cpu: 100m}
@@ -54,14 +54,14 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: backfill
-          image: local/fx-fetcher:v1
+          image: local/marketdata-data:v1
           imagePullPolicy: Never
           command: ["python", "/scripts/history_backfill.py"]
           env:
             - {name: MODE, value: "yields"}
             - {name: PGHOST, value: timescaledb.market-data.svc.cluster.local}
-            - {name: PGUSER, value: postgres}
-            - {name: PGPASSWORD, valueFrom: {secretKeyRef: {name: timescaledb-auth, key: password}}}
+            - {name: PGUSER, value: pipeline_rw}
+            - {name: PGPASSWORD, valueFrom: {secretKeyRef: {name: pipeline-db-rw, key: password}}}
             - {name: PGDATABASE, value: postgres}
           resources:
             requests: {memory: 128Mi, cpu: 100m}
@@ -88,14 +88,14 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: backfill
-          image: local/rates-fetcher:v1
+          image: local/marketdata-data:v1
           imagePullPolicy: Never
           command: ["python", "/scripts/history_backfill.py"]
           env:
             - {name: MODE, value: "fred"}
             - {name: PGHOST, value: timescaledb.market-data.svc.cluster.local}
-            - {name: PGUSER, value: postgres}
-            - {name: PGPASSWORD, valueFrom: {secretKeyRef: {name: timescaledb-auth, key: password}}}
+            - {name: PGUSER, value: pipeline_rw}
+            - {name: PGPASSWORD, valueFrom: {secretKeyRef: {name: pipeline-db-rw, key: password}}}
             - {name: PGDATABASE, value: postgres}
             - {name: FRED_API_KEY, valueFrom: {secretKeyRef: {name: fred-api, key: api-key}}}
           resources:
@@ -123,14 +123,14 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: backfill
-          image: local/ta-compute:v1
+          image: local/marketdata-data:v1
           imagePullPolicy: Never
           command: ["python", "/scripts/history_backfill.py"]
           env:
             - {name: MODE, value: "ta"}
             - {name: PGHOST, value: timescaledb.market-data.svc.cluster.local}
-            - {name: PGUSER, value: postgres}
-            - {name: PGPASSWORD, valueFrom: {secretKeyRef: {name: timescaledb-auth, key: password}}}
+            - {name: PGUSER, value: pipeline_rw}
+            - {name: PGPASSWORD, valueFrom: {secretKeyRef: {name: pipeline-db-rw, key: password}}}
             - {name: PGDATABASE, value: postgres}
           resources:
             requests: {memory: 128Mi, cpu: 100m}
@@ -157,14 +157,14 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: backfill
-          image: local/screener:v18
+          image: local/marketdata-data:v1
           imagePullPolicy: Never
           command: ["python", "/scripts/history_backfill.py"]
           env:
             - {name: MODE, value: "metrics"}
             - {name: PGHOST, value: timescaledb.market-data.svc.cluster.local}
-            - {name: PGUSER, value: postgres}
-            - {name: PGPASSWORD, valueFrom: {secretKeyRef: {name: timescaledb-auth, key: password}}}
+            - {name: PGUSER, value: pipeline_rw}
+            - {name: PGPASSWORD, valueFrom: {secretKeyRef: {name: pipeline-db-rw, key: password}}}
             - {name: PGDATABASE, value: postgres}
           resources:
             requests: {memory: 128Mi, cpu: 100m}

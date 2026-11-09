@@ -309,7 +309,8 @@ class IndexCardTest(unittest.TestCase):
                       stocks.index_text(FakeDB([("FROM ticker_names", [])]), "zz"))
         self.assertEqual(stocks.find_index(FakeDB([]), "x'; DROP"), [])
         exact = FakeDB([("FROM ticker_names", [("^NSEI", "Nifty 50"), ("^NSEBANK", "Nifty Bank")]),
-                        ("FROM index_prices WHERE ticker", self.series(10))])
+                        ("FROM index_prices WHERE ticker", self.series(10)),
+                        ("universe_constituents", [])])
         self.assertIn("<b>Nifty 50</b>", stocks.index_text(exact, "^nsei"))
 
 
@@ -390,10 +391,100 @@ class LongTermTest(unittest.TestCase):
 
     def test_card_includes_the_block(self):
         rows = [(self.END - timedelta(days=3650 - i), 100.0 * 1.1 ** (i / 365)) for i in range(3651)]
-        text = stocks.index_card(FakeDB([("FROM index_prices", rows)]), "^NSEI", "Nifty 50")
+        text = stocks.index_card(FakeDB([("FROM index_prices", rows),
+                                         ("universe_constituents", [])]), "^NSEI", "Nifty 50")
         self.assertIn("<b>Long-term reference</b>", text)
         self.assertIn("interval '40 years'", "interval '40 years'")
         self.assertIn("<b>Reading: normal</b>", text)
+
+
+class IndexQuantTest(unittest.TestCase):
+    def quant_db(self, pe=None, pb=None, cap=None):
+        """Build a FakeDB answering the universe_constituents query and both
+        stock_fundamentals queries (pe/pb query passes 2 args, cap query 1)."""
+        members = [("AAPL",), ("MSFT",), ("GOOG",)]
+        fund_all = []
+        for i, sym in enumerate(("AAPL", "MSFT", "GOOG")):
+            if pe is not None and i < len(pe):
+                fund_all.append((sym, "pe", pe[i]))
+            if pb is not None and i < len(pb):
+                fund_all.append((sym, "pb", pb[i]))
+            if cap is not None and i < len(cap):
+                fund_all.append((sym, "market_cap", cap[i]))
+
+        def fund(args):
+            # pe/pb query: (symbols, ["pe", "pb"]) → 2 args → 3-tuples
+            # cap query:   (symbols,)            → 1 arg  → 2-tuples (symbol, value)
+            if len(args) > 1:
+                return [r for r in fund_all if r[1] in ("pe", "pb")]
+            return [(r[0], r[2]) for r in fund_all if r[1] == "market_cap"]
+
+        return FakeDB([("universe_constituents", lambda _: members),
+                       ("stock_fundamentals", fund)])
+
+    def test_median_pe_and_pb_and_total_cap(self):
+        db = self.quant_db(pe=[20.0, 30.0, 40.0], pb=[5.0, 10.0, 15.0],
+                           cap=[1e12, 2e12, 3e12])
+        pe, pb, cap, n_pe, n_pb = stocks.index_quant(db, "SP500")
+        self.assertEqual(pe, 30.0)              # median of [20, 30, 40]
+        self.assertEqual(pb, 10.0)              # median of [5, 10, 15]
+        self.assertEqual(cap, 6e12)
+        self.assertEqual(n_pe, 3)
+        self.assertEqual(n_pb, 3)
+
+    def test_even_count_median_averages_middle_two(self):
+        db = self.quant_db(pe=[10.0, 20.0])
+        pe, _, _, _, _ = stocks.index_quant(db, "NIFTY500")
+        self.assertEqual(pe, 15.0)              # (10 + 20) / 2
+
+    def test_missing_metrics_return_none(self):
+        db = self.quant_db(pe=[20.0])
+        pe, pb, cap, n_pe, n_pb = stocks.index_quant(db, "SP400")
+        self.assertEqual(pe, 20.0)
+        self.assertIsNone(pb)
+        self.assertIsNone(cap)
+        self.assertEqual(n_pe, 1)
+        self.assertEqual(n_pb, 0)
+
+    def test_no_members_returns_none(self):
+        db = FakeDB([("universe_constituents", [])])
+        self.assertIsNone(stocks.index_quant(db, "SP600"))
+
+    def test_no_fundamentals_returns_none(self):
+        db = FakeDB([("universe_constituents", [("AAPL",), ("MSFT",)]),
+                     ("stock_fundamentals", [])])
+        self.assertIsNone(stocks.index_quant(db, "SP500"))
+
+    def test_index_card_shows_quant_block_for_sp500(self):
+        db = FakeDB([
+            ("FROM index_prices", lambda _: [(day(9), 6000.0)]),
+            ("universe_constituents", lambda _: [("AAPL",), ("MSFT",)]),
+        ])
+        # stock_fundamentals: pe/pb query gets 2 args, cap query gets 1
+        fund_all = [("AAPL", "pe", 25.0), ("AAPL", "pb", 6.0), ("AAPL", "market_cap", 3e12),
+                    ("MSFT", "pe", 35.0), ("MSFT", "pb", 12.0), ("MSFT", "market_cap", 2.5e12)]
+
+        def fund(args):
+            if len(args) > 1:
+                return [r for r in fund_all if r[1] in ("pe", "pb")]
+            return [(r[0], r[2]) for r in fund_all if r[1] == "market_cap"]
+
+        db.answers.append(("stock_fundamentals", fund))
+        text = stocks.index_card(db, "^GSPC", "S&P 500")
+        self.assertIn("P/E (median)", text)
+        self.assertIn("P/B (median)", text)
+        self.assertIn("Market cap", text)
+        self.assertIn("30.0", text)              # median of [25, 35]
+        self.assertIn("5.50T", text)             # 5.5e12 → "5.50T"
+
+    def test_index_card_skips_quant_for_unmapped_ticker(self):
+        db = FakeDB([("FROM index_prices", lambda _: [(day(9), 7000.0)]),
+                     ("universe_constituents", [])])
+        text = stocks.index_card(db, "^VIX", "India VIX")
+        self.assertNotIn("P/E (median)", text)
+        self.assertNotIn("Market cap", text)
+
+
 
 
 class YtdTest(unittest.TestCase):
@@ -514,6 +605,7 @@ class StockCardTest(unittest.TestCase):
             ("ORDER BY ts DESC LIMIT 60", prices),
             ("ts <= %s::timestamptz", [(snapshot_close,)] if snapshot_close else []),
             ("ts < %s::timestamptz", [(3300.0,)]),                     # last close of 2025
+            ("max(close), min(close)", [(2400.0, 1900.0)]),            # 52-week close range
             ("FROM stock_metrics_daily", [("ret_1m", -0.016), ("ret_6m", -0.151),
                                           ("ret_12m", -0.275), ("sma50_ratio", 0.973),
                                           ("sma200_ratio", 0.883), ("pos_52w", 0.13),
@@ -533,6 +625,7 @@ class StockCardTest(unittest.TestCase):
                 ("fcf", "yfinance", fy(2026), 55e9),
                 ("total_debt", "yfinance", fy(2026), 50.0),
                 ("shareholder_equity", "yfinance", fy(2026), 200.0)]),
+            ("FROM v_latest_valuations", [(1800.0, -18.2, 6)]),
             ("FROM headline_entities", [(day(8), "TCS Q2 <live>", "ET", -0.82, "results")]),
         ])
 
@@ -555,13 +648,54 @@ class StockCardTest(unittest.TestCase):
         self.assertEqual(v["Revenue"], "+10.0%")
         self.assertNotIn("EPS", v)                                 # no EPS history: no row
         self.assertEqual(v["Debt / equity"], "0.25")
+        self.assertIn("Profile: <b>Defensive Quality</b> · drivers: Quality (77th), Value (73rd), Low-Risk (73rd)",
+                      text.replace("73th", "73rd"))
+        self.assertEqual(stocks.stock_archetype((0.60, 0.85, 0.75, 0.60, 0.65)), "Quality Compounder")
+        self.assertEqual(stocks.stock_archetype((0.65, 0.65, 0.80, 0.50, 0.50)), "GARP")
+        self.assertEqual(stocks.stock_archetype((0.85, 0.60, 0.40, 0.40, 0.50)), "Deep Value")
+        self.assertEqual(stocks.stock_archetype((0.80, 0.25, 0.30, 0.20, 0.45)), "Value Trap")
+        self.assertEqual(stocks.stock_archetype((0.40, 0.25, 0.30, 0.40, 0.25)), "High-Risk / Stressed")
+        self.assertEqual(stocks.stock_archetype((0.25, 0.30, 0.25, 0.25, 0.35)), "Lagging / Weak")
+        self.assertEqual(stocks.academic_archetype((0.60, 0.85, 0.75, 0.60, 0.65)),
+                         "QMJ + BAB Compounder (Asness 2019 / Frazzini 2014)")
+        self.assertEqual(stocks.academic_archetype((0.85, 0.65, 0.40, 0.40, 0.50)),
+                         "Piotroski-Filtered Value (Piotroski 2000 / Novy-Marx 2013)")
+        self.assertEqual(stocks.academic_archetype((0.20, 0.40, 0.80, 0.50, 0.50)),
+                         "Unprofitable Glamour Risk (Lakonishok 1994)")
+        self.assertAlmostEqual(stocks.academic_composite((0.60, 0.80, 0.70, 0.50, 0.90)), 70.0)
+        self.assertIn("Practitioner vs Academic lens:", text)
+        sci = stocks.scientific_diagnostics({
+            "total_assets": (1000.0, 920.0, fy(2026)),
+            "gross_profit": (350.0, 300.0, fy(2026)),
+            "net_income": (120.0, 100.0, fy(2026)),
+            "ocf": (160.0, 130.0, fy(2026)),
+            "total_revenue": (800.0, 700.0, fy(2026)),
+            "total_debt": (100.0, 120.0, fy(2026)),
+            "shareholder_equity": (600.0, 500.0, fy(2026)),
+            "current_assets": (400.0, 350.0, fy(2026)),
+            "current_liabilities": (150.0, 150.0, fy(2026)),
+            "shares_outstanding": (98.0, 100.0, fy(2026)),
+            "operating_income": (180.0, 150.0, fy(2026)),
+        })
+        self.assertAlmostEqual(sci["gpa"], 0.35)
+        self.assertAlmostEqual(sci["accruals"], -0.04)
+        self.assertAlmostEqual(sci["share_issuance"], -0.02)
+        self.assertEqual(sci["f_score"], (9, 9, "strong"))
+        self.assertEqual(sci["altman_z2"][1], "safe")
+        self.assertIn("Practitioner vs Research-Backed valuations:", text)
+        self.assertIn("[Practitioner —", text)
+        self.assertIn("[Research-Backed —", text)
         self.assertIn("• TCS Q2 &lt;live&gt;", text)
         self.assertIn("08 Oct · results · sentiment -0.82", text)
 
     def test_valuation_is_carried_to_the_latest_close(self):
         text = stocks.stock_card(self.db(snapshot_close=2000.0), self.ROW)
         v = pairs(text)
-        self.assertIn("<i>at the 09 Oct close</i>", text)
+        # a repriced value must never sit under an "as reported" label
+        self.assertNotIn("as reported", text)
+        self.assertIn("<i>at the 09 Oct close — P/E, P/B and market cap scaled from "
+                      "the 04 Oct snapshot by the price move (earnings, book value "
+                      "and shares assumed unchanged)</i>", text)
         self.assertEqual(v["P/E"], "22.0")                         # 20 × 2200/2000
         self.assertEqual(v["P/B"], "4.4")
         self.assertEqual(v["Market cap"], "1.10T")
@@ -570,7 +704,7 @@ class StockCardTest(unittest.TestCase):
 
     def test_valuation_falls_back_to_the_snapshot_and_says_so(self):
         text = stocks.stock_card(self.db(snapshot_close=None), self.ROW)
-        self.assertIn("<i>as reported 04 Oct</i>", text)
+        self.assertIn("<i>as reported 04 Oct — from the weekly fundamentals snapshot</i>", text)
         self.assertEqual(pairs(text)["P/E"], "20.0")
 
     def test_card_fits_a_phone(self):
@@ -580,6 +714,19 @@ class StockCardTest(unittest.TestCase):
     def test_no_prices(self):
         text = stocks.stock_card(FakeDB([("FROM stock_prices", [])]), self.ROW)
         self.assertIn("No price rows", text)
+
+    def test_symbol_narrative_strips_prefix_when_enabled(self):
+        import os
+        db = FakeDB([("FROM llm_narratives", [("per_symbol", "[TCS.NS#abc123] TCS trades at 22 P/E.")])])
+        orig = os.environ.get("STOCK_NARRATIVE")
+        os.environ["STOCK_NARRATIVE"] = "1"
+        try:
+            self.assertEqual(stocks.symbol_narrative(db, "TCS.NS"), "TCS trades at 22 P/E.")
+        finally:
+            if orig is None:
+                os.environ.pop("STOCK_NARRATIVE", None)
+            else:
+                os.environ["STOCK_NARRATIVE"] = orig
 
 
 class WatchParseTest(unittest.TestCase):
@@ -683,7 +830,7 @@ class TopTest(unittest.TestCase):
 
     def test_composite_table_shows_rank_first(self):
         lines = pre_lines(stocks.top_text(self.db(), "composite", "NIFTY500"))
-        self.assertEqual(lines[0].split(), ["#", "Score", "YTD", "Conf"])
+        self.assertEqual(lines[0].split(), ["#", "Composite", "YTD", "Conf"])
         self.assertEqual(lines[1].split(), ["12", "A", "61.0", "+40%", "99"])
 
     def test_factor_column_comes_from_the_whitelist(self):
@@ -741,6 +888,8 @@ class MultibaggerTest(unittest.TestCase):
         self.assertIsNone(stocks.cagr([(fy(2026), 110.0), (fy(2025), 100.0)]))   # one year only
         self.assertIsNone(stocks.cagr([(fy(2026), 50.0), (fy(2023), -10.0)]))    # from a loss
         self.assertIsNone(stocks.cagr([(fy(2026), 50.0)]))
+        # terminal-year collapse (>15% drop vs prior year) rejected despite positive 3y endpoint CAGR
+        self.assertIsNone(stocks.cagr([(fy(2026), 160.0), (fy(2025), 320.0), (fy(2023), 100.0)]))
 
     def test_a_clean_company_passes_and_is_scored(self):
         got, reason = self.candidate()
@@ -773,6 +922,7 @@ class MultibaggerTest(unittest.TestCase):
 
     def test_financials_are_exempt_from_the_debt_gate(self):
         self.assertIsNone(self.candidate(sector="Financial Services", debt=900.0)[1])
+        self.assertIsNone(self.candidate(sector="Financials", debt=900.0)[1])
 
     def test_roe_falls_back_to_income_over_equity(self):
         got, reason = self.candidate(snap={"roe": None})          # 30 / 100 = 30%
@@ -809,6 +959,9 @@ class MultibaggerTest(unittest.TestCase):
         ranked, failed = stocks.multibagger_rank(*self.rank_inputs())
         self.assertEqual([c["symbol"] for c in ranked], ["GOOD.NS"])
         self.assertEqual(failed, {"size": 1, "growth": 1, "growth history": 3})
+        acad_ranked, acad_failed = stocks.multibagger_academic_rank(*self.rank_inputs())
+        self.assertEqual([c["symbol"] for c in acad_ranked], ["GOOD.NS", "SLOW.NS"])
+        self.assertIn("size (SMB)", acad_failed)
 
     def test_message(self):
         names, fundamentals, metric_rows = self.rank_inputs()
@@ -884,10 +1037,20 @@ class TrackTest(unittest.TestCase):
                      ("WITH px", [(1, day(5), 0.0073, 0.0066, 20, 12)])])
         text = stocks.track_text(db)
         lines = pre_lines(text)
-        self.assertEqual(lines[0].split(), ["After", "Picks", "All", "Edge", "Won"])
+        self.assertEqual(lines[0].split(), ["After", "Picks", "Univ", "Edge", "Won"])
         self.assertEqual(lines[1].split(), ["1", "day", "+0.73%", "+0.66%", "+0.07%", "1/1"])
         self.assertEqual(lines[2].split(), ["1", "week", "–", "–", "–", "–"])
         self.assertIn("anecdote", text)
+        self.assertIn("Edge = Picks − Univ", text)
+        for line in lines:
+            self.assertLessEqual(len(line), PHONE_WIDTH, line)
+
+    def test_table_fits_a_phone_at_triple_digit_run_counts(self):
+        # daily runs pass 100 within months; 'Won' = '100/120' must still fit
+        rows = [(1, day(i % 9 + 1), 0.0073, 0.0066, 20, 12) for i in range(120)]
+        db = FakeDB([("GROUP BY ts", [(day(5),)]), ("WITH px", rows)])
+        lines = pre_lines(stocks.track_text(db))
+        self.assertIn("120/120", lines[1])
         for line in lines:
             self.assertLessEqual(len(line), PHONE_WIDTH, line)
 
@@ -942,10 +1105,12 @@ class AlertTest(unittest.TestCase):
     def test_sections_silent_without_watchlist_or_changes(self):
         db = FakeDB([("GROUP BY ts", [(day(9),), (day(8),)]),
                      ("s.rank <=", [(day(9), "A", "Alpha", 1), (day(8), "A", "Alpha", 1)]),
+                     ("FROM v_valuations_recent", []),
                      ("FROM watchlist", []), ("FROM stock_prices", [])])
         self.assertEqual(stocks.alert_sections(db, self.NOW), [])
 
     def test_sections_report_mover_big_move_cross_and_event(self):
+        from datetime import date as _date
         db = FakeDB([
             ("GROUP BY ts", [(day(9),), (day(8),)]),
             ("s.rank <=", [(day(9), "NEW", "Newco", 3), (day(8), "OLD", "Oldco", 4)]),
@@ -954,6 +1119,8 @@ class AlertTest(unittest.TestCase):
             ("FROM stock_metrics_daily", [("TCS.NS", "sma200_ratio", day(9), 1.01),
                                           ("TCS.NS", "sma200_ratio", day(8), 0.98)]),
             ("FROM headline_events", [("TCS.NS", "results", "TCS Q2 profit up <8%>", day(9))]),
+            ("FROM earnings_calendar", [("TCS.NS", _date(2026, 10, 12))]),
+            ("FROM v_valuations_recent", []),
             ("FROM stock_prices", []),                                   # ytd lookups
         ])
         text = "\n".join(stocks.alert_sections(db, self.NOW))
@@ -963,11 +1130,12 @@ class AlertTest(unittest.TestCase):
         self.assertIn("<b>TCS</b> moved +6.0%", text)
         self.assertIn("<b>TCS</b> crossed above its 200-day average", text)
         self.assertIn("<b>TCS</b> · results\n  TCS Q2 profit up &lt;8%&gt;", text)
+        self.assertIn("<b>TCS</b> reports earnings Mon 12 Oct", text)
 
     def test_stale_screener_run_is_not_re_announced(self):
         db = FakeDB([("GROUP BY ts", [(day(7),), (day(6),)]),
                      ("s.rank <=", [(day(7), "NEW", "Newco", 3), (day(6), "OLD", "Oldco", 4)]),
-                     ("FROM watchlist", [])])
+                     ("FROM v_valuations_recent", []), ("FROM watchlist", [])])
         self.assertEqual(stocks.alert_sections(db, self.NOW), [])
 
     def test_missing_watchlist_table_degrades(self):
@@ -977,8 +1145,392 @@ class AlertTest(unittest.TestCase):
         def boom(_args):
             raise UndefinedTable("relation watchlist does not exist")
 
-        db = FakeDB([("GROUP BY ts", []), ("FROM watchlist", boom)])
+        db = FakeDB([("GROUP BY ts", []), ("FROM v_valuations_recent", []),
+                     ("FROM watchlist", boom)])
         self.assertEqual(stocks.alert_sections(db, self.NOW), [])
+
+
+class ValuationWatchTest(unittest.TestCase):
+    """ADR 0026 amendment (owner-approved 2026-10-26): buy-watch alert lines."""
+    NOW = datetime(2026, 10, 10, 9, 45, tzinfo=timezone.utc)
+
+    @staticmethod
+    def cand(ts, sym, close=100.0, fair=140.0, up=40.0, methods=6, above=5,
+             universe="SP500"):
+        return (ts, sym, universe, close, fair, up, methods, above)
+
+    def db(self, cands, ctx, earnings=()):
+        return FakeDB([("FROM v_valuations_recent", cands),
+                       ("sector_styles st", ctx),
+                       ("FROM earnings_calendar", list(earnings))])
+
+    def test_entry_fires_with_reasoning_and_lens(self):
+        db = self.db([self.cand(day(9), "CHEAP"), self.cand(day(8), "OTHER")],
+                     [("CHEAP", 12, 71.0, "Cheap & Co <L>", "Financials",
+                       "Banks: leverage is the business model")])
+        lines = stocks.alert_valuation(db, self.NOW)
+        self.assertEqual(len(lines), 1)
+        line = lines[0]
+        self.assertIn("Cheap &amp; Co &lt;L&gt;", line)          # escaped
+        self.assertIn("fair <b>140.00</b> vs close 100.00 (+40%", line)
+        self.assertIn("5/6 methods above close", line)
+        self.assertIn("rank <b>#12</b>", line)
+        self.assertIn("Financials", line)
+        self.assertIn("not advice", line)
+
+    def test_already_in_the_set_yesterday_stays_silent(self):
+        db = self.db([self.cand(day(9), "CHEAP"), self.cand(day(8), "CHEAP")],
+                     [("CHEAP", 12, 71.0, "Cheap", "Financials", None)])
+        self.assertEqual(stocks.alert_valuation(db, self.NOW), [])
+
+    def test_stale_valuation_run_never_fires(self):
+        db = self.db([self.cand(day(6), "CHEAP")], [])
+        self.assertEqual(stocks.alert_valuation(db, self.NOW), [])
+
+    def test_rank_gate_names_outside_top50_dropped(self):
+        db = self.db([self.cand(day(9), "CHEAP")], [])   # ctx query returns nothing
+        self.assertEqual(stocks.alert_valuation(db, self.NOW), [])
+
+    def test_agreement_gate_needs_three_methods_above_close(self):
+        db = self.db([self.cand(day(9), "CHEAP", above=2)], [])
+        self.assertEqual(stocks.alert_valuation(db, self.NOW), [])
+
+    def test_capped_at_five_lines_best_upside_first(self):
+        cands = [self.cand(day(9), f"S{i}", up=20.0 + i) for i in range(1, 8)]
+        ctx = [(f"S{i}", i, 60.0, f"Name{i}", "Energy", None) for i in range(1, 8)]
+        lines = stocks.alert_valuation(self.db(cands, ctx), self.NOW)
+        self.assertEqual(len(lines), stocks.VAL_MAX_LINES)
+        self.assertIn("Name7", lines[0])                 # highest upside leads
+
+    def test_missing_table_degrades_silently(self):
+        class UndefinedTable(Exception):
+            pass
+
+        def boom(_args):
+            raise UndefinedTable("relation v_valuations_recent does not exist")
+
+        db = FakeDB([("FROM v_valuations_recent", boom)])
+        self.assertEqual(stocks.alert_valuation(db, self.NOW), [])
+
+    def test_earnings_within_three_days_suppresses_the_line(self):
+        from datetime import date as _date
+        db = self.db([self.cand(day(9), "CHEAP")],
+                     [("CHEAP", 12, 71.0, "Cheap", "Financials", None)],
+                     earnings=[("CHEAP", _date(2026, 10, 12))])
+        self.assertEqual(stocks.alert_valuation(db, self.NOW), [])
+
+    def test_missing_earnings_table_does_not_block_the_line(self):
+        class UndefinedTable(Exception):
+            pass
+
+        def boom(_args):
+            raise UndefinedTable("relation earnings_calendar does not exist")
+
+        db = FakeDB([("FROM v_valuations_recent", [self.cand(day(9), "CHEAP")]),
+                     ("sector_styles st",
+                      [("CHEAP", 12, 71.0, "Cheap", "Financials", None)]),
+                     ("FROM earnings_calendar", boom)])
+        self.assertEqual(len(stocks.alert_valuation(db, self.NOW)), 1)
+
+
+class RegimeTest(unittest.TestCase):
+    def db(self, breadth, trend, mom):
+        return FakeDB([("sma200_ratio", [(breadth,)]),
+                       ("FROM index_prices", [(trend,)]),
+                       ("FROM factor_returns", [(mom,)])])
+
+    def test_all_green(self):
+        rows = stocks.regime(self.db(0.72, True, True))
+        self.assertEqual(len(rows), 2)
+        label, light, parts = rows[0]
+        self.assertEqual((label, light), ("US", "🟢"))
+        self.assertIn("breadth 72% above 200d", parts[0])
+
+    def test_all_red(self):
+        _, light, _ = stocks.regime(self.db(0.31, False, False))[0]
+        self.assertEqual(light, "🔴")
+
+    def test_mixed_is_yellow(self):
+        _, light, _ = stocks.regime(self.db(0.72, False, True))[0]
+        self.assertEqual(light, "🟡")
+
+    def test_stale_momentum_leg_drops_out(self):
+        rows = stocks.regime(self.db(0.72, True, None))
+        _, light, parts = rows[0]
+        self.assertEqual(light, "🟢")          # 2 of 2 available legs green
+        self.assertEqual(len(parts), 2)
+
+    def test_regime_line_and_text(self):
+        db = self.db(0.72, True, True)
+        self.assertIn("🟢 US", stocks.regime_line(db))
+        db = self.db(0.72, True, True)
+        self.assertIn("<b>US</b>", stocks.regime_text(db))
+
+
+class EarningsHelpersTest(unittest.TestCase):
+    def test_lines_sorted_soonest_first(self):
+        from datetime import date as _date
+        db = FakeDB([("FROM earnings_calendar",
+                      [("MSFT", _date(2026, 10, 29)),
+                       ("AAPL.NS", _date(2026, 10, 27))])])
+        lines = stocks.earnings_lines(db, ["MSFT", "AAPL.NS"])
+        self.assertEqual(len(lines), 2)
+        self.assertIn("AAPL", lines[0])
+        self.assertIn("Tue 27 Oct", lines[0])
+
+    def test_no_symbols_short_circuits(self):
+        db = FakeDB([])
+        self.assertEqual(stocks.earnings_soon(db, []), {})
+        self.assertEqual(db.calls, [])
+
+    def test_missing_table_returns_empty(self):
+        class UndefinedTable(Exception):
+            pass
+
+        def boom(_args):
+            raise UndefinedTable("relation earnings_calendar does not exist")
+
+        db = FakeDB([("FROM earnings_calendar", boom)])
+        self.assertEqual(stocks.earnings_soon(db, ["AAPL"]), {})
+
+
+class SectorsCardTest(unittest.TestCase):
+    ROWS = [("Energy", 21, 18.7, -42.0, "Earnings follow the commodity price cycle"),
+            ("Financials", 76, 14.2, -24.0, None)]
+
+    def test_card_lists_sectors_with_upside(self):
+        db = FakeDB([("FROM sector_metrics", list(reversed(self.ROWS)))])
+        text = stocks.sectors_card(db, "/sectors sp500")
+        self.assertIn("<b>Sectors — SP500</b>", text)
+        self.assertIn("<pre>", text)
+        self.assertIn("Financials", text)
+        self.assertIn("-24%", text)
+        self.assertIn("not advice", text.lower())
+
+    def test_default_universe_is_nifty(self):
+        db = FakeDB([("FROM sector_metrics", self.ROWS)])
+        self.assertIn("NIFTY500", stocks.sectors_card(db, "/sectors"))
+
+    def test_empty_table_says_so(self):
+        db = FakeDB([("FROM sector_metrics", [])])
+        self.assertIn("No sector data", stocks.sectors_card(db, "/sectors sp500"))
+
+
+class CardFairValueTest(StockCardTest):
+    def test_card_carries_the_fair_value_line(self):
+        text = stocks.stock_card(self.db(), self.ROW)
+        self.assertIn("Fair value <b>1,800.00</b> (-18% vs close, "
+                      "median of 6 methods", text)
+        self.assertIn("ADR 0026, not advice", text)
+
+
+class SectorsUniverseParseTest(unittest.TestCase):
+    ROWS = [("Energy", 21, 18.7, -42.0, None)]
+
+    def test_sp600_goes_to_sp600_not_sp500(self):
+        db = FakeDB([("FROM sector_metrics", lambda args: self.ROWS
+                      if args[0] == "SP600" else [])])
+        text = stocks.sectors_card(db, "/sectors sp600")
+        self.assertIn("SP600", text)
+        self.assertIn("Energy", text)
+
+    def test_unknown_universe_is_an_error_not_sp500(self):
+        db = FakeDB([])
+        text = stocks.sectors_card(db, "/sectors spx")
+        self.assertIn("Unknown universe", text)
+        self.assertEqual(db.calls, [])
+
+    def test_bare_command_defaults_to_nifty(self):
+        db = FakeDB([("FROM sector_metrics", lambda args: self.ROWS
+                      if args[0] == "NIFTY500" else [])])
+        self.assertIn("NIFTY500", stocks.sectors_card(db, "/sectors"))
+
+
+class EarningsCommandTest(unittest.TestCase):
+    def test_watchlist_names_starred_and_sorted(self):
+        from datetime import date as _date
+        db = FakeDB([("FROM watchlist", [("AAPL",)]),
+                     ("WHERE rank <= 25", [("MSFT",)]),
+                     ("FROM earnings_calendar",
+                      [("AAPL", _date(2026, 10, 29)), ("MSFT", _date(2026, 10, 28))])])
+        text = stocks.earnings_text(db, "123")
+        lines = text.splitlines()
+        self.assertIn("MSFT", lines[1])          # soonest first
+        self.assertIn("AAPL</b> ★", lines[2])    # watchlist starred
+    def test_empty_calendar_message(self):
+        db = FakeDB([("FROM watchlist", []), ("WHERE rank <= 25", []),
+                     ("FROM earnings_calendar", [])])
+        self.assertIn("No earnings dates", stocks.earnings_text(db, "123"))
+
+
+class ScorecardCommandTest(unittest.TestCase):
+    def test_counts_without_outcomes(self):
+        from datetime import date as _date
+        db = FakeDB([("FROM prediction_snapshots GROUP BY kind",
+                      [("screener_rank", 1419, _date(2026, 10, 27), _date(2026, 10, 27))]),
+                     ("prediction_outcomes", [])])
+        text = stocks.scorecard_text(db)
+        self.assertIn("1,419 snapshots", text)
+        self.assertIn("No resolved outcomes yet", text)
+
+    def test_decile_spread_renders(self):
+        from datetime import date as _date
+        db = FakeDB([("FROM prediction_snapshots GROUP BY kind",
+                      [("screener_rank", 100, _date(2026, 10, 1), _date(2026, 10, 27))]),
+                     ("prediction_outcomes", [("screener_rank", 30, 0.042, -0.013, 900)])])
+        text = stocks.scorecard_text(db)
+        self.assertIn("d1 +4.2% vs d10 -1.3%", text)
+        line = stocks.scorecard_line(FakeDB([
+            ("prediction_outcomes", [("screener_rank", 30, 0.042, -0.013, 900)])
+        ]))
+        self.assertIn("top decile <b>+4.2%</b> vs bottom <b>-1.3%</b>", line)
+
+    def test_missing_table_degrades(self):
+        class UndefinedTable(Exception):
+            pass
+
+        def boom(_args):
+            raise UndefinedTable("relation prediction_snapshots does not exist")
+        db = FakeDB([("FROM prediction_snapshots GROUP BY kind", boom)])
+        self.assertIn("not created yet", stocks.scorecard_text(db))
+
+
+class ValuationCommandTest(unittest.TestCase):
+    ROW = ("PLTR", "Palantir Technologies Inc.", "Technology", "SP500", "USD")
+
+    def db(self):
+        ts = day(9)
+        return FakeDB([
+            ("upper(symbol) = ANY", [self.ROW]),
+            ("FROM v_latest_valuations", [(ts, 100.0,   # close
+                                          110.0, 105.0, 90.0, 120.0, 95.0,
+                                          100.0, 108.0, 115.0, 102.0, 130.0,
+                                          108.0, 8.0, 15, 0.095, 0.06,
+                                          7, 99.0, 103.0, 107.0,
+                                          101.0, 104.0, 106.0, 8,
+                                          110.0, 7, 108.0, 15)])])
+
+    def test_shows_header_close_and_fair_value(self):
+        text = stocks.valuation_text(self.db(), "pltr")
+        self.assertIn("<b>Palantir Technologies Inc.</b>", text)
+        self.assertIn("PLTR · Technology · SP500", text)
+        self.assertIn("<b>100.00 USD</b>  <i>09 Oct close</i>", text)
+        self.assertIn("<b>Fair value</b> 108.00  (+8.0% vs close)", text)
+        self.assertIn("15 method(s) produced a value · 7 above close", text)
+
+    def test_practitioner_and_academic_medians(self):
+        text = stocks.valuation_text(self.db(), "pltr")
+        self.assertIn("Practitioner median <b>106.00</b> (8m)", text)
+        self.assertIn("Academic median <b>110.00</b> (7m)", text)
+        self.assertIn("Discount rate 9.5%", text)
+        self.assertIn("growth used 6.0%", text)
+
+    def test_all_15_methods_grouped_by_lens(self):
+        text = stocks.valuation_text(self.db(), "pltr")
+        self.assertIn("<b>Practitioner methods</b>", text)
+        self.assertIn("<b>Research-Backed methods</b>", text)
+        # Graham 110 > close 100 → flagged above close
+        self.assertIn("Graham sqrt(22.5×EPS×BVPS): 110.00 ↑above close", text)
+        # FCF yield 90 < close 100 → not flagged
+        self.assertIn("FCF yield perpetuity: 90.00", text)
+        self.assertNotIn("FCF yield perpetuity: 90.00 ↑above close", text)
+        self.assertIn("Damodaran FCFF: 102.00 ↑above close", text)
+        self.assertIn("Buyback + Div DDM: 104.00 ↑above close", text)
+        self.assertIn("not advice", text.lower())
+
+    def test_no_rows_says_so(self):
+        db = FakeDB([("upper(symbol) = ANY", [self.ROW]),
+                     ("FROM v_latest_valuations", [])])
+        text = stocks.valuation_text(db, "pltr")
+        self.assertIn("No valuation rows", text)
+        self.assertIn("Palantir Technologies Inc.</b>", text)
+
+    def test_unresolvable_symbol_messages(self):
+        db = FakeDB([("upper(symbol) = ANY", []), ("name ILIKE", []),
+                     ("WHERE active ORDER BY symbol", [])])
+        self.assertIn("No stock matching", stocks.valuation_text(db, "zzz"))
+
+
+class CalibrationCommandTest(unittest.TestCase):
+    def db(self):
+        return FakeDB([("FROM v_latest_calibration", [
+            (30, "factor_ic", "value", "SP500", 450, 0.042, 0.011, "ok"),
+            (30, "factor_ic", "quality", "SP500", 450, 0.038, 0.009, "ok"),
+            (30, "factor_ic", "growth", "SP500", 450, 0.029, 0.008, "ok"),
+            (91, "archetype_ret", "Quality Compounder", "SP500", 60, 0.031, None, "ok"),
+            (91, "academic_archetype_ret", "QMJ + BAB Compounder", "SP500", 55, 0.028, None, "ok"),
+            (91, "archetype_ret", "Value Trap", "SP500", 40, -0.012, None, "ok"),
+            (91, "mb_gmv", "debt gate", "SP500", 200, 0.018, None, "ok"),
+            (91, "shrunk_weight", "value", "ALL", 8, 0.27, None, "proposed"),
+            (91, "shrunk_weight", "quality", "ALL", 8, 0.23, None, "proposed"),
+        ])])
+
+    def test_shows_factor_ic(self):
+        text = stocks.calibration_text(self.db())
+        self.assertIn("<b>Factor &amp; Archetype Calibration</b>", text)
+        self.assertIn("Factor IC (cross-sectional Spearman rank IC)", text)
+        self.assertIn("value (SP500, n=450): 0.042 / 0.011", text)
+        self.assertIn("quality (SP500, n=450): 0.038 / 0.009", text)
+
+    def test_shows_archetype_and_mb_gmv(self):
+        text = stocks.calibration_text(self.db())
+        self.assertIn("Practitioner Archetype Excess Return", text)
+        self.assertIn("Academic Archetype Excess Return", text)
+        self.assertIn("Multibagger Gate Marginal Value", text)
+        self.assertIn("Quality Compounder (SP500, n=60): 0.031", text)
+        self.assertIn("debt gate (SP500, n=200): 0.018", text)
+
+    def test_shows_shrunk_weights(self):
+        text = stocks.calibration_text(self.db())
+        self.assertIn("Shrunk Factor Weight (vs prior)", text)
+        self.assertIn("value (ALL, n=8): 0.27", text)
+        self.assertIn("quality (ALL, n=8): 0.23", text)
+        self.assertIn("not a forecast", text.lower())
+
+    def test_missing_table_degrades(self):
+        class UndefinedTable(Exception):
+            pass
+
+        def boom(_args):
+            raise UndefinedTable("relation v_latest_calibration does not exist")
+
+        self.assertIn("not created yet", stocks.calibration_text(FakeDB([("FROM v_latest_calibration", boom)])))
+
+
+class MethodsCommandTest(unittest.TestCase):
+    ROWS = [
+        ("graham", "Graham sqrt(22.5×EPS×BVPS)", "valuation", "Practitioner",
+         "Graham", "Graham (1949, The Intelligent Investor)", "sqrt(22.5 * EPS * BVPS)"),
+        ("peg_lynch", "Lynch PEG=1", "valuation", "Practitioner",
+         "Lynch", "Lynch (1989, One Up On Wall Street)", "EPS * 100 * clamp(g_eps, 5%, 25%)"),
+        ("piotroski_f_score", "Piotroski F-Score", "scientific", "Research-Backed",
+         "Piotroski", "Piotroski (2000, JAR)", "9 binary accounting signals"),
+        ("composite", "Practitioner Composite", "composite", "Practitioner",
+         "", "ADR 0026", "0.25×value + 0.25×quality + 0.20×growth + 0.20×momentum + 0.10×risk"),
+    ]
+
+    def db(self):
+        return FakeDB([("FROM v_valuation_methods", self.ROWS)])
+
+    def test_shows_all_methods_grouped_by_category(self):
+        text = stocks.methods_text(self.db())
+        self.assertIn("<b>Valuation &amp; Scientific Method Catalog</b>", text)
+        self.assertIn("<b>valuation</b>", text)
+        self.assertIn("<b>scientific</b>", text)
+        self.assertIn("<b>composite</b>", text)
+        self.assertIn("Graham sqrt(22.5×EPS×BVPS) [Practitioner]", text)
+        self.assertIn("sqrt(22.5 * EPS * BVPS)", text)
+        self.assertIn("Graham (1949, The Intelligent Investor)", text)
+        self.assertIn("not advice", text.lower())
+
+    def test_missing_table_degrades(self):
+        class UndefinedTable(Exception):
+            pass
+
+        def boom(_args):
+            raise UndefinedTable("relation v_valuation_methods does not exist")
+
+        self.assertIn("not created yet", stocks.methods_text(FakeDB([("FROM v_valuation_methods", boom)])))
 
 
 if __name__ == "__main__":

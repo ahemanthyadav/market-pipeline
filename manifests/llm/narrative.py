@@ -26,9 +26,11 @@ IST = timezone(timedelta(hours=5, minutes=30))
 KIND = "daily_market"
 INDICES = [("^NSEI", "Nifty 50"), ("^BSESN", "Sensex"), ("^NSEBANK", "Nifty Bank"),
            ("^INDIAVIX", "India VIX"), ("^GSPC", "S&P 500"), ("^IXIC", "Nasdaq"), ("GC=F", "Gold")]
-SYSTEM = ("You write a short daily market note for Indian investors. Use ONLY the numbers in the facts JSON, "
-          "copied exactly as given (same rounding). Do not compute new numbers, do not mention dates, do not give "
-          "advice or predictions. 2 to 4 sentences, plain English. Reply as JSON: {\"summary\": \"...\"}.")
+SYSTEM = ("You write a short daily market note for Indian investors. Use ONLY the numbers and direction labels "
+          "in the facts JSON, copied exactly as given (same rounding). Do not compute new numbers, do not mention "
+          "dates, do not give advice or predictions. For FII/DII flows, use fii_direction/dii_direction "
+          "(\"inflow\"/\"outflow\"/\"flat\") to state direction, not the sign of the amount. 2 to 4 sentences, "
+          "plain English. Reply as JSON: {\"summary\": \"...\"}.")
 
 
 def connect():
@@ -62,6 +64,10 @@ def build_facts(cur, as_of=None):
     cur.execute("SELECT flow_type, amount FROM capital_flows WHERE direction='net' "
                 "AND ts = (SELECT max(ts) FROM capital_flows WHERE ts < %s AND ts > %s::date - 15)", (end, end))
     f["flows_rs_cr"] = {t: round(a) for t, a in cur.fetchall()}
+    fii = f["flows_rs_cr"].get("FII", 0)
+    dii = f["flows_rs_cr"].get("DII", 0)
+    f["fii_direction"] = "inflow" if fii > 0 else "outflow" if fii < 0 else "flat"
+    f["dii_direction"] = "inflow" if dii > 0 else "outflow" if dii < 0 else "flat"
     cur.execute("SELECT avg(sentiment_score) FROM news_sentiment WHERE ts < %s AND ts > %s::date - 7", (end, end))
     s = cur.fetchone()[0]
     f["sentiment_7d"] = None if s is None else round(s, 2)

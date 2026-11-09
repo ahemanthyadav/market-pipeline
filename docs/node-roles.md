@@ -15,6 +15,7 @@
 | **pi2** | Pi 3 B+, 1 GB | **Control plane** | k3s server (API, scheduler, datastore, CoreDNS, Traefik) | none (**cordoned**) | Whole cluster loses its API; nothing new schedules (see §4) |
 | **pi3** | Pi 3 B, 1 GB, SSD | Worker | Grafana, backups, general ingestion pool | `grafana`, `pg-backup`, `restore-drill` (Job) | No dashboards, no nightly dump; unpinned jobs land on pi1 only |
 | **tx2** (`ahytx2-desktop`) | Jetson TX2, 7.7 GB, eMMC + 224 GB SSD | Worker (GPU, tainted) | **The database**, NLP jobs, image build host | `timescaledb`, `sentiment-scorer`, `headline-ner` | **Every pipeline write fails** (DB down); data is safe on the Retain PV |
+| **orin-nano** (new) | Jetson Orin Nano, 4 GB or 8 GB, SSD | Worker (GPU/CPU, tainted) | **STT/TTS inference only** — voice layer | `stt-service` (Whisper), `tts-service` (Piper) | Voice input/output stops; Telegram text commands and marketview still work |
 
 ## 2. Per node
 
@@ -36,7 +37,7 @@
   allow-list — ADR 0012), CronJobs `telegram-digest` (08:00 IST — the only job with an explicit timeZone) and `telegram-alerts` (02:45).
   Pinned so image imports are needed on one node only.
 - **Unpinned jobs:** eligible for any of the 18 unpinned CronJobs (§3.1) — **only if the image is imported on pi1** (no registry).
-  `telegram-digest:v24` (2026-10-26: HTML-safe trim, getMe retry, rule-9 bounds, liveness heartbeat; non-root) on pi1 only (pinned).
+  `telegram-digest:v37` (2026-10-31: symbol-aware routing + live-universe lookup, stale nicknames fixed) on pi1 only (pinned).
   `screener:v15` (2026-10-18: data foundations, facts reader, NSE fundamentals) + `pipeline-health:v6` (2026-10-19: llm_narrative + llm_gateway heartbeat feeds) imported on pi1 and pi3 (v10–v14 + health v4/v5 kept for rollback — remove old tags one by one, never `--prune`; pi2e, never `--prune`; pi2 skipped — cordoned). The NSE backfill Job runs on pi1/pi3 (network-bound, ~19 h). After the
   10-18 prune incident pi1 holds all 14 images its jobs need (incl. telegram-digest:v8), pi3 all 13 floating ones — verified against the manifests.
   The earlier image gap is closed: `yfinance-fetcher:v5`, `nse-fetcher:v4` and `screener:v10` (v9 kept) are imported on **both** pi1 and
@@ -96,6 +97,19 @@
 - **Host jobs:** node-stats logger (also records `db_procs`, the DB-up signal) — root cron added 2026-10-11 (crontab was
   empty; AR-12).
 - **Watch:** eMMC alert at > 85 % (54 % after the 2026-10-10 move); DB + 4 Gi scorer share 7.7 GB RAM.
+
+### orin-nano — STT/TTS voice inference (new node)
+
+- **Does:** Runs `stt-service` (Whisper `tiny`/`base` via faster-whisper with CUDA) and `tts-service` (Piper). Exposed inside
+  the cluster only via ClusterIP Services (`stt-service.market-data.svc.cluster.local:8000`, `tts-service...:8001`).
+- **Pinned (taint `hardware=orin:NoSchedule` + nodeSelector `hardware: orin`):** only STT/TTS pods schedule here; no other
+  CronJob lands on it.
+- **Not responsible for:** TimescaleDB (stays on TX2), ingestion fetchers (pi1/pi3), Grafana (pi3). Orin Nano is voice-only.
+- **Host jobs:** node-stats logger — root cron added at join (AR-12 pattern).
+- **Resources:** Whisper `tiny` + CUDA on 4 GB Orin Nano is workable but tight; 8 GB preferred. Voice models and CUDA
+  context live in the container image, built on TX2 per §6 and distributed as tarballs.
+- **Watch:** GPU memory is shared with system RAM on Orin Nano — do not co-locate other GPU workloads (e.g. future
+  3090-style RAG) without re-checking RAM.
 
 ## 3. Every scheduled job, by node
 

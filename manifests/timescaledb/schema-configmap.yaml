@@ -530,3 +530,661 @@ data:
     -- Point-in-time lookup: members of a universe on a given day.
     CREATE INDEX IF NOT EXISTS ix_index_membership_window
       ON index_membership (universe, added, removed);
+  15-stock-valuations.sql: |
+    -- Deterministic intrinsic-value estimates for EVERY active symbol
+    -- (ADR 0026, 2026-10-26): the famous methods, each NULL when its inputs
+    -- don't apply (losses, no dividend, ROE below the discount rate, ...).
+    -- fair_value = median of the methods that produced a number. Assumptions
+    -- (ERP 4.5%, terminal growth 2.5%, growth clamps, 25% tax in EPV, EPV
+    -- carries no cash credit) are pinned in ADR 0026. Purely DESCRIPTIVE:
+    -- never feeds stock_scores/composite without an EV-0 pass.
+    CREATE TABLE IF NOT EXISTS stock_valuations (
+      symbol          TEXT NOT NULL,
+      ts              TIMESTAMPTZ NOT NULL,     -- valuation date 00:00 UTC
+      universe        TEXT NOT NULL,
+      close           DOUBLE PRECISION NOT NULL,
+      graham          DOUBLE PRECISION,  -- sqrt(22.5 * EPS * BVPS)
+      peer_multiple   DOUBLE PRECISION,  -- sector-median P/E x EPS (P/B x BVPS where P/E misleads)
+      fcf_yield       DOUBLE PRECISION,  -- FCF/share / r (perpetuity, no growth)
+      dcf             DOUBLE PRECISION,  -- 2-stage FCF DCF: 5y at clamped CAGR, terminal 2.5%
+      ddm             DOUBLE PRECISION,  -- Gordon growth on dividends/share
+      epv             DOUBLE PRECISION,  -- Greenwald: norm. EBIT x (1-25%) / r - debt, per share
+      residual_income DOUBLE PRECISION,  -- justified P/B: (ROE-g)/(r-g) x BVPS
+      peg_lynch       DOUBLE PRECISION,  -- PEG=1: EPS x 100 x clamped EPS CAGR
+      fair_value      DOUBLE PRECISION,  -- median of the available methods
+      upside_pct      DOUBLE PRECISION,
+      methods         INT NOT NULL,
+      discount_rate   DOUBLE PRECISION,  -- (10y + ERP), decimal
+      growth_used     DOUBLE PRECISION,  -- clamped revenue CAGR fed to the DCF, decimal
+      PRIMARY KEY (symbol, ts)
+    );
+    SELECT create_hypertable('stock_valuations', 'ts', if_not_exists => TRUE);
+    SELECT set_chunk_time_interval('stock_valuations', INTERVAL '365 days');
+
+  16-metric-relevance.sql: |
+    -- Which metrics matter per sector (ADR 0026, 2026-10-26). Two normalized
+    -- tables: every universe_constituents.sector maps to a STYLE, each style
+    -- carries metric weights: 3 primary / 2 secondary / 1 context /
+    -- 0 actively misleading (with the reason). Consumed by valuation.py
+    -- (method selection), stock_report.py and the bot's /stock card.
+    -- Curated seed — edit HERE and re-apply (upserts), never ad hoc.
+    CREATE TABLE IF NOT EXISTS sector_styles (
+      sector TEXT PRIMARY KEY,            -- exact universe_constituents.sector value
+      style  TEXT NOT NULL,               -- shared lens across both taxonomies
+      cyclical BOOLEAN NOT NULL,
+      note   TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS metric_relevance (
+      style  TEXT NOT NULL,
+      metric TEXT NOT NULL,               -- stock_fundamentals metric name
+      weight SMALLINT NOT NULL CHECK (weight BETWEEN 0 AND 3),
+      note   TEXT NOT NULL,
+      PRIMARY KEY (style, metric)
+    );
+    INSERT INTO sector_styles (sector, style, cyclical, note) VALUES
+      ('Financials','financial',false,'Banks/insurers: leverage is the business model'),
+      ('Financial Services','financial',false,'Banks/NBFCs/insurers: leverage is the business model'),
+      ('Real Estate','real_estate',true,'REITs: depreciation depresses earnings, debt funds assets'),
+      ('Realty','real_estate',true,'Developers: project cycles, leverage-driven'),
+      ('Utilities','utility',false,'Rate-regulated: stable cash flows, heavy debt is normal'),
+      ('Power','utility',false,'Regulated/contracted generation: utility economics'),
+      ('Energy','commodity',true,'Earnings follow the commodity price cycle'),
+      ('Materials','commodity',true,'Price-taker margins, cycle timing dominates'),
+      ('Metals & Mining','commodity',true,'Deep cyclical: peak P/E is a trap'),
+      ('Oil Gas & Consumable Fuels','commodity',true,'Commodity price cycle dominates'),
+      ('Chemicals','commodity',true,'Spread/cycle driven, capacity additions matter'),
+      ('Construction Materials','commodity',true,'Cement/aggregates: regional cycles'),
+      ('Industrials','industrial',true,'Order-book cyclicals, operating leverage'),
+      ('Capital Goods','industrial',true,'Order-book cyclicals, operating leverage'),
+      ('Construction','industrial',true,'Order-book + working-capital cycles'),
+      ('Automobile and Auto Components','industrial',true,'Volume cyclicals with platform economics'),
+      ('Textiles','industrial',true,'Thin-margin cyclicals'),
+      ('Services','industrial',true,'Mixed services: treat as industrial baseline'),
+      ('Consumer Staples','consumer_defensive',false,'Stable demand: quality of earnings is the story'),
+      ('Fast Moving Consumer Goods','consumer_defensive',false,'Stable demand: margins and returns are the story'),
+      ('Consumer Discretionary','consumer_cyclical',true,'Demand swings with the cycle'),
+      ('Consumer Services','consumer_cyclical',true,'Discretionary demand, growth-led'),
+      ('Consumer Durables','consumer_cyclical',true,'Big-ticket demand swings with the cycle'),
+      ('Media Entertainment & Publication','consumer_cyclical',true,'Ad-spend cyclicality'),
+      ('Information Technology','tech_growth',false,'Growth + gross-margin economics'),
+      ('Communication Services','tech_growth',false,'Platform/media mix: growth economics'),
+      ('Telecommunication','telecom',false,'Capex-heavy subscription infrastructure'),
+      ('Health Care','healthcare',false,'Pipeline/approval driven, defensive demand'),
+      ('Healthcare','healthcare',false,'Pipeline/approval driven, defensive demand'),
+      ('Diversified','default',false,'No single lens'),
+      ('_default','default',false,'Fallback for unmapped sectors')
+    ON CONFLICT (sector) DO UPDATE SET style=EXCLUDED.style,
+      cyclical=EXCLUDED.cyclical, note=EXCLUDED.note;
+    INSERT INTO metric_relevance (style, metric, weight, note) VALUES
+      ('financial','pb',3,'Book value is the balance sheet being sold; the primary multiple'),
+      ('financial','roe',3,'Returns on that book decide what P/B is deserved'),
+      ('financial','eps',2,'Meaningful but provision-cycle dependent'),
+      ('financial','pe',2,'Usable, but P/B x ROE is the cleaner pair'),
+      ('financial','ev_ebitda',0,'Meaningless for banks: debt IS the raw material'),
+      ('financial','fcf',0,'Bank "FCF" is not economically meaningful'),
+      ('financial','total_debt',0,'Leverage is the business model; judge capital adequacy instead'),
+      ('financial','total_revenue',1,'NII/premium growth context'),
+      ('real_estate','pb',3,'Assets carry the value; price vs book is the anchor'),
+      ('real_estate','total_debt',3,'Leverage against hard assets: the survival variable'),
+      ('real_estate','ev_ebitda',2,'Closest standard proxy to cap-rate thinking'),
+      ('real_estate','pe',1,'Depreciation depresses earnings: prefer cash measures'),
+      ('real_estate','fcf',1,'Capex timing distorts it; FFO (not stored) is the right lens'),
+      ('real_estate','roe',1,'Leverage-inflated; use with the debt line'),
+      ('utility','ev_ebitda',3,'Standard lens for regulated cash machines'),
+      ('utility','total_debt',3,'Regulated leverage is normal but interest cover matters'),
+      ('utility','dividends_paid',3,'The investment case is usually the payout'),
+      ('utility','pe',2,'Stable earnings keep it meaningful'),
+      ('utility','eps',2,'Regulated growth is slow but steady'),
+      ('utility','fcf',1,'Heavy regulated capex makes FCF lumpy by design'),
+      ('commodity','pb',3,'Across the cycle, trough P/B beats any earnings multiple'),
+      ('commodity','ev_ebitda',3,'Mid-cycle lens; normalize before comparing'),
+      ('commodity','total_debt',3,'Survivability through the downcycle'),
+      ('commodity','pe',1,'Peak earnings make P/E most attractive exactly at the top'),
+      ('commodity','fcf',2,'Capital discipline signal at cycle highs'),
+      ('commodity','operating_margin',2,'Cost-curve position'),
+      ('industrial','ev_ebitda',3,'Standard cyclical lens'),
+      ('industrial','operating_margin',3,'Operating leverage: watch the swing'),
+      ('industrial','pe',2,'Fine mid-cycle; beware at peaks'),
+      ('industrial','fcf',2,'Working-capital cycles show up here first'),
+      ('industrial','total_debt',2,'Cyclical + levered is the dangerous mix'),
+      ('industrial','total_revenue',2,'Order-book proxy'),
+      ('consumer_defensive','pe',3,'Stable earnings make P/E genuinely meaningful'),
+      ('consumer_defensive','roe',3,'Brand economics show up as durable returns'),
+      ('consumer_defensive','operating_margin',3,'Pricing power made visible'),
+      ('consumer_defensive','fcf',3,'Low-capex models should convert earnings to cash'),
+      ('consumer_defensive','gross_profit',2,'Brand premium at the top line'),
+      ('consumer_defensive','total_revenue',2,'Volume vs pricing mix'),
+      ('consumer_cyclical','total_revenue',3,'Demand momentum is the driver'),
+      ('consumer_cyclical','pe',2,'Meaningful away from cycle extremes'),
+      ('consumer_cyclical','ev_ebitda',2,'Cross-check against P/E'),
+      ('consumer_cyclical','operating_margin',2,'Discounting pressure shows here'),
+      ('consumer_cyclical','fcf',2,'Inventory discipline signal'),
+      ('tech_growth','total_revenue',3,'Growth is most of the valuation'),
+      ('tech_growth','gross_profit',3,'Unit economics: software vs services shows here'),
+      ('tech_growth','operating_margin',3,'Scale economics / rule-of-40 half'),
+      ('tech_growth','fcf',3,'SBC-heavy models must still produce cash'),
+      ('tech_growth','pe',2,'Meaningful only growth-adjusted'),
+      ('tech_growth','ev_ebitda',2,'Common comp, distorted by capitalized costs'),
+      ('telecom','ev_ebitda',3,'The sector trades on it'),
+      ('telecom','total_debt',3,'Spectrum + network capex live on the balance sheet'),
+      ('telecom','fcf',2,'Post-capex cash is the dividend capacity'),
+      ('telecom','pe',1,'Depreciation noise; cash lenses are cleaner'),
+      ('healthcare','total_revenue',3,'Pipeline/approval growth driven'),
+      ('healthcare','pe',2,'Meaningful for diversified names, not binary biotechs'),
+      ('healthcare','operating_margin',2,'R&D intensity vs profitability balance'),
+      ('healthcare','fcf',2,'Funds the pipeline without dilution'),
+      ('healthcare','ev_ebitda',2,'Standard comp across subsectors'),
+      ('default','pe',2,'Balanced lens when no sector style applies'),
+      ('default','pb',2,'Balanced lens'),
+      ('default','ev_ebitda',2,'Balanced lens'),
+      ('default','roe',2,'Balanced lens'),
+      ('default','fcf',2,'Balanced lens'),
+      ('default','total_debt',2,'Balanced lens')
+    ON CONFLICT (style, metric) DO UPDATE SET weight=EXCLUDED.weight, note=EXCLUDED.note;
+  17-sector-metrics.sql: |
+    -- Daily sector aggregates (ADR 0026): one row per (universe, sector, day),
+    -- written by valuation.py right after stock_valuations. Medians are over
+    -- sane positive values; returns are equal-weighted means of members.
+    CREATE TABLE IF NOT EXISTS sector_metrics (
+      universe          TEXT NOT NULL,
+      sector            TEXT NOT NULL,
+      ts                TIMESTAMPTZ NOT NULL,
+      members           INT NOT NULL,
+      median_pe         DOUBLE PRECISION,
+      median_pb         DOUBLE PRECISION,
+      median_ev_ebitda  DOUBLE PRECISION,
+      median_roe        DOUBLE PRECISION,
+      median_op_margin  DOUBLE PRECISION,
+      avg_ret_6m        DOUBLE PRECISION,
+      avg_ret_12m       DOUBLE PRECISION,
+      median_upside_pct DOUBLE PRECISION,  -- from today's stock_valuations
+      PRIMARY KEY (universe, sector, ts)
+    );
+    SELECT create_hypertable('sector_metrics', 'ts', if_not_exists => TRUE);
+    SELECT set_chunk_time_interval('sector_metrics', INTERVAL '365 days');
+  18-predictions.sql: |
+    -- Prediction scorecard (prediction-validation plan, applied 2026-10-26):
+    -- write-once daily snapshots of what the system claims, resolved later
+    -- against adjusted forward returns. Plain tables (like financial_facts).
+    CREATE TABLE IF NOT EXISTS prediction_snapshots (
+      kind     TEXT NOT NULL,             -- 'screener_rank' | 'valuation_upside'
+      symbol   TEXT NOT NULL,
+      universe TEXT NOT NULL,
+      ts       TIMESTAMPTZ NOT NULL,      -- snapshot day, 00:00 UTC
+      value    DOUBLE PRECISION,          -- rank | upside_pct
+      aux      DOUBLE PRECISION,          -- composite | fair_value
+      close    DOUBLE PRECISION,          -- adj_close at snapshot (return base)
+      PRIMARY KEY (kind, symbol, ts)
+    );
+    CREATE TABLE IF NOT EXISTS prediction_outcomes (
+      kind         TEXT NOT NULL,
+      symbol       TEXT NOT NULL,
+      ts           TIMESTAMPTZ NOT NULL,
+      horizon_days INT NOT NULL,          -- 30 | 91 | 182 calendar days
+      realized_ret DOUBLE PRECISION,      -- adj fwd return over the horizon
+      bench_ret    DOUBLE PRECISION,      -- universe benchmark over the same window
+      resolved_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (kind, symbol, ts, horizon_days)
+    );
+    CREATE INDEX IF NOT EXISTS prediction_snapshots_ts ON prediction_snapshots (ts);
+    CREATE INDEX IF NOT EXISTS prediction_outcomes_ts  ON prediction_outcomes (ts);
+  19-earnings-calendar.sql: |
+    -- Upcoming earnings dates (yfinance calendar, weekly refresh). Rows with
+    -- event_date >= fetch day are DELETE+INSERTed per symbol; past rows stay
+    -- as a record of what was expected.
+    CREATE TABLE IF NOT EXISTS earnings_calendar (
+      symbol     TEXT NOT NULL,
+      universe   TEXT NOT NULL,
+      event_date DATE NOT NULL,
+      source     TEXT NOT NULL DEFAULT 'yfinance',
+      fetched_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (symbol, event_date)
+    );
+    CREATE INDEX IF NOT EXISTS earnings_calendar_date ON earnings_calendar (event_date);
+  20-valuation-methods-2.sql: |
+    -- ADR 0030: two more famous intrinsic methods on the ADR 0026 panel.
+    ALTER TABLE stock_valuations ADD COLUMN IF NOT EXISTS damodaran_fcff DOUBLE PRECISION;
+    ALTER TABLE stock_valuations ADD COLUMN IF NOT EXISTS graham_growth  DOUBLE PRECISION;
+  21-research-items.sql: |
+    -- ADR 0031 research radar: auto-collected paper metadata, append-only,
+    -- UNVETTED. tier: 1 = top peer-reviewed journal, 2 = NBER WP, 3 = preprint.
+    -- Promotion into the curated Strategy Lab tiers is a human decision.
+    CREATE TABLE IF NOT EXISTS research_items (
+      source     TEXT NOT NULL,
+      ext_id     TEXT NOT NULL,
+      title      TEXT NOT NULL,
+      authors    TEXT,
+      venue      TEXT NOT NULL,
+      tier       INT  NOT NULL,
+      published  DATE,
+      url        TEXT,
+      topics     TEXT,
+      relevance  INT NOT NULL DEFAULT 0,
+      fetched_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (source, ext_id)
+    );
+    CREATE INDEX IF NOT EXISTS research_items_rel ON research_items (relevance DESC, published DESC);
+  22-contract-views.sql: |
+    -- ADR 0032 data-platform contract: applications read v_* views, never
+    -- base tables. Views are the published interface — columns are
+    -- APPEND-ONLY, and the rule-9 time bound lives INSIDE each view, so
+    -- consumers cannot forget it. New app-state tables go in the `app`
+    -- schema from now on (existing tables are grandfathered in public).
+    CREATE SCHEMA IF NOT EXISTS app;
+    GRANT USAGE ON SCHEMA app TO grafana_ro;
+    GRANT USAGE ON SCHEMA app TO telegram_app;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT SELECT ON TABLES TO grafana_ro;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT SELECT ON TABLES TO telegram_app;
+
+    CREATE OR REPLACE VIEW v_universe AS
+      SELECT universe, symbol, name, sector, exchange, currency
+      FROM universe_constituents WHERE active;
+
+    CREATE OR REPLACE VIEW v_latest_prices AS
+      SELECT DISTINCT ON (symbol) symbol, ts, close, adj_close, volume
+      FROM stock_prices WHERE ts >= now() - interval '7 days'
+      ORDER BY symbol, ts DESC;
+
+    CREATE OR REPLACE VIEW v_latest_scores AS
+      SELECT DISTINCT ON (symbol) symbol, universe, ts, rank, composite,
+             value_score, quality_score, growth_score, momentum_score,
+             risk_score, coverage, eligible
+      FROM stock_scores WHERE ts >= now() - interval '14 days'
+      ORDER BY symbol, ts DESC;
+
+    -- methods_above_close lives HERE so the bot, the UI and the reports can
+    -- never disagree about the agreement count (the ADR 0030 five-place pain).
+    CREATE OR REPLACE VIEW v_valuations_recent AS
+      SELECT symbol, universe, ts, close, graham, peer_multiple, fcf_yield,
+             dcf, ddm, epv, residual_income, peg_lynch, damodaran_fcff,
+             graham_growth, fair_value, upside_pct, methods, discount_rate,
+             growth_used,
+             (coalesce((graham          > close)::int, 0) +
+              coalesce((peer_multiple   > close)::int, 0) +
+              coalesce((fcf_yield       > close)::int, 0) +
+              coalesce((dcf             > close)::int, 0) +
+              coalesce((ddm             > close)::int, 0) +
+              coalesce((epv             > close)::int, 0) +
+              coalesce((residual_income > close)::int, 0) +
+              coalesce((peg_lynch       > close)::int, 0) +
+              coalesce((damodaran_fcff  > close)::int, 0) +
+              coalesce((graham_growth   > close)::int, 0)) AS methods_above_close
+      FROM stock_valuations WHERE ts >= now() - interval '4 days';
+
+    CREATE OR REPLACE VIEW v_latest_valuations AS
+      SELECT DISTINCT ON (symbol) * FROM v_valuations_recent
+      ORDER BY symbol, ts DESC;
+
+    CREATE OR REPLACE VIEW v_sector_latest AS
+      SELECT m.universe, m.sector, m.ts, m.members, m.median_pe, m.median_pb,
+             m.median_ev_ebitda, m.median_roe, m.median_op_margin,
+             m.avg_ret_6m, m.avg_ret_12m, m.median_upside_pct,
+             st.style, st.cyclical, st.note
+      FROM (SELECT DISTINCT ON (universe, sector) * FROM sector_metrics
+            WHERE ts >= now() - interval '7 days'
+            ORDER BY universe, sector, ts DESC) m
+      LEFT JOIN sector_styles st ON st.sector = m.sector;
+
+    CREATE OR REPLACE VIEW v_upcoming_earnings AS
+      SELECT e.symbol, max(c.name) AS name, max(c.universe) AS universe,
+             min(e.event_date) AS event_date
+      FROM earnings_calendar e
+      LEFT JOIN universe_constituents c ON c.symbol = e.symbol AND c.active
+      WHERE e.event_date BETWEEN CURRENT_DATE AND CURRENT_DATE + 30
+      GROUP BY e.symbol;
+  23-ml-tables.sql: |
+    -- ML experiment infrastructure and model outputs (ML roadmap 2026-10-10,
+    -- ADR 0032 contract: app-state tables live in the `app` schema).
+    -- All tables additive; idempotent CREATE IF NOT EXISTS. Written by ML
+    -- CronJobs (marketdata-data:v1 image) and workstation batch scripts.
+    -- pipeline_rw (AR-8) needs INSERT on these; grafana_ro/telegram_app keep
+    -- SELECT-only via default privileges below.
+    CREATE SCHEMA IF NOT EXISTS app;
+    GRANT USAGE ON SCHEMA app TO pipeline_rw;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA app TO pipeline_rw;
+    ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA app
+      GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO pipeline_rw;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT SELECT ON TABLES TO grafana_ro;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT SELECT ON TABLES TO telegram_app;
+
+    -- ML-0 experiment infrastructure: one row per experiment run.
+    CREATE TABLE IF NOT EXISTS app.ml_runs (
+      run_id        TEXT PRIMARY KEY,
+      name          TEXT NOT NULL,
+      git_sha       TEXT NOT NULL,
+      params        JSONB NOT NULL DEFAULT '{}',
+      data_window   TSTZRANGE,
+      data_hash     TEXT,
+      seed          INT,
+      metrics       JSONB NOT NULL DEFAULT '{}',
+      artifact_path TEXT,
+      artifact_hash TEXT,
+      started_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+      ended_at      TIMESTAMPTZ
+    );
+
+    -- ML-1 anomaly detection: data quality + node health flags.
+    CREATE TABLE IF NOT EXISTS app.data_anomalies (
+      kind     TEXT NOT NULL,       -- bad_bar | feed_drop | row_count_drop | scraper_drop | node_wedge
+      subject  TEXT NOT NULL,       -- symbol | feed | node
+      ts       TIMESTAMPTZ NOT NULL,
+      score    DOUBLE PRECISION,
+      details  JSONB NOT NULL DEFAULT '{}',
+      PRIMARY KEY (kind, subject, ts)
+    );
+    CREATE INDEX IF NOT EXISTS ix_data_anomalies_ts ON app.data_anomalies (ts);
+
+    -- ML-3 volatility forecasts: EWMA + GARCH(1,1) + GJR-GARCH/EGARCH baselines.
+    CREATE TABLE IF NOT EXISTS app.vol_forecasts (
+      symbol   TEXT NOT NULL,
+      ts       TIMESTAMPTZ NOT NULL,
+      model    TEXT NOT NULL,       -- ewma | garch | gjr_garch | egarch
+      horizon  INT NOT NULL,        -- days ahead
+      forecast DOUBLE PRECISION NOT NULL,
+      PRIMARY KEY (symbol, ts, model, horizon)
+    );
+    SELECT create_hypertable('app.vol_forecasts', 'ts', if_not_exists => TRUE);
+    SELECT set_chunk_time_interval('app.vol_forecasts', INTERVAL '365 days');
+
+    -- ML-4 regime labels (descriptive only until EV-0 shows out-of-sample value).
+    CREATE TABLE IF NOT EXISTS app.regime_labels (
+      ts         TIMESTAMPTZ NOT NULL,
+      model      TEXT NOT NULL,
+      regime     INT NOT NULL,
+      probability DOUBLE PRECISION,
+      PRIMARY KEY (ts, model)
+    );
+    SELECT create_hypertable('app.regime_labels', 'ts', if_not_exists => TRUE);
+    SELECT set_chunk_time_interval('app.regime_labels', INTERVAL '365 days');
+
+    -- ML-5 peer clusters: correlation + text-based clusters per symbol.
+    CREATE TABLE IF NOT EXISTS app.peer_clusters (
+      symbol  TEXT NOT NULL,
+      cluster INT NOT NULL,
+      method  TEXT NOT NULL,       -- correlation | text | hybrid
+      as_of   DATE NOT NULL,
+      PRIMARY KEY (symbol, method, as_of)
+    );
+
+    -- ML-6 model scores (hard-gated on EV-0 + EV-1 + composite v2 passing §5).
+    CREATE TABLE IF NOT EXISTS app.model_scores (
+      symbol TEXT NOT NULL,
+      ts     TIMESTAMPTZ NOT NULL,
+      model  TEXT NOT NULL,
+      score  DOUBLE PRECISION NOT NULL,
+      PRIMARY KEY (symbol, ts, model)
+    );
+    SELECT create_hypertable('app.model_scores', 'ts', if_not_exists => TRUE);
+    SELECT set_chunk_time_interval('app.model_scores', INTERVAL '365 days');
+
+    -- ML-7 audit: every LLM call and output, for cost control + number verification.
+    CREATE TABLE IF NOT EXISTS app.llm_calls (
+      ts         TIMESTAMPTZ NOT NULL DEFAULT now(),
+      kind       TEXT NOT NULL,       -- narrative | ask | embedding
+      provider   TEXT NOT NULL,
+      model      TEXT NOT NULL,
+      prompt_hash TEXT NOT NULL,
+      tokens_in  INT,
+      tokens_out INT,
+      cost       DOUBLE PRECISION,
+      status     TEXT NOT NULL,
+      latency_s  DOUBLE PRECISION,
+      PRIMARY KEY (ts, kind, provider, model, prompt_hash)
+    );
+    SELECT create_hypertable('app.llm_calls', 'ts', if_not_exists => TRUE);
+    SELECT set_chunk_time_interval('app.llm_calls', INTERVAL '365 days');
+
+    CREATE TABLE IF NOT EXISTS app.llm_outputs (
+      kind      TEXT NOT NULL,       -- narrative | story_summary | ask_response
+      scope     TEXT NOT NULL,
+      ts        TIMESTAMPTZ NOT NULL DEFAULT now(),
+      text      TEXT NOT NULL,
+      facts_hash TEXT NOT NULL,
+      verified  BOOLEAN NOT NULL DEFAULT FALSE,
+      PRIMARY KEY (kind, scope, ts)
+    );
+  24-llm-narratives-symbol.sql: |
+    -- ML-7b per-symbol narratives need symbol in the llm_narratives PK.
+    -- daily_market rows keep symbol = '' (existing rows backfilled with '').
+    ALTER TABLE llm_narratives ADD COLUMN IF NOT EXISTS symbol TEXT NOT NULL DEFAULT '';
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'llm_narratives'::regclass
+          AND contype = 'p'
+          AND pg_get_constraintdef(oid) LIKE '%symbol%'
+      ) THEN
+        ALTER TABLE llm_narratives DROP CONSTRAINT IF EXISTS llm_narratives_pkey;
+        ALTER TABLE llm_narratives ADD PRIMARY KEY (ts, kind, symbol);
+      END IF;
+    END $$;
+  25-valuation-and-metrics-catalog.sql: |
+    -- ADR 0033: Full 15-method Valuation Panel (8 Practitioner + 7 Research-Backed),
+    -- Method/Metric Catalog (`valuation_methods`), Daily Scientific Diagnostics
+    -- (`stock_scientific_metrics`), and Sector Dual-Lens Medians (`sector_metrics`).
+    CREATE TABLE IF NOT EXISTS valuation_methods (
+      method_key    TEXT PRIMARY KEY,
+      method_name   TEXT NOT NULL,
+      category      TEXT NOT NULL DEFAULT 'valuation', -- valuation | scientific_diagnostic | classification
+      lens          TEXT NOT NULL,                     -- Practitioner | Research-Backed
+      sub_school    TEXT NOT NULL,
+      source_ref    TEXT NOT NULL,
+      formula       TEXT NOT NULL,
+      target_table  TEXT NOT NULL DEFAULT 'stock_valuations',
+      display_order SMALLINT NOT NULL DEFAULT 0
+    );
+    GRANT SELECT ON valuation_methods TO grafana_ro;
+    GRANT SELECT ON valuation_methods TO telegram_app;
+
+    INSERT INTO valuation_methods (
+      method_key, method_name, category, lens, sub_school, source_ref, formula, target_table, display_order
+    ) VALUES
+      ('graham', 'Graham Number', 'valuation', 'Practitioner', 'Graham Conservative',
+       'Graham (1949, The Intelligent Investor)', 'sqrt(22.5 * EPS * BVPS)', 'stock_valuations', 1),
+      ('graham_growth', 'Graham 1974 Growth', 'valuation', 'Practitioner', 'Graham Conservative',
+       'Graham (1974, The Decade 1965-1974)', 'EPS * (8.5 + 2 * g_eps%) * 4.4 / Y_AAA%', 'stock_valuations', 2),
+      ('peg_lynch', 'Lynch PEG = 1.0', 'valuation', 'Practitioner', 'GARP & Peer Multiples',
+       'Lynch (1989, One Up On Wall Street)', 'EPS * 100 * clamp(g_eps, 5%, 25%)', 'stock_valuations', 3),
+      ('peer_multiple', 'Sector P/E or P/B Peer', 'valuation', 'Practitioner', 'GARP & Peer Multiples',
+       'Street Comps (ADR 0026)', 'median(PE_sector) * EPS (or median(PB_sector) * BVPS for financials)', 'stock_valuations', 4),
+      ('ev_ebitda_peer', 'EV/EBITDA Sector Peer', 'valuation', 'Practitioner', 'GARP & Peer Multiples',
+       'Koller, Goedhart & Wessels (2020, McKinsey Valuation)', '(median(EV_EBITDA_sector) * implied_EBITDA - total_debt) / shares', 'stock_valuations', 5),
+      ('fcf_yield', 'FCF Perpetuity', 'valuation', 'Practitioner', 'Cash-Flow & Buffett',
+       'Practitioner Cash-Yield Floor (ADR 0026)', '(FCF_0 / shares) / r', 'stock_valuations', 6),
+      ('dcf', 'Two-Stage FCF DCF', 'valuation', 'Practitioner', 'Cash-Flow & Buffett',
+       '5y Revenue-CAGR FCF DCF (ADR 0026)', 'PV(5y FCF at clamp(g_rev, 0%, 15%) + 2.5% terminal, discounted at r) / shares', 'stock_valuations', 7),
+      ('owner_earnings', 'Buffett Owner Earnings', 'valuation', 'Practitioner', 'Cash-Flow & Buffett',
+       'Buffett (1986 Berkshire Shareholder Letter)', '(mean_5y(OCF - Capex) * (1 + g_T) / (r - g_T) - total_debt) / shares', 'stock_valuations', 8),
+      ('residual_income', 'Residual Income (Justified P/B)', 'valuation', 'Research-Backed', 'Clean-Surplus & Intangibles',
+       'Ohlson (1995, CAR); Frankel & Lee (1998, JAE); Penman (2012)', 'min((ROE - g_T) / (r - g_T), 8.0) * BVPS (when ROE > r)', 'stock_valuations', 9),
+      ('intangible_ri', 'Intangible-Adjusted RI (Total q)', 'valuation', 'Research-Backed', 'Clean-Surplus & Intangibles',
+       'Peters & Taylor (2017, JFE); Eisfeldt & Papanikolaou (2013, JF); Arnott et al. (2021, FAJ)', 'min((ROE_adj - g_T) / (r - g_T), 8.0) * ((Equity + 1.5 * (GP - EBIT)) / shares)', 'stock_valuations', 10),
+      ('easton_mpeg', 'Easton Modified PEG (MPEG)', 'valuation', 'Research-Backed', 'Abnormal Earnings Growth',
+       'Easton (2004, The Accounting Review); Ohlson & Juettner-Nauroth (2005, RAST)', '(EPS_0 * g_eps + r * DPS_0 * g_eps) / (r^2)', 'stock_valuations', 11),
+      ('damodaran_fcff', 'Damodaran FCFF (g/ROC)', 'valuation', 'Research-Backed', 'Corporate Finance',
+       'Modigliani & Miller (1958, AER); Damodaran (2012, Investment Valuation)', '(PV(5y NOPAT * (1 - g/ROC) + terminal at WACC) - total_debt) / shares', 'stock_valuations', 12),
+      ('epv', 'Greenwald 5y EPV', 'valuation', 'Research-Backed', 'Corporate Finance',
+       'Greenwald, Kahn, Sonkin & van Biema (2001, Value Investing)', '(mean_5y(EBIT) * (1 - 0.25) / r - total_debt) / shares', 'stock_valuations', 13),
+      ('ddm', 'Gordon Dividend Discount', 'valuation', 'Research-Backed', 'Shareholder Payout',
+       'Williams (1938); Gordon & Shapiro (1956, Mgmt Sci); Gordon (1959, REStat)', 'DPS_0 * (1 + g_div) / (r - g_div)', 'stock_valuations', 14),
+      ('total_payout_ddm', 'Total Payout (Div + Buyback) DDM', 'valuation', 'Research-Backed', 'Shareholder Payout',
+       'Boudoukh, Michaely, Richardson & Roberts (2007, JF); Fama & French (2001, JFE)', '(min(FCF_0, Dividends_0 + Net_Buybacks_0) / shares) * (1 + g_p) / (r - g_p)', 'stock_valuations', 15),
+      ('gpa', 'Gross Profitability (GP/A)', 'scientific_diagnostic', 'Research-Backed', 'Profitability (EV-10)',
+       'Novy-Marx (2013, JFE)', 'gross_profit / total_assets', 'stock_scientific_metrics', 16),
+      ('operating_accruals', 'Operating Accruals', 'scientific_diagnostic', 'Research-Backed', 'Earnings Quality (EV-12)',
+       'Sloan (1996, The Accounting Review)', '(net_income - ocf) / total_assets', 'stock_scientific_metrics', 17),
+      ('asset_growth_cma', 'Asset Growth / Investment (CMA)', 'scientific_diagnostic', 'Research-Backed', 'Conservative Investment (EV-11)',
+       'Cooper, Gulen & Schill (2008, JF); Fama & French (2015, JFE)', 'total_assets_t / total_assets_t1 - 1', 'stock_scientific_metrics', 18),
+      ('net_share_issuance', 'Net Share Issuance', 'scientific_diagnostic', 'Research-Backed', 'Financing Factor (EV-13)',
+       'Pontiff & Woodgate (2008, JF)', 'shares_outstanding_t / shares_outstanding_t1 - 1', 'stock_scientific_metrics', 19),
+      ('piotroski_f_score', 'Piotroski 9-Signal F-Score', 'scientific_diagnostic', 'Research-Backed', 'Accounting Composite (EV-14)',
+       'Piotroski (2000, Journal of Accounting Research)', '9 binary signals across Profitability (4), Leverage/Liquidity (3), Efficiency (2)', 'stock_scientific_metrics', 20),
+      ('altman_z2', 'Altman Z''-Score', 'scientific_diagnostic', 'Research-Backed', 'Solvency & Distress',
+       'Altman (1968, JF; 2000 Z'' non-manufacturing)', '6.56*(WC/TA) + 3.26*(RE/TA) + 6.72*(EBIT/TA) + 1.05*(Eq/Debt)', 'stock_scientific_metrics', 21),
+      ('ret_12_1', '12-1 Month Momentum (ex-1m reversal)', 'scientific_diagnostic', 'Research-Backed', 'Momentum (EV-3)',
+       'Jegadeesh & Titman (1993, JF); Jegadeesh (1990, JF)', 'adj_close[t-21] / adj_close[t-252] - 1', 'stock_metrics_daily', 22),
+      ('near_high', '52-Week High Proximity', 'scientific_diagnostic', 'Research-Backed', 'Anchoring Momentum (EV-4)',
+       'George & Hwang (2004, JF)', 'close[t] / max(close[t-252:t])', 'stock_metrics_daily', 23),
+      ('value_score', 'Value Factor Pillar', 'factor_pillar', 'Research-Backed', 'Cross-Sectional Value',
+       'Fama & French (1992, JF); Basu (1977, JF); Loughran & Wellman (2011, JFQA)', 'mean(pct_rank(-PE), pct_rank(-PB), pct_rank(-EV/EBITDA), pct_rank(FCF_Yield))', 'stock_scores', 24),
+      ('quality_score', 'Quality Factor Pillar', 'factor_pillar', 'Research-Backed', 'Profitability & Safety (RMW / QMJ)',
+       'Fama & French (2015, JFE); Asness, Frazzini & Pedersen (2019, RAST)', 'mean(pct_rank(ROE), pct_rank(Operating_Margin), pct_rank(-Debt/Equity))', 'stock_scores', 25),
+      ('growth_score', 'Growth Factor Pillar', 'factor_pillar', 'Practitioner', 'Historical Revenue & EPS Growth',
+       'Ball & Brown (1968, JAR); Chan, Karceski & Lakonishok (2003, JF)', '0.45*pct_rank(Rev_CAGR_3y) + 0.35*pct_rank(EPS_YoY) + 0.20*pct_rank(EPS_Accel)', 'stock_scores', 26),
+      ('momentum_score', 'Momentum Factor Pillar', 'factor_pillar', 'Research-Backed', 'Cross-Sectional & Trend Momentum (UMD)',
+       'Jegadeesh & Titman (1993, JF); George & Hwang (2004, JF)', 'mean(pct_rank(ret_6m), pct_rank(ret_12m), pct_rank(pos_52w), pct_rank(sma200_ratio))', 'stock_scores', 27),
+      ('risk_score', 'Low-Risk / Stability Factor Pillar', 'factor_pillar', 'Research-Backed', 'Low-Volatility & Drawdown (BAB)',
+       'Ang, Hodrick, Xing & Zhang (2006, JF); Frazzini & Pedersen (2014, JFE)', 'mean(pct_rank(-vol_180d), pct_rank(-max_dd_252d))', 'stock_scores', 28),
+      ('practitioner_composite', 'Practitioner Composite Score (25/25/20/20/10)', 'composite', 'Practitioner', 'Multi-Factor Composite',
+       'House v1 Balanced Multi-Factor Composite', '(0.25*Value + 0.25*Quality + 0.20*Growth + 0.20*Momentum + 0.10*Risk) * 100', 'stock_scientific_metrics', 29),
+      ('academic_composite', 'Academic 1/N Equal-Weighted Composite (20/20/20/20/20)', 'composite', 'Research-Backed', 'Multi-Factor Composite (1/N)',
+       'DeMiguel, Garlappi & Uppal (2009, Review of Financial Studies)', '(0.20*Value + 0.20*Quality + 0.20*Growth + 0.20*Momentum + 0.20*Risk) * 100', 'stock_scientific_metrics', 30),
+      ('practitioner_archetype', 'Practitioner Stock Archetype Profile', 'classification', 'Practitioner', 'Factor Archetype Taxonomy',
+       'Lynch / GARP / Compounder / Value Trap Practitioner Taxonomy (ADR 0033)', '11-bucket decision tree over (Value, Quality, Growth, Momentum, Risk)', 'stock_scientific_metrics', 31),
+      ('academic_archetype', 'Academic Factor-Interaction Profile', 'classification', 'Research-Backed', 'Factor-Interaction Taxonomy',
+       'Asness QMJ (2019) / Piotroski (2000) / Mohanram G-Score (2005) / Campbell Distress (2008)', '10-bucket peer-reviewed factor-interaction taxonomy', 'stock_scientific_metrics', 32),
+      ('multibagger_practitioner', 'Practitioner Multibagger Screen (Lynch / PEG-Growth)', 'multibagger_screen', 'Practitioner', 'Multibagger Discovery',
+       'Lynch (1989) GARP + Terminal-Collapse-Guarded 3y CAGR (ADR 0033)', 'size<=p70, CAGR>=15% (no >15% terminal drop), ROE/OM>=15%, D/E<=1, PEG<=2 or PE<=25, >200d SMA', 'stock_scientific_metrics', 33),
+      ('multibagger_academic', 'Academic SQM Multibagger Screen (Size x Quality x 12-1 Mom)', 'multibagger_screen', 'Research-Backed', 'Multibagger Discovery (SQM)',
+       'Asness et al. (2018, JFE); Novy-Marx (2013); Sloan (1996); Jegadeesh & Titman (1993)', 'size<=p70, ROE>=15%/OM>=12%, FCF>0 (Sloan accruals), D/E<=1, ret_12_1>0 & pos_52w>=0.50, 1/N 25/25/25/25 rank', 'stock_scientific_metrics', 34)
+    ON CONFLICT (method_key) DO UPDATE SET
+      method_name   = EXCLUDED.method_name,
+      category      = EXCLUDED.category,
+      lens          = EXCLUDED.lens,
+      sub_school    = EXCLUDED.sub_school,
+      source_ref    = EXCLUDED.source_ref,
+      formula       = EXCLUDED.formula,
+      target_table  = EXCLUDED.target_table,
+      display_order = EXCLUDED.display_order;
+
+    -- Extend stock_valuations with the 5 new valuation methods + dual lens medians.
+    ALTER TABLE stock_valuations ADD COLUMN IF NOT EXISTS ev_ebitda_peer         DOUBLE PRECISION;
+    ALTER TABLE stock_valuations ADD COLUMN IF NOT EXISTS owner_earnings         DOUBLE PRECISION;
+    ALTER TABLE stock_valuations ADD COLUMN IF NOT EXISTS easton_mpeg            DOUBLE PRECISION;
+    ALTER TABLE stock_valuations ADD COLUMN IF NOT EXISTS intangible_ri          DOUBLE PRECISION;
+    ALTER TABLE stock_valuations ADD COLUMN IF NOT EXISTS total_payout_ddm       DOUBLE PRECISION;
+    ALTER TABLE stock_valuations ADD COLUMN IF NOT EXISTS practitioner_fair_value DOUBLE PRECISION;
+    ALTER TABLE stock_valuations ADD COLUMN IF NOT EXISTS practitioner_methods   INT;
+    ALTER TABLE stock_valuations ADD COLUMN IF NOT EXISTS academic_fair_value    DOUBLE PRECISION;
+    ALTER TABLE stock_valuations ADD COLUMN IF NOT EXISTS academic_methods       INT;
+    ALTER TABLE stock_valuations ADD COLUMN IF NOT EXISTS all_fair_value         DOUBLE PRECISION;
+    ALTER TABLE stock_valuations ADD COLUMN IF NOT EXISTS all_methods            INT;
+
+    -- Dedicated hypertable for per-stock daily scientific diagnostics, dual archetypes & multibagger scores.
+    CREATE TABLE IF NOT EXISTS stock_scientific_metrics (
+      symbol                 TEXT NOT NULL,
+      ts                     TIMESTAMPTZ NOT NULL,
+      universe               TEXT NOT NULL,
+      sector                 TEXT,
+      gpa                    DOUBLE PRECISION,
+      operating_accruals     DOUBLE PRECISION,
+      asset_growth_cma       DOUBLE PRECISION,
+      net_share_issuance     DOUBLE PRECISION,
+      piotroski_f_score      SMALLINT,
+      piotroski_f_tested     SMALLINT,
+      altman_z2              DOUBLE PRECISION,
+      altman_zone            TEXT,
+      practitioner_archetype TEXT,
+      academic_archetype     TEXT,
+      practitioner_composite DOUBLE PRECISION,
+      academic_composite     DOUBLE PRECISION,
+      mb_practitioner_score  DOUBLE PRECISION,
+      mb_academic_score      DOUBLE PRECISION,
+      mb_lens                TEXT,
+      PRIMARY KEY (symbol, ts)
+    );
+    ALTER TABLE stock_scientific_metrics ADD COLUMN IF NOT EXISTS mb_practitioner_score DOUBLE PRECISION;
+    ALTER TABLE stock_scientific_metrics ADD COLUMN IF NOT EXISTS mb_academic_score     DOUBLE PRECISION;
+    ALTER TABLE stock_scientific_metrics ADD COLUMN IF NOT EXISTS mb_lens               TEXT;
+    SELECT create_hypertable('stock_scientific_metrics', 'ts', if_not_exists => TRUE);
+    SELECT set_chunk_time_interval('stock_scientific_metrics', INTERVAL '365 days');
+    GRANT SELECT ON stock_scientific_metrics TO grafana_ro;
+    GRANT SELECT ON stock_scientific_metrics TO telegram_app;
+
+    -- Continuous classification & factor calibration metrics table (ADR 0033 classifier_loop.py).
+    CREATE TABLE IF NOT EXISTS calibration_metrics (
+      ts           TIMESTAMPTZ NOT NULL,
+      horizon_days INT NOT NULL,
+      kind         TEXT NOT NULL,     -- factor_ic | sector_ic | archetype_ret | academic_archetype_ret | mb_gmv | shrunk_weight
+      metric_key   TEXT NOT NULL,
+      universe     TEXT NOT NULL DEFAULT 'ALL',
+      sample_n     INT NOT NULL DEFAULT 0,
+      value        DOUBLE PRECISION,
+      aux_value    DOUBLE PRECISION,
+      status       TEXT,
+      PRIMARY KEY (ts, horizon_days, kind, metric_key, universe)
+    );
+    GRANT SELECT ON calibration_metrics TO grafana_ro;
+    GRANT SELECT ON calibration_metrics TO telegram_app;
+
+    -- Extend sector_metrics with Practitioner vs Research-Backed median upsides & scientific medians.
+    ALTER TABLE sector_metrics ADD COLUMN IF NOT EXISTS median_practitioner_upside_pct DOUBLE PRECISION;
+    ALTER TABLE sector_metrics ADD COLUMN IF NOT EXISTS median_academic_upside_pct     DOUBLE PRECISION;
+    ALTER TABLE sector_metrics ADD COLUMN IF NOT EXISTS median_gpa                     DOUBLE PRECISION;
+    ALTER TABLE sector_metrics ADD COLUMN IF NOT EXISTS median_f_score                 DOUBLE PRECISION;
+
+    -- Append-only contract view updates (ADR 0032: existing column positions unchanged).
+    CREATE OR REPLACE VIEW v_valuation_methods AS
+      SELECT method_key, method_name, category, lens, sub_school, source_ref,
+             formula, target_table, display_order
+      FROM valuation_methods ORDER BY display_order, method_key;
+    GRANT SELECT ON v_valuation_methods TO grafana_ro;
+    GRANT SELECT ON v_valuation_methods TO telegram_app;
+
+    CREATE OR REPLACE VIEW v_latest_scientific_metrics AS
+      SELECT DISTINCT ON (symbol)
+             symbol, ts, universe, sector, gpa, operating_accruals,
+             asset_growth_cma, net_share_issuance, piotroski_f_score,
+             piotroski_f_tested, altman_z2, altman_zone,
+             practitioner_archetype, academic_archetype,
+             practitioner_composite, academic_composite,
+             mb_practitioner_score, mb_academic_score, mb_lens
+      FROM stock_scientific_metrics
+      WHERE ts >= now() - interval '14 days'
+      ORDER BY symbol, ts DESC;
+    GRANT SELECT ON v_latest_scientific_metrics TO grafana_ro;
+    GRANT SELECT ON v_latest_scientific_metrics TO telegram_app;
+
+    CREATE OR REPLACE VIEW v_latest_calibration AS
+      SELECT ts, horizon_days, kind, metric_key, universe, sample_n, value, aux_value, status
+      FROM calibration_metrics
+      WHERE ts = (SELECT max(ts) FROM calibration_metrics);
+    GRANT SELECT ON v_latest_calibration TO grafana_ro;
+    GRANT SELECT ON v_latest_calibration TO telegram_app;
+
+    CREATE OR REPLACE VIEW v_valuations_recent AS
+      SELECT symbol, universe, ts, close, graham, peer_multiple, fcf_yield,
+             dcf, ddm, epv, residual_income, peg_lynch, damodaran_fcff,
+             graham_growth, fair_value, upside_pct, methods, discount_rate,
+             growth_used,
+             (coalesce((graham          > close)::int, 0) +
+              coalesce((peer_multiple   > close)::int, 0) +
+              coalesce((fcf_yield       > close)::int, 0) +
+              coalesce((dcf             > close)::int, 0) +
+              coalesce((ddm             > close)::int, 0) +
+              coalesce((epv             > close)::int, 0) +
+              coalesce((residual_income > close)::int, 0) +
+              coalesce((peg_lynch       > close)::int, 0) +
+              coalesce((damodaran_fcff  > close)::int, 0) +
+              coalesce((graham_growth   > close)::int, 0)) AS methods_above_close,
+             ev_ebitda_peer, owner_earnings, easton_mpeg, intangible_ri,
+             total_payout_ddm, practitioner_fair_value, practitioner_methods,
+             academic_fair_value, academic_methods, all_fair_value, all_methods
+      FROM stock_valuations WHERE ts >= now() - interval '4 days';
+
+    CREATE OR REPLACE VIEW v_latest_valuations AS
+      SELECT DISTINCT ON (symbol) * FROM v_valuations_recent
+      ORDER BY symbol, ts DESC;
+
+    CREATE OR REPLACE VIEW v_sector_latest AS
+      SELECT m.universe, m.sector, m.ts, m.members, m.median_pe, m.median_pb,
+             m.median_ev_ebitda, m.median_roe, m.median_op_margin,
+             m.avg_ret_6m, m.avg_ret_12m, m.median_upside_pct,
+             st.style, st.cyclical, st.note,
+             m.median_practitioner_upside_pct, m.median_academic_upside_pct,
+             m.median_gpa, m.median_f_score
+      FROM (SELECT DISTINCT ON (universe, sector) * FROM sector_metrics
+            WHERE ts >= now() - interval '7 days'
+            ORDER BY universe, sector, ts DESC) m
+      LEFT JOIN sector_styles st ON st.sector = m.sector;

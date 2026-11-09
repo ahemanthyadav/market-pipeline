@@ -32,9 +32,28 @@ spec:
                 echo "waiting for timescaledb ($i/60)"
                 sleep 5
               done
+              # ADR 0032: bookkeeping — every applied key is recorded with its
+              # md5, so drift (an OLD key edited after application) is visible.
+              # Keys stay idempotent and are still reapplied wholesale.
+              psql -h timescaledb -U postgres -d postgres -v ON_ERROR_STOP=1 -c "
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                  filename TEXT PRIMARY KEY, md5 TEXT NOT NULL,
+                  first_applied TIMESTAMPTZ NOT NULL DEFAULT now(),
+                  last_applied  TIMESTAMPTZ NOT NULL DEFAULT now())"
               for f in $(ls /schema/*.sql | sort); do
                 echo "== applying $f"
                 psql -h timescaledb -U postgres -d postgres -v ON_ERROR_STOP=1 -f "$f"
+                sum=$(md5sum "$f" | cut -d' ' -f1)
+                base=$(basename "$f")
+                prev=$(psql -h timescaledb -U postgres -d postgres -At \
+                  -c "SELECT md5 FROM schema_migrations WHERE filename='$base'")
+                if [ -n "$prev" ] && [ "$prev" != "$sum" ]; then
+                  echo "WARN $base changed after first application (md5 $prev -> $sum)"
+                fi
+                psql -h timescaledb -U postgres -d postgres -v ON_ERROR_STOP=1 -c "
+                  INSERT INTO schema_migrations (filename, md5) VALUES ('$base', '$sum')
+                  ON CONFLICT (filename) DO UPDATE
+                  SET last_applied = now(), md5 = EXCLUDED.md5"
               done
               echo SCHEMA-OK
           volumeMounts:

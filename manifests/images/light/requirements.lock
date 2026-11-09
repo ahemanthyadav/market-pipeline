@@ -1,0 +1,15 @@
+# Consolidated light image (AR-5 step 3).
+# Union of: headline-ner, pipeline-health, fdi-watch, fiidii-fetcher,
+# news-fetcher, rbi-fetcher, factors-fetcher, research-fetcher.
+# Re-freeze after any rebuild (`docker run --rm local/marketdata-light:v1 pip freeze`).
+certifi==2026.7.22
+charset-normalizer==3.5.2
+feedparser==6.0.14
+feedparser-sgmllib==2.1.0
+idna==3.20
+lxml==6.1.3
+psycopg-binary==3.3.6
+psycopg==3.3.6
+requests==2.34.2
+typing_extensions==4.16.0
+urllib3==2.8.0

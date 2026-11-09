@@ -17,6 +17,12 @@ from pathlib import Path
 
 for name in ("psycopg", "requests", "yfinance"):
     sys.modules.setdefault(name, types.ModuleType(name))
+try:
+    import pandas  # noqa: F401
+except ImportError:
+    pd_stub = types.ModuleType("pandas")
+    pd_stub.Series = object
+    sys.modules["pandas"] = pd_stub
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "manifests" / "stock-screener" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -137,6 +143,20 @@ class Ev9Extension(unittest.TestCase):
 
     def test_ocf_stays_out_of_the_latest_view(self):
         self.assertEqual(sf.EXCLUDE_LATEST, {"ocf", "capex"})
+
+    def test_gross_profit_derived_from_revenue_minus_cogs(self):
+        facts = {
+            "Revenues": {"units": {"USD": [
+                {"form": "10-K", "start": "2025-01-01", "end": "2025-12-31",
+                 "filed": "2026-02-10", "val": 1000.0}]}},
+            "CostOfRevenue": {"units": {"USD": [
+                {"form": "10-K", "start": "2025-01-01", "end": "2025-12-31",
+                 "filed": "2026-02-10", "val": 600.0}]}},
+        }
+        rows = sf.edgar_fact_rows(facts)
+        by_metric = {r[0]: r for r in rows}
+        self.assertIn("gross_profit", by_metric)
+        self.assertEqual(by_metric["gross_profit"][4], 400.0)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,8 @@
 # Prediction Validation & Training Pipeline — 2026-10-10
 
-> **Status:** plan. Nothing here is built. Work items PV-0…PV-3 and TP-0…TP-2 are prioritised in
-> `stock-screener-implementation-plan.md` §16 and tracked in `pending-tasks.md`.
+> **Status:** PV-0 live via `prediction_snapshots` + `prediction_outcomes` (`predictions.py`, ADR 0028, 2026-10-27);
+> Continuous Classification & Factor Validation Loop live via `ops-tools/classifier_loop.py` (ADR 0033, 2026-11-08).
+> Remaining items PV-2…PV-3 and TP-0…TP-2 are tracked in `pending-tasks.md`.
 > **Purpose:** one cross-cutting pipeline so that **every daily output that makes a claim** — a score, a rank, a
 > forecast, a regime label, a classification, a narrative — is (1) logged immutably when it is made, (2) resolved against
 > what actually happened, (3) scored against a baseline, and (4) monitored for decay and drift; and so that **components
@@ -188,3 +189,27 @@ the P2 items as the models they serve appear.
 | False sense of validation | The ledger monitors; acceptance of new signals stays with EV-0/§5 |
 
 Not investment advice. Effort labels are estimates; thresholds and sample sizes above are starting points to be fixed in the ADR.
+
+---
+
+## 13. As-Built: Continuous Classification & Factor Validation Loop (`ops-tools/classifier_loop.py`, ADR 0033 — 2026-11-08)
+
+While `predictions.py` (Schema 18, ADR 0028) records daily `screener_rank` and `valuation_upside` snapshots and resolves 30/91/182-day adjusted excess returns into `prediction_outcomes`, `ops-tools/classifier_loop.py` closes the feedback loop across all four classification layers:
+
+1. **Factor & Sector Rank IC Audit (`evaluate_factors`):**
+   - Joins resolved `prediction_outcomes` (`kind = 'screener_rank'`) with point-in-time `stock_scores` (`value_score`, `quality_score`, `growth_score`, `momentum_score`, `risk_score`, `composite`) and `universe_constituents.sector`.
+   - Computes rolling cross-sectional Spearman Rank IC, IC-IR (`mean(IC)/std(IC)`), hit rate, and top-minus-bottom quintile excess return spread (`Q5 - Q1`) globally and within each `(universe, sector)`.
+   - Emits automated warnings when any factor decays (`mean_ic < -0.02` over $\ge 3$ cross-sections) or exhibits sector-specific inversion (`ic < -0.10`, e.g., when un-neutralized leverage/multiples distort Financials).
+2. **Stock Archetype Cohort Validation (`evaluate_archetypes`):**
+   - Classifies every historical `(symbol, ts)` factor vector using the unified 11-archetype taxonomy (`Quality Compounder`, `GARP`, `Deep Value`, `Momentum Leader`, `High-Growth Speculative`, `Defensive Quality`, `Turnaround / Cyclical`, `Value Trap`, `High-Risk / Stressed`, `Lagging / Weak`, `Balanced`).
+   - Aggregates realized excess return, median excess return, hit rate, and 10th-percentile tail drawdown (`tail_p10_ret`) per cohort, and checks three pre-registered structural hypotheses:
+     - `Quality Compounder` mean excess return $>$ `Lagging / Weak`
+     - `Deep Value` mean excess return $>$ `Value Trap`
+     - `Defensive Quality` 10th-percentile tail return $>$ `High-Risk / Stressed`
+3. **Multibagger Gate Marginal Value Attribution (`evaluate_multibagger_gates`):**
+   - Evaluates all 6 multibagger gates (`growth`, `return on equity`, `debt`, `size`, `valuation`, `trend`) by comparing the realized excess return of candidates passing all gates against **single-gate near-misses** (stocks passing 5 of 6 gates and failing only gate $k$).
+   - Computes $\text{GMV}_k = \overline{R}_{\text{passed}} - \overline{R}_{\text{near-miss}(k)}$ and flags any gate with $\text{GMV}_k < -2\%$ as over-restrictive.
+4. **Bayesian Shrinkage Adaptive Factor Calibration (`propose_factor_weights`):**
+   - Blends baseline prior weights $W_0 = (0.25, 0.25, 0.20, 0.20, 0.10)$ with empirical positive-IC-IR weights via sample-size shrinkage $\lambda = \min(0.50, N / (N + 12))$.
+   - Enforces ADR 0018 safety bounds: minimum sample gate (`MIN_CROSS_SECTIONS = 6`), per-factor tilt cap (`MAX_TILT = 0.05`), factor floor (`MIN_WEIGHT = 0.05`), and exact normalization to `1.0000`.
+   - Persists the deterministic Markdown report to `stock_reports` (`symbol = '__calibration__'`, viewable in MarketView at `/reports/__calibration__`) and `out/classifier_loop/`.

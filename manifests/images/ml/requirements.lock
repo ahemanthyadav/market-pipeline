@@ -1,0 +1,12 @@
+# Consolidated ML image (AR-5 step 3).
+# Union of: sentiment-fetcher (TX2 only).
+# torch from the PyTorch CPU index; FinBERT baked at build time.
+# Re-freeze after any rebuild.
+numpy==2.4.6
+psycopg-binary==3.3.6
+psycopg==3.3.6
+safetensors==0.8.0
+tokenizers==0.23.2
+transformers==5.17.0
+# torch installed separately from PyTorch CPU index in Dockerfile
+# model=ProsusAI/finbert (baked at build time in Dockerfile)
