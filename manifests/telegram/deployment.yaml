@@ -36,7 +36,7 @@ spec:
         runAsGroup: 1000
       containers:
         - name: listener
-          image: local/telegram-digest:v41
+          image: local/telegram-digest:v42
           imagePullPolicy: Never
           securityContext:
             allowPrivilegeEscalation: false
