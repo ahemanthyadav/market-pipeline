@@ -27,7 +27,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: anomalies
-              image: local/marketdata-data:v1
+              image: local/marketdata-data:v3
               imagePullPolicy: Never
               command: ["python", "-m", "ml1_anomalies"]
               env:

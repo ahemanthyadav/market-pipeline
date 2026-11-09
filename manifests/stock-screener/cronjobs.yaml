@@ -27,7 +27,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: universe
-              image: local/marketdata-data:v2
+              image: local/marketdata-data:v3
               imagePullPolicy: Never
               command: ["python", "universe_refresh.py"]
               env:
@@ -68,7 +68,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: prices
-              image: local/marketdata-data:v2
+              image: local/marketdata-data:v3
               imagePullPolicy: Never
               command: ["python", "stock_prices.py"]
               env:
@@ -109,7 +109,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: fundamentals
-              image: local/marketdata-data:v2
+              image: local/marketdata-data:v3
               imagePullPolicy: Never
               command: ["python", "stock_fundamentals.py"]
               env:
@@ -152,7 +152,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: metrics
-              image: local/marketdata-data:v2
+              image: local/marketdata-data:v3
               imagePullPolicy: Never
               command: ["python", "stock_metrics.py"]
               env:
@@ -193,7 +193,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: screener
-              image: local/marketdata-data:v2
+              image: local/marketdata-data:v3
               imagePullPolicy: Never
               command: ["python", "stock_screener.py"]
               env:
@@ -239,7 +239,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: report
-              image: local/marketdata-data:v2
+              image: local/marketdata-data:v3
               imagePullPolicy: Never
               command: ["python", "stock_report.py"]
               env:
@@ -290,7 +290,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: nse-fundamentals
-              image: local/marketdata-data:v2
+              image: local/marketdata-data:v3
               imagePullPolicy: Never
               command: ["python", "nse_fundamentals.py"]
               env:
@@ -338,7 +338,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: membership
-              image: local/marketdata-data:v2
+              image: local/marketdata-data:v3
               imagePullPolicy: Never
               command: ["python", "membership_history.py"]
               env:
@@ -384,7 +384,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: valuation
-              image: local/marketdata-data:v2
+              image: local/marketdata-data:v3
               imagePullPolicy: Never
               command: ["python", "valuation.py"]
               env:
@@ -428,7 +428,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: predictions
-              image: local/marketdata-data:v2
+              image: local/marketdata-data:v3
               imagePullPolicy: Never
               command: ["python", "predictions.py"]
               env:
@@ -471,7 +471,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: earnings
-              image: local/marketdata-data:v2
+              image: local/marketdata-data:v3
               imagePullPolicy: Never
               command: ["python", "earnings_calendar.py"]
               env:
@@ -515,7 +515,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: accuracy
-              image: local/marketdata-data:v2
+              image: local/marketdata-data:v3
               imagePullPolicy: Never
               command: ["python", "accuracy_check.py"]
               env:

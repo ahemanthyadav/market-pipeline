@@ -24,7 +24,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: fetcher
-              image: local/marketdata-data:v1
+              image: local/marketdata-data:v3
               imagePullPolicy: Never
               command: ["python", "nse-indices.py"]
               env:

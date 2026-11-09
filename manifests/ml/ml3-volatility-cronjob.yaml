@@ -27,7 +27,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: volatility
-              image: local/marketdata-data:v1
+              image: local/marketdata-data:v3
               imagePullPolicy: Never
               command: ["python", "-m", "ml3_volatility"]
               env:

@@ -106,6 +106,10 @@ class Gate(unittest.TestCase):
         self.assertEqual(s_top, "screener")
         self.assertEqual(f_top["top_picks"][0]["symbol"], "TCS.NS")
         self.assertEqual(f_top["top_picks"][0]["archetype"], "Quality Compounder")
+        # factor being sorted by is exposed so the AI can cite real numbers
+        self.assertEqual(f_top["sorted_by"], "growth")
+        self.assertEqual(f_top["top_picks"][0]["position"], 1)
+        self.assertEqual(f_top["top_picks"][0]["growth_score"], 0.8)
 
         f_sec, s_sec = ask.build_facts(topic_q, "which sectors are cheapest in sp500")
         self.assertEqual(s_sec, "sectors")

@@ -161,11 +161,12 @@ def screener_facts(q, question):
             break
     fac_col = "composite"
     fac_name = "composite"
-    for fn, col in (("value", "value_score"), ("quality", "quality_score"),
-                    ("growth", "growth_score"), ("momentum", "momentum_score"),
-                    ("risk", "risk_score")):
+    fac_idx = 2  # composite is index 2 of the SELECT list below
+    for fn, col, idx in (("value", "value_score", 3), ("quality", "quality_score", 4),
+                         ("growth", "growth_score", 5), ("momentum", "momentum_score", 6),
+                         ("risk", "risk_score", 7)):
         if fn in ql:
-            fac_name, fac_col = fn, col
+            fac_name, fac_col, fac_idx = fn, col, idx
             break
     rows = q_or_none(
         q, f"SELECT symbol, rank, composite, value_score, quality_score, growth_score, "
@@ -176,8 +177,11 @@ def screener_facts(q, question):
     if not rows:
         return None
     picks = []
-    for r in rows:
-        item = {"symbol": r[0], "rank": r[1], "composite": round(r[2], 2) if r[2] is not None else None}
+    for i, r in enumerate(rows):
+        item = {"symbol": r[0], "position": i + 1, "rank": r[1],
+                "composite": round(r[2], 2) if r[2] is not None else None}
+        fs = r[fac_idx]
+        item[fac_col] = round(fs, 4) if fs is not None else None
         if len(r) >= 8 and r[3] is not None:
             item["archetype"] = stocks.stock_archetype(tuple(r[3:8]))
         picks.append(item)
