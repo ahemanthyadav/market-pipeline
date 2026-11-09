@@ -1,11 +1,10 @@
 # TTS service — Piper HTTP server (runs on Orin Nano)
 
-Run with:  python tts_server.py
+# Run with:  python tts_server.py
 
-Endpoints:
-  GET  /healthz   -> {"status": "ok"}
-  POST /speak     -> JSON {"text": "..."} -> returns OGG/Opus audio (application/ogg)
-"""
+# Endpoints:
+#   GET  /healthz   -> {"status": "ok"}
+#   POST /speak     -> JSON {"text": "..."} -> returns OGG/Opus audio (application/ogg)
 
 import os
 import io

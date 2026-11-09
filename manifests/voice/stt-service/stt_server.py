@@ -1,12 +1,11 @@
 # STT service — faster-whisper HTTP server (runs on Orin Nano)
 
-Run with:  python stt_server.py
+# Run with:  python stt_server.py
 
-Endpoints:
-  GET  /healthz   -> {"status": "ok"}
-  POST /transcribe -> multipart form field "audio" (ogg/wav/mp3)
-                      -> {"text": "transcribed text"}
-"""
+# Endpoints:
+#   GET  /healthz   -> {"status": "ok"}
+#   POST /transcribe -> multipart form field "audio" (ogg/wav/mp3)
+#                       -> {"text": "transcribed text"}
 
 import os
 import sys
