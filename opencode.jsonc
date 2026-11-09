@@ -27,6 +27,21 @@
           "DATABASE_URI": "{env:DATABASE_URI}"
         },
         "disabled": true
+      },
+      // Telegram Bot API MCP — client-side on this workstation, NOT the cluster bot.
+      // Token lives in Secret `telegram-bot` (`bot-token`), fetched out-of-band via kubectl
+      // and exported as TELEGRAM_BOT_TOKEN in this shell — never written to a tracked file.
+      // WARNING: Telegram allows ONE getUpdates consumer per token. The live `telegram-bot`
+      // Deployment on pi1 already long-polls; calling `get_updates` here with the same token
+      // will 409 the cluster listener. Use send_message / get_me; avoid get_updates while
+      // the Deployment is running.
+      "telegram": {
+        "type": "local",
+        "command": ["uvx", "mcp-telegram-bot"],
+        "environment": {
+          "TELEGRAM_BOT_TOKEN": "{env:TELEGRAM_BOT_TOKEN}"
+        },
+        "timeout": { "startup": 60000 }
       }
     }
   },
@@ -72,5 +87,9 @@
 
     // When the postgres MCP server is enabled, confirm each of its tool calls.
     { "action": "postgres_*", "resource": "*", "effect": "ask" }
+
+    // Telegram MCP tool calls always need confirmation — send_message is the safe path;
+    // get_updates conflicts with the live cluster listener (one poller per token).
+    { "action": "telegram_*", "resource": "*", "effect": "ask" }
   ]
 }

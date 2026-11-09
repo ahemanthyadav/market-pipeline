@@ -1011,29 +1011,53 @@ def valuation_text(q, arg):
         return problem
     symbol, name, sector, universe, currency = row
 
-    fv = q(
-        "SELECT ts, close, graham, peer_multiple, fcf_yield, dcf, ddm, epv, "
-        "residual_income, peg_lynch, damodaran_fcff, graham_growth, "
-        "fair_value, upside_pct, methods, discount_rate, growth_used, "
-        "methods_above_close, ev_ebitda_peer, owner_earnings, easton_mpeg, "
-        "intangible_ri, total_payout_ddm, practitioner_fair_value, "
-        "practitioner_methods, academic_fair_value, academic_methods, "
-        "all_fair_value, all_methods "
-        "FROM v_latest_valuations WHERE symbol = %s",
-        (symbol,),
-    )
+    # Schema 25 added ev_ebitda_peer + dual-lens columns to stock_valuations
+    # and re-created v_latest_valuations to expose them. If Schema 25 hasn't
+    # been applied yet, fall back to the pre-Schema 25 column set so the
+    # command still works (Schema 25 methods show as n/a).
+    try:
+        fv = q(
+            "SELECT ts, close, graham, peer_multiple, fcf_yield, dcf, ddm, epv, "
+            "residual_income, peg_lynch, damodaran_fcff, graham_growth, "
+            "fair_value, upside_pct, methods, discount_rate, growth_used, "
+            "methods_above_close, ev_ebitda_peer, owner_earnings, easton_mpeg, "
+            "intangible_ri, total_payout_ddm, practitioner_fair_value, "
+            "practitioner_methods, academic_fair_value, academic_methods, "
+            "all_fair_value, all_methods "
+            "FROM v_latest_valuations WHERE symbol = %s",
+            (symbol,),
+        )
+        schema25 = True
+    except Exception as exc:  # noqa: BLE001 — degrade when Schema 25 is pending
+        if exc.__class__.__name__ not in ("UndefinedColumn", "UndefinedTable"):
+            raise
+        fv = q(
+            "SELECT ts, close, graham, peer_multiple, fcf_yield, dcf, ddm, epv, "
+            "residual_income, peg_lynch, damodaran_fcff, graham_growth, "
+            "fair_value, upside_pct, methods, discount_rate, growth_used, "
+            "methods_above_close "
+            "FROM v_latest_valuations WHERE symbol = %s",
+            (symbol,),
+        )
+        schema25 = False
     if not fv:
         return "\n".join(
             [f"<b>{esc(name)}</b>",
              f"{esc(symbol)} · {esc(sector or 'n/a')} · {esc(universe)}",
              "No valuation rows in the last 4 days."])
+    row = fv[0]
     (ts, close, graham, peer_multiple, fcf_yield, dcf, ddm, epv,
      residual_income, peg_lynch, damodaran_fcff, graham_growth,
      fair_value, upside_pct, methods, discount_rate, growth_used,
-     methods_above_close, ev_ebitda_peer, owner_earnings, easton_mpeg,
-     intangible_ri, total_payout_ddm, practitioner_fair_value,
-     practitioner_methods, academic_fair_value, academic_methods,
-     all_fair_value, all_methods) = fv[0]
+     methods_above_close) = row[:18]
+    if schema25:
+        (ev_ebitda_peer, owner_earnings, easton_mpeg, intangible_ri,
+         total_payout_ddm, practitioner_fair_value, practitioner_methods,
+         academic_fair_value, academic_methods, all_fair_value, all_methods) = row[18:]
+    else:
+        ev_ebitda_peer = owner_earnings = easton_mpeg = intangible_ri = None
+        total_payout_ddm = practitioner_fair_value = practitioner_methods = None
+        academic_fair_value = academic_methods = all_fair_value = all_methods = None
 
     head = [f"<b>{esc(name)}</b>",
             f"{esc(symbol)} · {esc(sector or 'n/a')} · {esc(universe)}"]
