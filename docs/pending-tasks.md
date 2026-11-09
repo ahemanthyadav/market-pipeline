@@ -7,7 +7,7 @@
 > **Last reviewed: 2026-11-08** — recovery session: restored `marketdata-data:v1` + `marketdata-light:v1` to pi1/pi3 containerd
 > stores (all fetchers had `ErrImageNeverPull` since the 10-31 TX2 prune; `pipeline_heartbeat` frozen at 2026-11-04), forced
 > backfill of every active fetcher, data current through Fri 2026-11-06 (markets closed weekend). Built and deployed
-> `marketdata-data:v2` and `telegram-digest:v39` to pi1/pi3. Orin2 cordoned pending image import; orin1 tainted (STT/TTS only).
+> `marketdata-data:v2` and `telegram-digest:v40` to pi1/pi3. Orin2 cordoned pending image import; orin1 tainted (STT/TTS only).
 > Earlier **2026-10-30** (owner: "deploy all changes + create a deployment guide"): telegram
 > **v34 live** on pi1 (bot deployment + digest/alerts CronJobs; rollout clean, live specs verified). v33
 > **burned, never deployed** — built minutes before 36e6529 landed, in-image md5 caught stale
@@ -146,7 +146,7 @@ Both wired into bot.py COMMANDS + MENU, router SAFE_AI_COMMANDS, and nicknames.
   Code and hermetic unit tests are committed across `marketdata` and `marketview`:
   1. **Apply TimescaleDB Schema 25:** `kubectl apply -f manifests/timescaledb/schema-configmap.yaml` and run the schema job (or trigger one `stock-valuation` job, as `valuation.ensure_schema_and_catalog()` idempotently creates `valuation_methods`, `stock_scientific_metrics`, `calibration_metrics`, additive columns on `stock_valuations` and `sector_metrics`, contract views `v_valuation_methods`, `v_latest_scientific_metrics`, `v_latest_calibration`, and grants `SELECT` to `grafana_ro` and `telegram_app`).
   2. **Update `stock-screener` scripts/image:** Apply the updated `stock-screener` ConfigMap (`valuation.py` 15-method engine + 34-row catalog + `scientific_row()`, `stock_metrics.py` `adj_close` total-return series + `ret_12_1` + `near_high`, `stock_fundamentals.py` `COGS_TAGS` fallback for `gross_profit`, `stock_report.py` dual-lens report) and run a canary `stock-valuation` job.
-  3. **Build & roll out `local/telegram-digest:v40`:** Build on TX2, archive tarball to `/mnt/tx2-ssd/image-tarballs/telegram-digest-v40.tar.gz`, import on `pi1`, and apply `manifests/telegram/deployment.yaml` + `manifests/telegram/cronjob.yaml`. Fixes `/valuation` `UndefinedColumn` on `ev_ebitda_peer` — degrades gracefully until Schema 25 is applied.
+  3. ✅ **Build & roll out `local/telegram-digest:v40`:** Build on TX2, archive tarball to `/mnt/tx2-ssd/image-tarballs/telegram-digest-v40.tar.gz`, import on `pi1`, and apply `manifests/telegram/deployment.yaml` + `manifests/telegram/cronjob.yaml`. Fixes `/valuation` `UndefinedColumn` on `ev_ebitda_peer` — degrades gracefully until Schema 25 is applied. Canary `DIGEST-DONE rc=0`.
   4. **Build & roll out `local/marketview:v13`:** Bump `deploy/deployment.yaml` to `local/marketview:v13`, build on TX2, import on `pi1`, roll out, and canary `/stock/AAPL`, `/multibagger`, and `/strategies`.
   5. **Run continuous calibration loop (`ops-tools/classifier_loop.py`):** Run `python3 ops-tools/classifier_loop.py run --horizon 91` from the workstation once `prediction_outcomes` has ≥6 resolved cross-sections to populate `__calibration__` in `stock_reports` and structured rows in `calibration_metrics`.
 - [ ] 🔶 **MarketView UI surface extensions for Schema 25 tables (follow-up):**
