@@ -13,7 +13,6 @@ import argparse
 import datetime as dt
 import json
 import os
-import subprocess
 import sys
 
 import numpy as np
@@ -21,6 +20,7 @@ import pandas as pd
 
 # Reuse compute functions from the in-cluster module
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent / "manifests" / "ml"))
+from pgcompat import psql  # noqa: E402  (workstation PSQL_CMD or in-cluster psycopg)
 from ml3_volatility import ewma_forecast, garch_forecast, gjr_garch_forecast  # noqa: E402
 
 OUT = "out/ml3"
@@ -29,17 +29,11 @@ MODELS = {"ewma": ewma_forecast, "garch": garch_forecast, "gjr_garch": gjr_garch
 
 # ---------------------------------------------------------------- DB helpers
 
-def psql(sql, text=True):
-    cmd = os.environ.get("PSQL_CMD")
-    if not cmd:
-        sys.exit("set PSQL_CMD (see module docstring)")
-    out = subprocess.run(cmd + " -v ON_ERROR_STOP=1 -At -F, -c " + _q(sql), shell=True,
-                         check=True, capture_output=True, text=text)
-    return out.stdout
 
 
 def _q(s):
-    return "'" + s.replace("'", "'\"'\"'") + "'"
+    """SQL string literal (shell quoting happens in pgcompat.psql)."""
+    return "'" + str(s).replace("'", "''") + "'"
 
 
 def write_forecasts(rows, batch_size=500):
@@ -88,8 +82,9 @@ def fetch_returns(symbols, days=252):
 def run(symbols=None, days=252, horizon=1, models=None):
     """Run volatility forecasts for given symbols. Returns total rows written."""
     if symbols is None:
-        # Default: all index tickers from stock_prices
-        rows = psql("SELECT DISTINCT symbol FROM stock_prices ORDER BY symbol")
+        # Default: every symbol with a bar in the last 14 days
+        rows = psql("SELECT DISTINCT symbol FROM stock_prices "
+                    "WHERE ts >= NOW() - INTERVAL '14 days' ORDER BY symbol")  # rule 9: bounded
         symbols = [s for s in rows.strip().split("\n") if s]
     else:
         symbols = [s.strip() for s in symbols.split(",")]
@@ -110,6 +105,10 @@ def run(symbols=None, days=252, horizon=1, models=None):
         if fc.empty:
             print(f"ML-3: {model_name} produced no forecasts", flush=True)
             continue
+        skipped = fc.attrs.get("skipped", 0)
+        if skipped:
+            print(f"ML-3: {model_name} skipped {skipped} symbols (short history / failed fit"
+                  f"{'; ' + fc.attrs['reason'] if fc.attrs.get('reason') else ''})", flush=True)
         n = write_forecasts(fc.to_dict("records"))
         all_written += n
         print(f"ML-3: {model_name} — {len(fc)} forecasts computed, {n} written", flush=True)
@@ -145,9 +144,8 @@ def main():
     s = sub.add_parser("show", help="list recent forecasts from app.vol_forecasts")
     s.add_argument("--limit", type=int, default=20, help="max rows to show")
     a = ap.parse_args()
-    cmd = os.environ.get("PSQL_CMD")
-    if not cmd:
-        sys.exit("set PSQL_CMD (see module docstring)")
+    if not (os.environ.get("PSQL_CMD") or os.environ.get("PGHOST")):
+        sys.exit("set PSQL_CMD (workstation) or PGHOST/PGUSER/PGPASSWORD (in-cluster)")
     if a.cmd == "run":
         run(symbols=a.symbols, days=a.days, horizon=a.horizon,
             models=a.models.split(",") if a.models else None)

@@ -20,10 +20,12 @@ import argparse
 import datetime as dt
 import json
 import os
-import subprocess
 import sys
 
 import pandas as pd
+
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent / "manifests" / "ml"))
+from pgcompat import psql  # noqa: E402  (workstation PSQL_CMD or in-cluster psycopg)
 
 OUT = "out/ml1"
 BAD_BAR_PCT = 0.40        # |1-day return| threshold
@@ -35,17 +37,11 @@ SCRAPER_SILENCE_DAYS = 2  # but silent for at least this many days
 
 # ---------------------------------------------------------------- DB helpers
 
-def psql(sql, text=True):
-    cmd = os.environ.get("PSQL_CMD")
-    if not cmd:
-        sys.exit("set PSQL_CMD (see module docstring)")
-    out = subprocess.run(cmd + " -v ON_ERROR_STOP=1 -At -F, -c " + _q(sql), shell=True,
-                         check=True, capture_output=True, text=text)
-    return out.stdout
 
 
 def _q(s):
-    return "'" + s.replace("'", "'\"'\"'") + "'"
+    """SQL string literal (shell quoting happens in pgcompat.psql)."""
+    return "'" + str(s).replace("'", "''") + "'"
 
 
 def write_anomalies(anomalies):
@@ -294,9 +290,8 @@ def main():
     s = sub.add_parser("show", help="list recent anomalies from app.data_anomalies")
     s.add_argument("--limit", type=int, default=50, help="max rows to show")
     a = ap.parse_args()
-    cmd = os.environ.get("PSQL_CMD")
-    if not cmd:
-        sys.exit("set PSQL_CMD (see module docstring)")
+    if not (os.environ.get("PSQL_CMD") or os.environ.get("PGHOST")):
+        sys.exit("set PSQL_CMD (workstation) or PGHOST/PGUSER/PGPASSWORD (in-cluster)")
     if a.cmd == "run":
         run(days=a.days)
     elif a.cmd == "show":

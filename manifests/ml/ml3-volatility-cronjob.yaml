@@ -1,8 +1,8 @@
 # ML-3 volatility forecasts — EWMA + GARCH(1,1) + GJR-GARCH baselines.
 # Runs nightly at 03:00 UTC, after all price fetches complete.
 # Writes to app.vol_forecasts table (schema 23).
-# Image: marketdata-data:v1 (pandas, numpy, scipy, psycopg) — unpinned,
-# import to pi1/pi3.
+# Image: marketdata-data (ml3.py + ml3_volatility.py + pgcompat.py; scipy pinned 2026-11-12 —
+# before that GARCH silently fell back to EWMA) — unpinned, import to pi1/pi3. ~11 min on pi3.
 # Validate with:
 #   kubectl create job -n market-data ml3-volatility-validate --from=cronjob/ml3-volatility
 apiVersion: batch/v1
@@ -27,9 +27,9 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: volatility
-              image: local/marketdata-data:v3
+              image: local/marketdata-data:v6
               imagePullPolicy: Never
-              command: ["python", "-m", "ml3_volatility"]
+              command: ["python", "ml3.py", "run"]
               env:
                 - name: PGHOST
                   value: timescaledb.market-data.svc.cluster.local

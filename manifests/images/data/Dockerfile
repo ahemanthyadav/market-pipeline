@@ -4,8 +4,8 @@
 # The screener already proved this pattern (one image, 12+ CronJobs via `command:`).
 #
 # Build natively on the TX2 (no registry, imagePullPolicy: Never):
-#   docker build -t local/marketdata-data:v1 .
-#   docker save local/marketdata-data:v1 | gzip > marketdata-data-v1.tar.gz
+#   docker build -t local/marketdata-data:v6 .
+#   docker save local/marketdata-data:v6 | gzip > marketdata-data-v1.tar.gz
 #   k3s ctr -n k8s.io images import marketdata-data-v1.tar.gz  # on pi1/pi3 (+ pi2 detached)
 #
 # CronJobs using this image pass their script via `command:`:
@@ -19,5 +19,6 @@ COPY fx-fetcher.py intraday-fetcher.py nse-indices.py rates-fetcher.py \
      universe_refresh.py stock_prices.py stock_fundamentals.py stock_metrics.py \
      stock_screener.py stock_report.py valuation.py predictions.py \
      earnings_calendar.py accuracy_check.py membership_history.py nse_fundamentals.py \
-     corporate_actions_backfill.py history_backfill.py fx-backfill.py mdjob.py ./
+     corporate_actions_backfill.py history_backfill.py fx-backfill.py mdjob.py \
+     ml1.py ml3.py ml3_volatility.py pgcompat.py ./
 CMD ["python", "stock_prices.py"]

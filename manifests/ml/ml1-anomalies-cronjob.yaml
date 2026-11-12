@@ -2,7 +2,9 @@
 # Runs after pipeline-health (01:45 UTC), at 02:00 UTC.
 # Uses rule-based detection (MAD z-scores, freshness drops) — no model.
 # Writes to app.data_anomalies table (schema 23).
-# Image: marketdata-data:v1 (pandas, psycopg) — unpinned, import to pi1/pi3.
+# Image: marketdata-data (ml1.py + pgcompat.py: in-cluster psycopg instead of the workstation
+# PSQL_CMD) — unpinned, import to pi1/pi3. Fixed 2026-11-12: the old `python -m ml1_anomalies`
+# module never existed, so this job failed every night until then.
 # Validate with:
 #   kubectl create job -n market-data ml1-anomalies-validate --from=cronjob/ml1-anomalies
 apiVersion: batch/v1
@@ -27,9 +29,9 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: anomalies
-              image: local/marketdata-data:v3
+              image: local/marketdata-data:v6
               imagePullPolicy: Never
-              command: ["python", "-m", "ml1_anomalies"]
+              command: ["python", "ml1.py", "run"]
               env:
                 - name: PGHOST
                   value: timescaledb.market-data.svc.cluster.local
