@@ -366,7 +366,7 @@ without crediting cash balances for conservatism.
 **Consequence:** Cash-rich companies with large net-cash positions receive a conservative floor in
 enterprise-to-equity bridges (`EV - Gross Debt` instead of `EV - (Gross Debt - Cash)`).
 
-**Status:** 🤔 Accepted conservatism (ADR 0026 / ADR 0030) — if exact `net_debt = total_debt - cash`
+**Status (2026-11-12):** data half ✅ — `cash_and_equivalents` now ingested (EDGAR `CashCashEquivalentsAndShortTermInvestments` → `CashAndCashEquivalentsAtCarryingValue`; yfinance balance-sheet rows; `marketdata-data:v6`). Valuation still nets gross debt: the net-debt bridge is a 🤔 owner decision (ADR amendment). Original note: 🤔 Accepted conservatism (ADR 0026 / ADR 0030) — if exact `net_debt = total_debt - cash`
 is desired, add `CashAndCashEquivalentsAtCarryingValue` / `CashCashEquivalentsAndShortTermInvestments`
 to `EDGAR_MAP` in `stock_fundamentals.py` and cash tags in `nse_fundamentals.py`.
 
