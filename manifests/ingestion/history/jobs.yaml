@@ -20,7 +20,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: backfill
-          image: local/marketdata-data:v1
+          image: local/marketdata-data:v6
           imagePullPolicy: Never
           command: ["python", "/scripts/history_backfill.py"]
           env:
@@ -54,7 +54,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: backfill
-          image: local/marketdata-data:v1
+          image: local/marketdata-data:v6
           imagePullPolicy: Never
           command: ["python", "/scripts/history_backfill.py"]
           env:
@@ -88,7 +88,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: backfill
-          image: local/marketdata-data:v1
+          image: local/marketdata-data:v6
           imagePullPolicy: Never
           command: ["python", "/scripts/history_backfill.py"]
           env:
@@ -123,7 +123,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: backfill
-          image: local/marketdata-data:v1
+          image: local/marketdata-data:v6
           imagePullPolicy: Never
           command: ["python", "/scripts/history_backfill.py"]
           env:
@@ -157,7 +157,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: backfill
-          image: local/marketdata-data:v1
+          image: local/marketdata-data:v6
           imagePullPolicy: Never
           command: ["python", "/scripts/history_backfill.py"]
           env:
