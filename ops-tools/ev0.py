@@ -15,6 +15,11 @@ Usage (workstation; DB via a psql command in $PSQL_CMD, like audit-price-adjustm
   PSQL_CMD='kubectl -n market-data exec -i timescaledb-0 -- env PGPASSWORD=… psql -U postgres -d postgres' \\
     uv run --with pandas --with pyarrow python ops-tools/ev0.py export   # -> out/ev0/prices.parquet
   uv run --with pandas --with pyarrow python ops-tools/ev0.py run       # -> out/ev0/report-<date>.md + .csv
+
+EV-19 (PEAD / SUE) and EV-20 (point-in-time value & quality sleeves), roadmap §8 — research only:
+  PSQL_CMD=… uv run --with pandas --with pyarrow python ops-tools/ev0.py export-pit
+      # -> out/ev0/financials_pit.parquet (all durations, first-filed resolved locally) + splits.parquet
+  uv run --with pandas --with pyarrow python ops-tools/ev0.py run-pit   # -> out/ev0/report-ev19-20-<date>.md + .csv
 """
 import argparse
 import datetime as dt
@@ -347,6 +352,376 @@ def report(results, table, start):
     return path
 
 
+# ---------------------------------------------------------------- EV-19 / EV-20: point-in-time fundamentals
+# Research only (evidence roadmap §8): nothing here feeds scoring. Every fact is used only
+# from the day AFTER its first filing (`filed` < month-end, strictly), and only its
+# first-filed value — later restatements (comparatives re-filed in the next 10-Q/10-K)
+# are dropped, so the panel never sees a number the market did not have at the time.
+PIT_SOURCES = ("edgar", "nse_cons", "nse_sa")
+PIT_METRICS = ("eps", "net_income", "operating_income", "total_revenue", "ocf", "capex",
+               "shareholder_equity", "total_debt", "shares_outstanding",
+               "profit_before_tax", "finance_costs")
+FLOW = ("eps", "net_income", "operating_income", "total_revenue", "ocf", "capex",
+        "profit_before_tax", "finance_costs")
+INSTANT = ("shareholder_equity", "total_debt")
+STALE_DAYS = 456          # ~15 months: an older fact counts as missing
+SUE_N, SUE_MIN = 8, 4     # sigma over the prior 8 seasonal differences, at least 4
+SUE_HOLD_DAYS = 91        # a surprise is "live" for ~60 trading days after its filing
+PIT_FLAGSHIP = ("SP500", "NIFTY500")
+US_VALUE = {"ep": True, "bp": True, "ebit_ev": True, "fcf_yield": True}
+US_QUALITY = {"roe": True, "op_margin": True, "low_de": True}
+IN_VALUE = {"ep": True}
+IN_QUALITY = {"ebit_margin": True, "int_cover": True}
+Q_DUR = (75, 105)         # financial_facts.duration_days of a discrete quarter
+
+
+def export_pit():
+    """financial_facts (all durations, with duration_days) + split history -> out/ev0/.
+    financial_facts / corporate_actions are plain tables (not hypertables); one bounded
+    COPY each, no server-side sort (sorted locally)."""
+    cmd = os.environ.get("PSQL_CMD")
+    if not cmd:
+        sys.exit("set PSQL_CMD (see module docstring)")
+    src = ",".join(f"'{s}'" for s in PIT_SOURCES)
+    met = ",".join(f"'{m}'" for m in PIT_METRICS)
+    fsql = ("COPY (SELECT symbol, source, metric, period_end, duration_days, filed, value "
+            f"FROM financial_facts WHERE source IN ({src}) AND metric IN ({met})) "
+            "TO STDOUT WITH CSV HEADER")
+    raw = subprocess.run(cmd + " -v ON_ERROR_STOP=1 -c " + _q(fsql), shell=True, check=True,
+                         capture_output=True).stdout
+    fin = pd.read_csv(io.BytesIO(raw), parse_dates=["period_end", "filed"])
+    os.makedirs(OUT, exist_ok=True)
+    fin.to_parquet(f"{OUT}/financials_pit.parquet", index=False)
+    print(f"financials_pit: {len(fin)} rows, {fin.symbol.nunique()} symbols, "
+          f"sources {sorted(fin.source.unique())}")
+    ssql = ("COPY (SELECT symbol, ts::date AS d, ratio FROM corporate_actions "
+            "WHERE action_type = 'split' AND ratio > 0) TO STDOUT WITH CSV HEADER")
+    raw = subprocess.run(cmd + " -v ON_ERROR_STOP=1 -c " + _q(ssql), shell=True, check=True,
+                         capture_output=True).stdout
+    spl = pd.read_csv(io.BytesIO(raw), parse_dates=["d"])
+    spl.to_parquet(f"{OUT}/splits.parquet", index=False)
+    print(f"splits: {len(spl)} events, {spl.symbol.nunique()} symbols")
+
+
+def first_filed(ff):
+    """One row per (symbol, source, metric, period_end, duration_days): the FIRST filing."""
+    keys = ["symbol", "source", "metric", "period_end", "duration_days"]
+    return ff.sort_values("filed", kind="stable").drop_duplicates(keys, keep="first")
+
+
+def pick_nse_source(ff):
+    """India: per symbol keep consolidated (nse_cons) when it has any quarterly EPS, else
+    standalone (nse_sa). Mixing the two would break year-on-year differences."""
+    nse = ff[ff.source.isin(["nse_cons", "nse_sa"])]
+    has_cons = set(nse[(nse.source == "nse_cons") & (nse.metric == "eps")
+                       & nse.duration_days.between(*Q_DUR)].symbol)
+    keep = ~ff.source.isin(["nse_cons", "nse_sa"]) | \
+        ((ff.source == "nse_cons") & ff.symbol.isin(has_cons)) | \
+        ((ff.source == "nse_sa") & ~ff.symbol.isin(has_cons))
+    return ff[keep]
+
+
+
+def split_factor(dates, split_dates, ratios):
+    """F(t) = product of split ratios with ex-date AFTER t. stock_prices.close is back-adjusted
+    to today's share basis, so a per-share number reported at t converts to today's basis as
+    x / F(t) (EPS) or x * F(t) (share counts)."""
+    sd = np.asarray(split_dates, dtype="datetime64[ns]")
+    order = np.argsort(sd)
+    sd, r = sd[order], np.asarray(ratios, float)[order]
+    suffix = np.append(np.cumprod(r[::-1])[::-1], 1.0)        # suffix[i] = prod r[i:]
+    idx = np.searchsorted(sd, np.asarray(dates, dtype="datetime64[ns]"), side="right")
+    return suffix[idx]
+
+
+def split_adjust(ff, splits):
+    """EPS -> divide by F(filed); shares_outstanding -> multiply by F(filed)."""
+    ff = ff.copy()
+    if splits is None or splits.empty:
+        return ff
+    by = {s: g for s, g in splits.groupby("symbol")}
+    for metric, op in (("eps", "div"), ("shares_outstanding", "mul")):
+        m = ff.metric == metric
+        for sym, idx in ff[m].groupby("symbol").groups.items():
+            g = by.get(sym)
+            if g is None:
+                continue
+            f = split_factor(ff.loc[idx, "filed"].values, g.d.values, g.ratio.values)
+            ff.loc[idx, "value"] = ff.loc[idx, "value"] / f if op == "div" else ff.loc[idx, "value"] * f
+    return ff
+
+
+def discrete_quarters(ff):
+    """Flow facts -> discrete ~3-month quarters. A 3M row is used as filed; a quarter that only
+    exists inside a year-to-date figure (Q4 = FY - 9M; cash-flow quarters, which EDGAR reports
+    YTD) is YTD(n quarters) - YTD(n-1 quarters, period_end ~91 days earlier), available from
+    the later filing. Input: first-filed rows (symbol, metric, period_end, duration_days,
+    filed, value). Output: symbol, metric, period_end, filed, value."""
+    cols = ["symbol", "metric", "period_end", "filed", "value"]
+    r = ff.dropna(subset=["duration_days"]).copy()
+    r = r[r.duration_days >= 75]
+    r["n"] = (r.duration_days / 91.3).round().astype(int)
+    q = r[r.duration_days.between(*Q_DUR)]
+    q = q.sort_values("filed").drop_duplicates(["symbol", "metric", "period_end"])[cols]
+    y = r[(r.n >= 2) & (r.n <= 4)].copy()
+    if y.empty:
+        return q.reset_index(drop=True)
+    y["target"] = y.period_end - pd.Timedelta(days=91)
+    y["n_prev"] = y.n - 1
+    prev = r[["symbol", "metric", "n", "period_end", "filed", "value"]].rename(
+        columns={"n": "n_prev", "period_end": "pe_prev", "filed": "filed_prev", "value": "v_prev"})
+    y = pd.merge_asof(y.sort_values("target"), prev.sort_values("pe_prev"),
+                      left_on="target", right_on="pe_prev", by=["symbol", "metric", "n_prev"],
+                      tolerance=pd.Timedelta(days=20), direction="nearest")
+    y = y.dropna(subset=["v_prev"])
+    y["value"] = y.value - y.v_prev
+    y["filed"] = y[["filed", "filed_prev"]].max(axis=1)
+    y = y.sort_values("filed").drop_duplicates(["symbol", "metric", "period_end"])[cols]
+    # a period that already has a direct 3M row keeps it
+    k = q.assign(k=1).sort_values("period_end")[["symbol", "metric", "period_end", "k"]] \
+        .rename(columns={"period_end": "pe_q"})
+    y = pd.merge_asof(y.sort_values("period_end"), k, left_on="period_end", right_on="pe_q",
+                      by=["symbol", "metric"], tolerance=pd.Timedelta(days=10),
+                      direction="nearest")
+    y = y[y.k.isna()][cols]
+    return pd.concat([q, y], ignore_index=True).sort_values(
+        ["symbol", "metric", "period_end"]).reset_index(drop=True)
+
+
+def ttm(q):
+    """Trailing-twelve-month sums of 4 consecutive discrete quarters (span 250-300 days
+    between the 1st and 4th period_end), available from the latest of their filings."""
+    q = q.sort_values(["symbol", "metric", "period_end"]).reset_index(drop=True)
+    g = q.groupby(["symbol", "metric"])
+    v, f = q.value.copy(), q.filed.copy()
+    for k in (1, 2, 3):
+        v = v + g.value.shift(k)
+        f = pd.concat([f, g.filed.shift(k)], axis=1).max(axis=1)
+    span = (q.period_end - g.period_end.shift(3)).dt.days
+    out = q.assign(value=v, filed=f)[span.between(250, 300) & v.notna()]
+    return out.reset_index(drop=True)
+
+
+def sue_events(q, n=SUE_N, min_n=SUE_MIN):
+    """Standardized unexpected earnings per filed quarter (Bernard & Thomas 1989 seasonal
+    random walk): SUE = (EPS_q - EPS_{q-4}) / sigma(prior n seasonal differences, >= min_n).
+    q: discrete quarterly EPS (symbol, period_end, filed, value), split-adjusted."""
+    q = q.sort_values(["symbol", "period_end"]).reset_index(drop=True)
+    lag = q[["symbol", "period_end", "value"]].rename(
+        columns={"period_end": "pe_lag", "value": "v_lag"}).sort_values("pe_lag")
+    q["target"] = q.period_end - pd.Timedelta(days=364)
+    m = pd.merge_asof(q.sort_values("target"), lag, left_on="target", right_on="pe_lag",
+                      by="symbol", tolerance=pd.Timedelta(days=20), direction="nearest")
+    m = m.sort_values(["symbol", "period_end"]).reset_index(drop=True)
+    m["diff"] = m.value - m.v_lag
+    m["sigma"] = m.groupby("symbol")["diff"].transform(
+        lambda s: s.shift(1).rolling(n, min_periods=min_n).std())
+    m["sue"] = m["diff"] / m.sigma.where(m.sigma > 0)
+    return m.dropna(subset=["sue"])[["symbol", "period_end", "filed", "sue"]].reset_index(drop=True)
+
+
+def asof_panel(facts, me, symbols, value="value", max_age=STALE_DAYS, age_from="period_end"):
+    """(month-end x symbol) panel of the latest fact FILED STRICTLY BEFORE each month-end.
+    A filing that arrives late for an older period never replaces a newer period already
+    known. Facts older than max_age days (measured from period_end, or from filed for
+    event signals) are treated as missing."""
+    out = pd.DataFrame(np.nan, index=me, columns=pd.Index(symbols))
+    f = facts[facts.symbol.isin(set(symbols))].sort_values(["symbol", "filed", "period_end"])
+    if f.empty:
+        return out
+    prior = f.groupby("symbol").period_end.transform(lambda s: s.cummax().shift(1))
+    f = f[prior.isna() | (f.period_end > prior)]
+    grid = pd.DataFrame({"t": np.repeat(me.values, f.symbol.nunique()),
+                         "symbol": np.tile(f.symbol.unique(), len(me))}).sort_values("t")
+    m = pd.merge_asof(grid, f.sort_values("filed")[["symbol", "filed", "period_end", value]],
+                      left_on="t", right_on="filed", by="symbol", allow_exact_matches=False,
+                      direction="backward")
+    age = (m.t - m[age_from]).dt.days
+    m.loc[age > max_age, value] = np.nan
+    p = m.pivot(index="t", columns="symbol", values=value)
+    out.update(p)
+    return out
+
+
+def winsor_rank(p, higher_is_better=True):
+    """Screener pct_rank, per month: winsorize 1/99, cross-sectional percentile in [0,1]."""
+    v = p if higher_is_better else -p
+    lo, hi = v.quantile(0.01, axis=1), v.quantile(0.99, axis=1)
+    return v.clip(lo, hi, axis=0).rank(axis=1, pct=True)
+
+
+def sleeve(components, directions, min_present):
+    """Screener-style sleeve: mean of component percentile ranks, a missing component = 0.5
+    (NEUTRAL, as stock_screener.py does), NaN when fewer than min_present components exist."""
+    ranks = [winsor_rank(components[k], d) for k, d in directions.items()]
+    present = sum(r.notna().astype(int) for r in ranks)
+    s = sum(r.fillna(0.5) for r in ranks) / len(ranks)
+    return s.where(present >= min_present)
+
+
+def ratio(a, b, positive_denominator=True):
+    b = b.where(b > 0) if positive_denominator else b.where(b != 0)
+    return a / b
+
+
+def fundamental_panels(fin, splits, me, symbols, close_me):
+    """All EV-19/EV-20 month-end panels for one universe. fin: raw financials_pit rows.
+    close_me: month-end close (split-adjusted to today's basis, like stock_prices.close)."""
+    ff = first_filed(fin[fin.symbol.isin(set(symbols))])
+    ff = pick_nse_source(ff)
+    ff = split_adjust(ff, splits)
+    flows = discrete_quarters(ff[ff.metric.isin(FLOW)])
+    t4 = ttm(flows)
+    P = lambda df, metric, **kw: asof_panel(df[df.metric == metric], me, symbols, **kw)  # noqa: E731
+    inst = ff[ff.metric.isin(INSTANT) & (ff.duration_days.fillna(0) < 75)]
+    sh = ff[ff.metric == "shares_outstanding"].sort_values("duration_days") \
+        .drop_duplicates(["symbol", "period_end"])
+    out = {}
+    out["sue"] = asof_panel(sue_events(flows[flows.metric == "eps"]), me, symbols, value="sue",
+                            max_age=SUE_HOLD_DAYS, age_from="filed")
+    ni, oi, rev = P(t4, "net_income"), P(t4, "operating_income"), P(t4, "total_revenue")
+    eq, debt = P(inst, "shareholder_equity"), P(inst, "total_debt")
+    mcap = P(sh, "shares_outstanding") * close_me
+    is_us = ff.source.eq("edgar").groupby(ff.symbol).any().reindex(symbols, fill_value=False)
+    us = is_us[is_us].index
+    ind = is_us[~is_us].index
+    # US (EDGAR): the screener's sleeves rebuilt point-in-time.
+    #   value  = E/P (pe inverted, so losses rank cheap-last instead of best), B/P (pb),
+    #            EBIT/EV (ev_ebitda proxy — the EDGAR set has no D&A; EV = mcap + gross debt,
+    #            no cash credit, as ADR 0026), FCF yield = (OCF - capex) / mcap
+    #   quality = ROE, operating margin, -D/E   (all TTM flows over latest balance sheet)
+    us_c = {"ep": ratio(ni, mcap), "bp": ratio(eq, mcap),
+            "ebit_ev": ratio(oi, mcap + debt.fillna(0)),
+            "fcf_yield": ratio(P(t4, "ocf") - P(t4, "capex").abs(), mcap),
+            "roe": ratio(ni, eq), "op_margin": ratio(oi, rev),
+            "low_de": -ratio(debt, eq)}
+    # India (NSE results): income statement only — no balance sheet, no share count.
+    #   value  = TTM EPS / price;  quality = EBIT margin, interest cover (EBIT / finance costs)
+    eps = P(t4, "eps")
+    ebit = P(t4, "profit_before_tax") + P(t4, "finance_costs")
+    fc = P(t4, "finance_costs")
+    cover = (ebit / fc.where(fc > 0)).clip(upper=100)
+    cover = cover.mask((fc == 0) & ebit.notna(), 100.0)      # no finance costs = best cover
+    in_c = {"ep": ratio(eps, close_me), "ebit_margin": ratio(ebit, rev), "int_cover": cover}
+
+    def only(p, keep):
+        p = p.reindex(columns=symbols).copy()
+        p.loc[:, ~symbols.isin(keep)] = np.nan
+        return p
+    for k, p in us_c.items():
+        out[k] = only(p, us)
+    for k, p in in_c.items():
+        ip = only(p, ind)
+        out[k] = ip if k not in out else out[k].fillna(ip)
+    return out, (len(us), len(ind))
+
+
+def run_pit(start):
+    """EV-19 (SUE) and EV-20 (value/quality sleeves) through the same evaluate()/verdict()."""
+    df = pd.read_parquet(f"{OUT}/prices.parquet")
+    df = df[df.d >= pd.Timestamp(start) - pd.Timedelta(days=400)]
+    fin = pd.read_parquet(f"{OUT}/financials_pit.parquet")
+    spl = pd.read_parquet(f"{OUT}/splits.parquet") if os.path.exists(f"{OUT}/splits.parquet") \
+        else None
+    fin_syms = set(fin.symbol)
+    results, table, notes = {}, [], []
+    for uni, g in df.groupby("universe"):
+        cover = g.symbol[g.symbol.isin(fin_syms)].nunique() / g.symbol.nunique()
+        if cover < 0.5:
+            notes.append(f"{uni}: skipped — fundamentals for {cover:.0%} of symbols")
+            continue
+        wide = {c: g.pivot(index="d", columns="symbol", values=c).sort_index()
+                for c in ("close", "adj_close", "volume")}
+        tr = wide["adj_close"].fillna(wide["close"]).ffill(limit=5)
+        sig = signals(tr, wide["volume"], wide["close"])
+        me = month_ends(tr.index)
+        me = me[me >= pd.Timestamp(start)]
+        fwd = tr.loc[me].shift(-1) / tr.loc[me] - 1
+        liq = sig["_liq"].loc[me]
+        member = membership_mask(me, tr.columns, uni)
+        close_me = wide["close"].ffill(limit=5).loc[me]
+        fp, (n_us, n_in) = fundamental_panels(fin, spl, me, tr.columns, close_me)
+        if member is not None:   # rank sleeves among that month's members only
+            fp = {k: v.where(member) for k, v in fp.items()}
+        if n_us >= n_in:
+            fp["value"] = sleeve(fp, US_VALUE, 2)
+            fp["quality"] = sleeve(fp, US_QUALITY, 2)
+            comps = list(US_VALUE) + list(US_QUALITY)
+        else:
+            fp["value"] = sleeve(fp, IN_VALUE, 1)
+            fp["quality"] = sleeve(fp, IN_QUALITY, 1)
+            comps = list(IN_VALUE) + list(IN_QUALITY)
+        notes.append(f"{uni}: {n_us} EDGAR / {n_in} NSE symbols with facts; "
+                     f"{'point-in-time' if member is not None else 'TODAY’S (biased)'} membership")
+        price_ctrl = {c: sig[c].loc[me] for c in EXISTING}
+        cost = COST.get(uni, 0.003)
+        for name in ["sue", "value", "quality"] + comps:
+            m = evaluate(fp[name], fwd, liq, price_ctrl, cost, member_me=member)
+            sm = summarize(m)
+            if name in ("sue", "value", "quality") and sm:
+                full = dict(price_ctrl, **{k: fp[k] for k in ("sue", "value", "quality")
+                                           if k != name})
+                sm["fm_t_full"] = summarize(evaluate(fp[name], fwd, liq, full, cost,
+                                                     member_me=member)).get("fm_t_nw", np.nan)
+            results.setdefault(name, {})[uni] = sm
+            if sm:
+                table.append({"signal": name, "universe": uni, **sm})
+        print(f"{uni}: done", flush=True)
+    return results, pd.DataFrame(table), notes
+
+
+def report_pit(results, table, notes, start):
+    today = dt.date.today().isoformat()
+    os.makedirs(OUT, exist_ok=True)
+    table.to_csv(f"{OUT}/ev19-20-{today}.csv", index=False)
+    L = [f"# EV-19 / EV-20 report — {today}", "",
+         "Point-in-time fundamentals through the EV-0 harness (`ops-tools/ev0.py run-pit`). "
+         f"Monthly from {start}; forward return = next month's total return; liquidity floor and "
+         f"costs {COST} as EV-0. Facts used only when FIRST filed strictly before the month-end; "
+         "restatements ignored; EPS/share counts split-adjusted to today's basis via "
+         "corporate_actions.", "",
+         "- **EV-19 SUE**: (EPS_q − EPS_q−4) / σ(prior 8 seasonal diffs, ≥4); Q4 and other "
+         "YTD-only quarters derived as YTD − prior YTD; signal live for 91 days after the filing date. "
+         "earnings_calendar (schema 19) holds only forward dates from 2026-10-27, so `filed` "
+         "(10-Q/10-K or NSE results date — usually AFTER the press-release announcement) is the event date: "
+         "the measured drift is post-filing, a conservative lower bound on PEAD.",
+         "- **EV-20 sleeves** (screener pct-rank style, NA = 0.5): US value = E/P, B/P, EBIT/EV, FCF/P; "
+         "US quality = ROE, op margin, −D/E. India (NSE results, no balance sheet): value = E/P only; "
+         "quality = EBIT margin, interest cover — a PARTIAL sleeve.",
+         "- Verdict: §5 criteria per universe; **flagship** = SP500 + NIFTY500 jointly (criterion 2 needs both). "
+         "FM t = price controls (the five composite price inputs); FM t full = price + the other "
+         "EV-19/20 sleeves.",
+         "- Survivorship: prices/facts exist only for TODAY's constituents of some universe; SP500 "
+         "membership is point-in-time (EV-1) but removed names without prices drop out. NIFTY500 and "
+         "SP400/SP600 use today's constituents (biased).", ""]
+    L += [f"- {n}" for n in notes] + [""]
+    L += ["| signal | universe | verdict (this universe) | months | names | IC | NW t | IC 1st/2nd half | "
+          "Q5−Q1 /yr | net /yr | turnover | FM t | FM t full |",
+          "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    for name, per in results.items():
+        for uni, s in per.items():
+            if not s:
+                continue
+            v, crit = verdict({uni: s})
+            fails = ", ".join(k for k, ok in crit.items() if not ok) or "—"
+            full = s.get("fm_t_full", np.nan)
+            L.append(f"| {name} | {uni} | **{v}** ({'fails ' + fails if v == 'FAIL' else 'all 4'}) | "
+                     f"{s['months']} | {s['names']} | {s['ic_mean']:.3f} | {s['ic_t_nw']:.1f} | "
+                     f"{s['ic_h1']:.3f}/{s['ic_h2']:.3f} | {s['spread_ann']:.1%} | {s['net_ann']:.1%} | "
+                     f"{s['turnover']:.0%} | {s['fm_t_nw']:.1f} | "
+                     f"{'' if pd.isna(full) else f'{full:.1f}'} |")
+        flag = {u: s for u, s in per.items() if u in PIT_FLAGSHIP and s}
+        if flag:
+            v, crit = verdict(flag)
+            L.append(f"| {name} | **flagship {'+'.join(flag)}** | **{v}** · "
+                     f"{' · '.join(k + (' ✓' if ok else ' ✗') for k, ok in crit.items())} "
+                     "| | | | | | | | | | |")
+    path = f"{OUT}/report-ev19-20-{today}.md"
+    open(path, "w").write("\n".join(L) + "\n")
+    print(path)
+    return path
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -355,9 +730,17 @@ def main():
     r = sub.add_parser("run")
     r.add_argument("--start", default="2001-01-01")
     r.add_argument("--price", nargs="+", default=["adj_close", "close"])
+    sub.add_parser("export-pit", help="EV-19/20: financial_facts with durations + splits")
+    rp = sub.add_parser("run-pit", help="EV-19 SUE + EV-20 value/quality sleeves")
+    rp.add_argument("--start", default="2005-01-01")
     a = ap.parse_args()
     if a.cmd == "export":
         export(a.start)
+    elif a.cmd == "export-pit":
+        export_pit()
+    elif a.cmd == "run-pit":
+        res, tab, notes = run_pit(a.start)
+        report_pit(res, tab, notes, a.start)
     else:
         res, tab = run(a.price, a.start)
         report(res, tab, a.start)
