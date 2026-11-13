@@ -52,7 +52,7 @@
 
 | # | Find | Fix |
 |---|---|---|
-| F20 | **k3s cron schedules run in NODE-LOCAL PDT, not UTC** — verified when the "02:00-02:30 UTC" screener chain fired 09:00-09:30 UTC. All documented "UTC" times were PDT all along; functionally fine (staggering + market-close ordering hold) | Docs corrected; schedules deliberately left as-is |
+| F20 | **k3s cron schedules run in NODE-LOCAL PDT, not UTC** (2026-11-12: "functionally fine" was wrong for NSE/APAC — writers stored mid-session bars; fixed by `sessions.py` in the writers, manual §3) — verified when the "02:00-02:30 UTC" screener chain fired 09:00-09:30 UTC. All documented "UTC" times were PDT all along; functionally fine (staggering + market-close ordering hold) | Docs corrected; schedules deliberately left as-is |
 | F21 | **niftyindices.com CSV path dead** (JS HTML shell at the old URL) | `archives.nseindia.com/content/indices/ind_nifty500list.csv` — which also carries Industry (sector) |
 | F22 | `pandas.read_html` fails on the Wikipedia S&P 500 page markup (exception embeds the whole page) | Direct `lxml.html` parse of table `#constituents` — 503 rows incl. CIK |
 | F23 | **SEC EDGAR companyfacts nesting**: units live under `facts.{tag}.units.{unit}[]` — iterating the tag dict silently yields zero facts | Parse through the `units` level; delivers ~2006→ history |
