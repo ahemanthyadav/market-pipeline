@@ -53,7 +53,7 @@ def write_forecasts(rows, batch_size=500):
             values.append(f"({symbol}, {ts}, {model}, {horizon}, {forecast})")
         sql = (f"INSERT INTO app.vol_forecasts (symbol, ts, model, horizon, forecast) "
                f"VALUES {', '.join(values)} "
-               f"ON CONFLICT (symbol, ts, model, horizon) DO NOTHING")
+               f"ON CONFLICT (symbol, ts, model, horizon) DO UPDATE SET forecast = EXCLUDED.forecast")
         raw = psql(sql).strip()
         if raw.startswith("INSERT 0 "):
             n += int(raw.split()[-1])

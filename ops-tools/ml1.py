@@ -2,7 +2,7 @@
 """ML-1 anomaly detection v1 — data quality + node health flags.
 
 Shares the workstation PSQL_CMD pattern with ev0.py / ml0.py.
-Writes to app.data_anomalies (idempotent: ON CONFLICT DO NOTHING).
+Writes to app.data_anomalies: owns its window (DELETE the scanned window, then upsert).
 
 Detection rules (all rule-based, no model):
   bad_bar        — |1-day ret| > 40% OR close <= 0 OR high < max(open,close)
@@ -57,7 +57,8 @@ def write_anomalies(anomalies):
         details = _q(json.dumps(a.get("details", {}), default=str))
         sql = (f"INSERT INTO app.data_anomalies (kind, subject, ts, score, details) "
                f"VALUES ({kind}, {subject}, {ts}, {score}, {details}::jsonb) "
-               f"ON CONFLICT (kind, subject, ts) DO NOTHING")
+               f"ON CONFLICT (kind, subject, ts) DO UPDATE SET score = EXCLUDED.score, "
+               f"details = EXCLUDED.details")
         raw = psql(sql).strip()
         if raw == "INSERT 0 1":
             n += 1
@@ -73,8 +74,11 @@ def detect_bad_bars(df):
     Returns list of anomaly dicts (kind='bad_bar', subject=symbol).
     """
     df = df.sort_values(["symbol", "ts"]).copy()
-    df["prev_close"] = df.groupby("symbol")["close"].shift(1)
-    df["ret"] = df["close"] / df["prev_close"] - 1
+    # Returns on the split/dividend-adjusted series when present (2026-11-12): raw
+    # closes flagged every recorded split as a "jump". OHLC sanity stays on raw bars.
+    px = df["adj_close"].fillna(df["close"]) if "adj_close" in df else df["close"]
+    df["prev_close"] = px.groupby(df["symbol"]).shift(1)
+    df["ret"] = px / df["prev_close"] - 1
 
     anomalies = []
     for _, r in df.iterrows():
@@ -132,25 +136,32 @@ def detect_feed_drops(hb):
 
 
 def detect_row_count_drops(daily_counts):
-    """Flag days where row count < 70% of trailing 20-day median.
+    """Flag days where a market's row count < 70% of its trailing 20-day median.
 
-    Input columns: d (date-like), cnt (int)
-    Returns list of anomaly dicts (kind='row_count_drop', subject='stock_prices').
+    Input columns: d (date-like), cnt (int)[, market]. Counted PER MARKET
+    (2026-11-12): pooled counts flagged every US or Indian holiday (one market
+    closed = a third / two thirds of the pool). A closed market has no row for that
+    day, so holidays drop out naturally. Each market's NEWEST day is skipped — it
+    may still be in flight (the writer fires mid-session somewhere).
+    Returns list of anomaly dicts (kind='row_count_drop', subject='stock_prices[:MKT]').
     """
-    daily_counts = daily_counts.sort_values("d").copy()
-    daily_counts["median"] = daily_counts["cnt"].rolling(ROW_WINDOW, min_periods=5).median()
+    if "market" not in daily_counts:
+        daily_counts = daily_counts.assign(market="")
     anomalies = []
-    for _, r in daily_counts.iterrows():
-        if pd.isna(r["median"]):
-            continue
-        if r["cnt"] < (1 - ROW_DROP_PCT) * r["median"]:
-            anomalies.append({
-                "kind": "row_count_drop",
-                "subject": "stock_prices",
-                "ts": r["d"],
-                "score": float(r["cnt"] / r["median"]),
-                "details": {"count": int(r["cnt"]), "median_count": float(r["median"])},
-            })
+    for market, g in daily_counts.groupby("market"):
+        g = g.sort_values("d").iloc[:-1].copy()
+        g["median"] = g["cnt"].rolling(ROW_WINDOW, min_periods=5).median()
+        for _, r in g.iterrows():
+            if pd.isna(r["median"]):
+                continue
+            if r["cnt"] < (1 - ROW_DROP_PCT) * r["median"]:
+                anomalies.append({
+                    "kind": "row_count_drop",
+                    "subject": f"stock_prices:{market}" if market else "stock_prices",
+                    "ts": r["d"],
+                    "score": float(r["cnt"] / r["median"]),
+                    "details": {"count": int(r["cnt"]), "median_count": float(r["median"])},
+                })
     return anomalies
 
 
@@ -171,13 +182,18 @@ def detect_scraper_drops(hb, now=None):
         if ldt.tzinfo is None:
             ldt = ldt.tz_localize("UTC")
         days_since = (now - ldt).days
-        if SCRAPER_SILENCE_DAYS <= days_since <= SCRAPER_WINDOW_DAYS:
+        # Per-feed cadence (2026-11-12): a weekly feed (max_age_hours 192) is not
+        # "silent" after 2 days. Silence threshold = max(2 d, the feed's own max age).
+        mah = r.get("max_age_hours")
+        silence = max(SCRAPER_SILENCE_DAYS,
+                      int(-(-float(mah) // 24)) if mah is not None and pd.notna(mah) else 0)
+        if silence <= days_since <= silence + SCRAPER_WINDOW_DAYS:
             anomalies.append({
                 "kind": "scraper_drop",
                 "subject": r["feed"],
                 "ts": ldt,
-                "score": days_since / SCRAPER_WINDOW_DAYS,
-                "details": {"days_since_data": int(days_since),
+                "score": days_since / (silence + SCRAPER_WINDOW_DAYS),
+                "details": {"days_since_data": int(days_since), "silence_days": int(silence),
                             "last_data_ts": str(ldt)},
             })
     return anomalies
@@ -187,15 +203,16 @@ def detect_scraper_drops(hb, now=None):
 
 def fetch_prices(days=90):
     """Return stock_prices rows from the last N days as a dataframe."""
-    sql = (f"SELECT symbol, ts, open, high, low, close, volume "
+    cols = ["symbol", "ts", "open", "high", "low", "close", "volume", "adj_close"]
+    sql = (f"SELECT {', '.join(cols)} "
            f"FROM stock_prices WHERE ts >= NOW() - INTERVAL '{days} days' "
            f"ORDER BY symbol, ts")
     rows = psql(sql)
     if not rows.strip():
-        return pd.DataFrame(columns=["symbol", "ts", "open", "high", "low", "close", "volume"])
+        return pd.DataFrame(columns=cols)
     data = [line.split(",") for line in rows.strip().split("\n") if line]
-    df = pd.DataFrame(data, columns=["symbol", "ts", "open", "high", "low", "close", "volume"])
-    for c in ["open", "high", "low", "close", "volume"]:
+    df = pd.DataFrame(data, columns=cols)
+    for c in ["open", "high", "low", "close", "volume", "adj_close"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
     df["ts"] = pd.to_datetime(df["ts"], utc=True)
     return df
@@ -222,13 +239,15 @@ def fetch_heartbeat():
 
 def fetch_daily_row_counts(days=45):
     """Return daily row counts for stock_prices over the last N days."""
-    sql = (f"SELECT DATE(ts) AS d, COUNT(*) AS cnt FROM stock_prices "
-           f"WHERE ts >= NOW() - INTERVAL '{days} days' GROUP BY DATE(ts) ORDER BY d")
+    sql = (f"SELECT DATE(ts) AS d, COUNT(*) AS cnt, "
+           f"CASE WHEN symbol LIKE '%.NS' OR symbol LIKE '%.BO' THEN 'NSE' ELSE 'US' END AS market "
+           f"FROM stock_prices WHERE ts >= NOW() - INTERVAL '{days} days' "
+           f"GROUP BY 1, 3 ORDER BY 1")
     rows = psql(sql)
     if not rows.strip():
-        return pd.DataFrame(columns=["d", "cnt"])
+        return pd.DataFrame(columns=["d", "cnt", "market"])
     data = [line.split(",") for line in rows.strip().split("\n") if line]
-    df = pd.DataFrame(data, columns=["d", "cnt"])
+    df = pd.DataFrame(data, columns=["d", "cnt", "market"])
     df["d"] = pd.to_datetime(df["d"], utc=True)
     df["cnt"] = pd.to_numeric(df["cnt"])
     return df
@@ -260,6 +279,11 @@ def run(days=90):
         n_rc = len([a for a in all_anomalies if a["kind"] == "row_count_drop"])
         print(f"row_count_drop: {n_rc} anomalies", flush=True)
 
+    # Own the window (house rule 4): every run recomputes the scanned window, so a
+    # rule fix or a repaired bar clears stale rows instead of leaving them forever.
+    psql(f"DELETE FROM app.data_anomalies WHERE kind IN ('bad_bar','row_count_drop') "
+         f"AND ts >= NOW() - INTERVAL '{days + 10} days'")
+    psql("DELETE FROM app.data_anomalies WHERE kind IN ('feed_drop','scraper_drop')")
     n = write_anomalies(all_anomalies)
     print(f"ML-1: {len(all_anomalies)} detected, {n} written to app.data_anomalies", flush=True)
     return n
