@@ -15,7 +15,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: prices
-          image: local/marketdata-data:v6
+          image: local/marketdata-data:v8
           imagePullPolicy: Never
           command: ["python", "stock_prices.py"]
           env:
@@ -51,7 +51,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: fundamentals
-          image: local/marketdata-data:v6
+          image: local/marketdata-data:v8
           imagePullPolicy: Never
           command: ["python", "stock_fundamentals.py"]
           env:
@@ -90,7 +90,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: actions
-          image: local/marketdata-data:v6
+          image: local/marketdata-data:v8
           imagePullPolicy: Never
           command: ["python", "corporate_actions_backfill.py"]
           env:
@@ -127,7 +127,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: nse-fundamentals
-          image: local/marketdata-data:v6
+          image: local/marketdata-data:v8
           imagePullPolicy: Never
           command: ["python", "nse_fundamentals.py"]
           env:
@@ -166,7 +166,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: nse-fundamentals
-          image: local/marketdata-data:v6
+          image: local/marketdata-data:v8
           imagePullPolicy: Never
           command: ["python", "nse_fundamentals.py"]
           env:

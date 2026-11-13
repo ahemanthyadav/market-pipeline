@@ -181,7 +181,7 @@ flowchart TB
         EDGAR[SEC EDGAR]:::src
     end
 
-    subgraph INGEST["Ingestion CronJobs (Pi workers, image marketdata-data:v6)"]
+    subgraph INGEST["Ingestion CronJobs (Pi workers, image marketdata-data:v8)"]
         direction LR
         YFJ[yfinance-fetcher]
         NJ[nse-fetcher]
@@ -366,10 +366,10 @@ flowchart LR
 | Image | Node(s) | Used by |
 |-------|---------|---------|
 | `local/marketdata-light:v1` | TX2 + pi1/pi3 | headline-ner, sentiment-scorer (TX2 only via taint), rbi-fetcher, factors-fetcher, news-fetcher, etc. |
-| `local/marketdata-data:v6` | pi1/pi3 (+ tarball on TX2) | all unpinned CronJobs (stock-prices, nse-fetcher, yfinance-fetcher, screener chain, fundamentals, metrics, report, valuation, ...) |
+| `local/marketdata-data:v8` | pi1/pi3 (+ tarball on TX2) | all unpinned CronJobs (stock-prices, nse-fetcher, yfinance-fetcher, screener chain, fundamentals, metrics, report, valuation, ...) |
 | `local/marketdata-ml:v1` | TX2 | sentiment-scorer (GPU taint path) |
 | `local/litellm-database:1.106.0` | TX2 | llm-gateway Deployment |
-| `local/marketview:v13` | pi1 | marketview web app |
+| `local/marketview:v14` | pi1 | marketview web app |
 | `local/telegram-digest:v37` | pi1 | telegram-bot, telegram-digest, telegram-alerts |
 | `timescale/timescaledb:2.30.1-pg16` | TX2 | TimescaleDB StatefulSet |
 | `grafana/grafana:12.2.0` | pi3 | Grafana |

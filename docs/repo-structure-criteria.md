@@ -34,20 +34,20 @@ Everything that runs in the `market-data` k8s namespace and shares the 3 base im
 
 | Component | Manifest | Image | Why it stays |
 |-----------|----------|-------|--------------|
-| `yfinance-fetcher` | `manifests/ingestion/yfinance/cronjob.yaml` | `marketdata-data:v6` | Shares base image, `_common/mdjob.py` pattern, `PGUSER` Secret pattern |
-| `nse-fetcher` | `manifests/ingestion/nse/cronjob.yaml` | `marketdata-data:v6` | Same |
+| `yfinance-fetcher` | `manifests/ingestion/yfinance/cronjob.yaml` | `marketdata-data:v8` | Shares base image, `_common/mdjob.py` pattern, `PGUSER` Secret pattern |
+| `nse-fetcher` | `manifests/ingestion/nse/cronjob.yaml` | `marketdata-data:v8` | Same |
 | `fx-fetcher`, `yields-fetcher`, `rates-fetcher`, `rbi-fetcher` | `manifests/ingestion/{fx,yields,rates,rbi}/` | `marketdata-data` / `marketdata-light` | Same |
 | `news-fetcher`, `intraday-fetcher` | `manifests/ingestion/{news,intraday}/` | `marketdata-light` / `marketdata-data` | Same |
 | `fdi-watch`, `fiidii-fetcher`, `research-watcher` | `manifests/ingestion/{fdi,fiidii,research}/` | `marketdata-light` | Same |
-| `ta-compute` | `manifests/ingestion/ta/cronjob.yaml` | `marketdata-data:v6` | Same |
+| `ta-compute` | `manifests/ingestion/ta/cronjob.yaml` | `marketdata-data:v8` | Same |
 | `sentiment-scorer`, `headline-ner` | `manifests/{sentiment,headlines}/cronjob.yaml` | `marketdata-ml` / `marketdata-light` | TX2-only, but still `market-data` namespace |
-| `stock-prices`, `stock-fundamentals`, `stock-metrics` | `manifests/stock-screener/cronjobs.yaml` | `marketdata-data:v6` | Screener chain — tightly coupled by data flow |
-| `stock-screener`, `stock-report`, `stock-valuation` | `manifests/stock-screener/cronjobs.yaml` | `marketdata-data:v6` | Same chain; `FUND_SOURCE` switch couples screener to fundamentals |
-| `prediction-tracker`, `earnings-calendar`, `accuracy-check` | `manifests/stock-screener/cronjobs.yaml` | `marketdata-data:v6` | Reads `stock_scores` / `stock_valuations` — part of screener output |
+| `stock-prices`, `stock-fundamentals`, `stock-metrics` | `manifests/stock-screener/cronjobs.yaml` | `marketdata-data:v8` | Screener chain — tightly coupled by data flow |
+| `stock-screener`, `stock-report`, `stock-valuation` | `manifests/stock-screener/cronjobs.yaml` | `marketdata-data:v8` | Same chain; `FUND_SOURCE` switch couples screener to fundamentals |
+| `prediction-tracker`, `earnings-calendar`, `accuracy-check` | `manifests/stock-screener/cronjobs.yaml` | `marketdata-data:v8` | Reads `stock_scores` / `stock_valuations` — part of screener output |
 | `pipeline-health` | `manifests/health/cronjob.yaml` | `marketdata-light:v1` | Reads all 14 feeds; writes `pipeline_heartbeat` |
 | `news-embed` | `manifests/llm/cronjob.yaml` | `marketdata-light:v1` | ML-2 embeddings; calls `llm-gateway` but writes to cluster DB |
 | `llm-narrative` | `manifests/llm/cronjob.yaml` | `marketdata-light:v1` | ML-7a; reads facts from DB, calls gateway, writes `llm_narratives` |
-| `universe-refresh`, `membership-history` | `manifests/stock-screener/backfills.yaml` | `marketdata-data:v6` | Security master; feeds every screener job |
+| `universe-refresh`, `membership-history` | `manifests/stock-screener/backfills.yaml` | `marketdata-data:v8` | Security master; feeds every screener job |
 | `pg-backup` | `manifests/backup/cronjob.yaml` | `timescale/timescaledb` | Dumps the same TimescaleDB the CronJobs write |
 
 ### Always-on Deployments (2 live in `market-data`)
@@ -97,7 +97,7 @@ Only components that satisfy all four criteria (C1–C4).
 | Criterion | Verdict | Evidence |
 |-----------|---------|----------|
 | C1 Deployment target | ✅ Yes | Deployment on pi1, served via `tailscale serve`; not a CronJob in `market-data` |
-| C2 Lifecycle / cadence | ✅ Yes | Own image tag (`marketview:v13`); routes and frontend evolve independently of screener schedule |
+| C2 Lifecycle / cadence | ✅ Yes | Own image tag (`marketview:v14`); routes and frontend evolve independently of screener schedule |
 | C3 Dependencies | ✅ Yes | Web app stack; doesn't use the 3 consolidated base images |
 | C4 Independent release | ✅ Yes | Exposed as `https://pi1.<tailnet>.ts.net/`; could be consumed independently |
 

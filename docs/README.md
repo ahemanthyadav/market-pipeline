@@ -17,7 +17,7 @@
 > `llm-gateway`, NVIDIA free tier: daily AI market note, every number checked — ADR 0022/0023).
 > 4 nodes Ready (pi2 cordoned control plane), 36 CronJobs (nse-fundamentals suspended until its first backfill completes), the others
 > active, DB `Guaranteed` QoS with readiness probe. Images: consolidated toolkit images `local/marketdata-light:v1`,
-> `local/marketdata-data:v6` (2026-11-12), `local/marketdata-ml:v1` (TX2 only), telegram `local/telegram-digest:v42`, `local/marketview:v13`. Least-privilege DB
+> `local/marketdata-data:v8` (2026-11-13), `local/marketdata-ml:v1` (TX2 only), telegram `local/telegram-digest:v42`, `local/marketview:v14`. Least-privilege DB
 > roles for Grafana and the Telegram bot. Daily second copies of the DB dump
 > and the k3s control-plane datastore on the workstation. A mains power loss on 10-18 rebooted everything — recovered on
 > its own; no UPS by decision. Work order and reasoning: `engineering-plan-2026-10-18.md`; open items: `pending-tasks.md`.

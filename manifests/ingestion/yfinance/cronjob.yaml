@@ -25,7 +25,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: fetcher
-              image: local/marketdata-data:v6
+              image: local/marketdata-data:v8
               imagePullPolicy: Never
               command: ["python", "yfinance-fetcher.py"]
               env:
