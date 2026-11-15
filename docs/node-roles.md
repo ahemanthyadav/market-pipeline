@@ -18,7 +18,7 @@
 | Node | Hardware | In k3s? | Primary job | Pinned workloads | If it dies |
 |---|---|---|---|---|---|
 | **pi0** | Pi 1 B+, 512 MB, SD | **No** | LAN DNS (Pi-hole + unbound), out-of-cluster watcher | none (not a k8s node) | LAN ad-block DNS gone; the dead-man's switch goes silent |
-| **pi1** | Pi 3 B, 1 GB, 233 GB SSD | Worker | Telegram bot + marketview host; general ingestion pool | `telegram-bot`, `telegram-digest`, `telegram-alerts`, `marketview` | Bot stops answering; digest/alerts not sent; unpinned jobs land on pi3/orin2. Power supply replaced 2026-10-14; 24h acceptance pending (due ≥ 2026-10-15 05:40 UTC). |
+| **pi1** | Pi 3 B, 1 GB, 233 GB SSD | Worker | Telegram bot + marketview host; general ingestion pool | `telegram-bot`, `telegram-digest`, `telegram-alerts`, `marketview` | Bot stops answering; digest/alerts not sent; unpinned jobs land on pi3/orin2. Power supply replaced 2026-10-14; 24h acceptance PASSED 2026-10-20 — item CLOSED (tracker §1). |
 | **pi2** | Pi 3 B+, 1 GB | **Control plane** | k3s server (API, scheduler, datastore, CoreDNS, Traefik) | none (**cordoned**) | Whole cluster loses its API; nothing new schedules (see §4) |
 | **pi3** | Pi 3 B, 1 GB, SSD | Worker | Grafana, backups, general ingestion pool | `grafana`, `pg-backup`, `restore-drill` (Job) | No dashboards, no nightly dump; unpinned jobs land on pi1/orin2 |
 | **tx2** (`ahytx2-desktop`) | Jetson TX2, 7.7 GB, eMMC + 224 GB SSD | Worker (tainted `gpu=true`) | **The database**, NLP jobs, LLM gateway, image build host | `timescaledb`, `llm-gateway` (ns `llm`), `sentiment-scorer`, `headline-ner` | **Every pipeline write fails** (DB down); data is safe on the Retain PV |
@@ -66,8 +66,7 @@
 - **Live 2026-11-15:** up 28 d 13 h, load 0.73/0.64/0.62, 905 MiB RAM (378 MiB available), `throttled=0x0`,
   `/` at 8 % (17 G of 229 G).
 - **Power (2026-10-14):** pi1 was the only Pi failing the power review (live undervolt + throttle `0x50005`, 36 dmesg events). Supply replaced 2026-10-14 (~02:30 UTC). Import stress test
-  2026-10-14 06:19–06:21 UTC (116 MB screener:v10 tarball push + ctr import, load peaked 2.78): **`0x0` throughout, 0 dmesg undervoltage events**. 24 h acceptance trial pending
-  — run `bash ops-tools/power-review.sh --since 2026-10-14T05:39:00Z`, verdict due ≥ 2026-10-15 05:40 UTC. Until acceptance: no bulk imports to pi1, treat as fragile worker.
+  2026-10-14 06:19–06:21 UTC (116 MB screener:v10 tarball push + ctr import, load peaked 2.78): **`0x0` throughout, 0 dmesg undervoltage events**. 24 h acceptance PASSED 2026-10-20 — item CLOSED (tracker §1). Bulk imports on pi1 are now permitted, though it remains the tightest-RAM worker.
 - **Also holds:** a leftover `screener:v9` tarball in the SSH user's home (tracker §1). Planned second copy of DB dumps (AR-11) — not done.
 - **Watch:** accumulates undervolt events; was NotReady during the 2026-10-10 wedge. Agent runs with
   `--disable-apiserver-lb` (direct to the control plane).
@@ -130,7 +129,7 @@
   the SSD. The node cannot run any pod without the USB SSD. Re-verify after ANY apt work.
 - **Host jobs:** node-stats logger (also records `db_procs`, the DB-up signal) — root cron added 2026-10-11 (crontab was
   empty; AR-12).
-- **Watch:** eMMC alert at > 85 % (54 % after the 2026-10-10 move); DB + 4 Gi scorer share 7.7 GB RAM.
+- **Watch:** eMMC alert at > 85 % (**60 % after the 2026-10-10 move** — verified 2026-11-15 from inside `timescaledb-0`; `/dev/mmcblk0p1` 15.5 G used of 27.4 G, ~60 %); DB + 4 Gi scorer share 7.7 GB RAM. SSD (`/dev/sda4`, pgdata) at 16 % (23 G of 157 G).
 - **GPU is NOT exposed to Kubernetes here:** the node carries the GPU-present label but advertises **no GPU
   allocatable capacity** — the NVIDIA device plugin runs only on orin1/orin2. TX2's GPU is reached through the GPU
   RuntimeClass path (GPU smoke test), not via device-plugin resource requests. Do not write a manifest that requests
@@ -165,11 +164,17 @@
   `pipeline-health`, `stock-metrics`, `stock-screener`, `stock-report`, `stock-valuation`, `prediction-tracker`,
   `ml1-anomalies`, `ml3-volatility`, `ml7b-per-symbol`, `llm-narrative`, `news-embed`, `nse-fetcher`,
   `stock-fundamentals`, `rbi-fetcher`, `fiidii-fetcher`, `intraday-fetcher`, `universe-refresh`, …).
+  **Orin2 holds NO market data** — no PVC or hostPath mount on either Orin node; jobs write only to TimescaleDB on tx2.
+  **Not a single point of failure:** every floating job's image (`marketdata-data:v8`, `marketdata-light:v1`) is
+  imported on pi1 and pi3 as well as orin2, so if orin2 dies the scheduler reschedules onto the Pis — no data lost,
+  no availability gap (the Orins ran nothing before 2026-11-13). The gap is *observability*: orin2 isn't pinged by
+  nodewatch, has no node-stats logger, no SSH alias (tracker §1).
 - **Labels/taints (live):** `hardware=orin-cpu`, `tier=saas`, 1× GPU allocatable, **no taint** — which is exactly why
   it takes floating work (the `gpu=orin` taint on orin1 keeps voice pods off it and vice-versa).
 - **Pinned:** none. Every pinned workload (tx2 GPU jobs, pi1 Telegram, pi3 Grafana/backup) stays where it is.
 - **Image obligation (2026-11-13):** orin2 needs `marketdata-data:v8` + `marketdata-light:v1` imported. **Every future
-  data/light image cycle must import on orin2 too** or the floating jobs fail with `ErrImageNeverPull`
+  data/light image cycle must import on orin2 too** — pi1 and pi3 already hold both images, so a cycle that misses
+  orin2 leaves floating jobs able to fall back to the Pis but orin2 itself would start failing with `ErrImageNeverPull`
   (`imagePullPolicy: Never`, no registry — AGENTS.md rule 6).
 - **Capacity:** 6 CPU / 7.6 GB RAM / 476 GB SSD — the most headroom of any worker, which is why it wins floating jobs.
 - **Not yet covered by ops tooling:** no `ORIN1_IP`/`ORIN2_IP` alias in `.hosts.env` and no host password, so

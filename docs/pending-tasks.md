@@ -229,6 +229,9 @@ Both wired into bot.py COMMANDS + MENU, router SAFE_AI_COMMANDS, and nicknames.
   **2026-11-15 update:** orin2 now runs **all 31 floating CronJobs** (the scheduler prefers it — 6 CPU / 7.6 GB
   headroom, untainted, newest images); it also holds `marketdata-data:v8`. **The image obligation is now three nodes:
   pi1 + pi3 + orin2** — a cycle that misses one produces `ErrImageNeverPull` on whichever node the scheduler picks.
+  **Orin2 holds NO market data and is not a SPOF:** no PVC or hostPath mount on either Orin node; all images exist on
+  pi1/pi3 as fallback; jobs write only to TimescaleDB on tx2. The real gap is *observability* — orin2 isn't pinged by
+  nodewatch, has no node-stats logger, no SSH alias.
 
 - [ ] 🔴 **TX2 SSH credential is stale (found 2026-11-15).** `python3 ops-tools/runcmd.py tx2 ahytx2-desktop '...'`
   returns `CONNECT FAIL … Authentication failed.` from this workstation. The TX2 itself is **healthy**
@@ -236,6 +239,9 @@ Both wired into bot.py COMMANDS + MENU, router SAFE_AI_COMMANDS, and nicknames.
   fresh) — this is purely a credential gap, but it **blocks the §6 image cycle** (build → tarball → import → apply)
   and makes the TX2 disk/eMMC check (§7) unverifiable. Fix `TX2_PASS` in `.secrets.env` (never in a tracked file)
   and re-verify: `df -h / /mnt/tx2-ssd`, the §2 fixed-config facts, and one `runcmd.py tx2` round-trip.
+  **TX2 disk verified 2026-11-15 from inside `timescaledb-0`** (hostPath mount): eMMC `/dev/mmcblk0p1` at **60 %**
+  (15.5 G used of 27.4 G — up from 54% at the 2026-10-10 move, alert threshold 85%); SSD `/dev/sda4` pgdata at
+  **16 %** (23 G used of 157 G).
 
 - [ ] 🟠 **Orin nodes are unmonitored (found 2026-11-15).** orin1/orin2 (joined 2026-11-05) are missing from three
   places: (a) `nodewatch.sh` on pi0 still pings only `pi0..pi3` + `tx2` — verified by reading

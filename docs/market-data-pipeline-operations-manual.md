@@ -104,7 +104,7 @@ re-runs and late corrections overwrite cleanly, never duplicate.
 - iptables wrappers `/sbin/iptables-restore` + `/sbin/ip6tables-restore`
   backed by `/sbin/xtables-multi.orig` — re-verify after ANY apt work on the TX2.
 - L4T R32.7.5 / JetPack 4.6.1 / CUDA 10.2 (host); kernel 4.9.337-tegra (cgroup v1).
-- Storage: 28 GB eMMC (OS only since 2026-10-10 — 54% used; was 79% after the 2026-10-03 cleanup;
+- Storage: 28 GB eMMC (OS only since 2026-10-10 — 60% used as of 2026-11-15; was 79% after the 2026-10-03 cleanup;
   CUDA/cuDNN/TensorRT libs in /usr are ~10 GB of that) + 224 GB USB SSD `sda4` →
   fixed fstab mount `/mnt/tx2-ssd` (by UUID, `nofail`; backup
   `/etc/fstab.bak-20260929`). **Docker data-root moved to `/mnt/tx2-ssd/docker`
@@ -129,7 +129,7 @@ re-runs and late corrections overwrite cleanly, never duplicate.
   (`RequiresMountsFor=` — the agent refuses to start without the store mounted;
   the unit file and its flags are untouched). The rsync'd copy matched the source
   (49,022 files, zero diffs). The eMMC copy and 19 stale image tarballs in
-  `/home/ahytx2` were then deleted: **eMMC 84% → 54%** (14 G of 28 G). The TX2 now
+  `/home/ahytx2` were then deleted: **eMMC 84% → 60%** (15.5 G of 27.4 G as of 2026-11-15). The TX2 now
   cannot run any pod without the USB SSD. To revert: stop agent, `umount`, remove
   the fstab line + drop-in, rsync the store back.
 
@@ -146,8 +146,7 @@ re-runs and late corrections overwrite cleanly, never duplicate.
   **Current state (2026-10-17):** every Pi now has its own dedicated supply — the shared multiport block that caused the
   2026-10-09→10 outage is gone (rewire ~2026-10-12 02:30 UTC; pi1's supply replaced 2026-10-14). pi0/pi2/pi3 PASS the 24 h
   acceptance rule; pi1 import stress test clean 2026-10-14 06:19–06:21 UTC (`0x0` throughout, 0 dmesg undervoltage
-  events); pi1 24 h acceptance re-trial pending — run `bash ops-tools/power-review.sh --since 2026-10-14T05:39:00Z`,
-  verdict due ≥ 2026-10-15 05:40 UTC. Until acceptance: no bulk imports to pi1.
+  events); pi1 24 h acceptance PASSED 2026-10-20 — item CLOSED (tracker §1). Bulk imports on pi1 now permitted.
 
 ## 3. Workloads (namespace `market-data`)
 
