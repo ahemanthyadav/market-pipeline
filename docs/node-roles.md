@@ -73,8 +73,14 @@
   `--disable-apiserver-lb` (direct to the control plane).
 
 ### pi2 — control plane (fragile)
-- **Does:** k3s server — API on :6443, scheduler, controllers, datastore (`state.db`, no backup yet — AR-10), CoreDNS,
+- **Does:** k3s server — API on :6443, scheduler, controllers, datastore (kine/`state.db`), CoreDNS,
   Traefik, metrics-server, local-path-provisioner.
+  **Control-plane backup exists** (not "none"): first copy 2026-10-18 via Python's `sqlite3` online-backup API
+  (pi2 has no `sqlite3` CLI), `PRAGMA integrity_check` ok, 2,169 kine rows, archive pulled to
+  `out/backups/k3s/` (gitignored, mode 600 — **holds the cluster join token**), sha256 verified both ends;
+  **recurring** since 2026-10-18 via `ops-tools/pull-k3s-backup.sh` (workstation cron 03:30 local, load gate
+  skips if pi2 load1 > 3, keeps 14), restore steps in ops manual §9.
+  ⚠ **The restore has never been rehearsed** — drill it on a spare SSD before relying on it (AR-10).
 - **Scheduling:** **cordoned (`SchedulingDisabled`)** — no workload pods run on it. The `node.kubernetes.io/unschedulable`
   taint carries `timeAdded` **2026-10-10 06:11:25 UTC**, i.e. during the 2026-10-09→10 outage recovery (agents being
   rejoined), so it was most likely set then to keep workloads off the 1 GB control plane. The *reason* is inferred from
