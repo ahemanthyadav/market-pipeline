@@ -21,7 +21,7 @@ jobs:
       # Pinned: a floating pandas/numpy bump must never fail CI unrelated to a repo change
       # ubuntu-latest runs Ubuntu 24.04 with externally-managed Python (PEP 668);
       # --break-system-packages is required since actions/setup-python@v5 targets the system Python.
-      - run: pip install --break-system-packages pyyaml==6.0.2 pandas==2.2.3 numpy==2.2.6 lxml==5.3.0
+      - run: pip install --break-system-packages pyyaml==6.0.2 pandas==2.2.3 numpy==2.2.6 lxml==5.3.0 requests
       - name: Install gitleaks (pinned, checksum-verified)
         run: |
           V=8.30.1
