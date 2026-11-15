@@ -73,18 +73,35 @@ echo "$got  $(basename "$f")" > "$f.sha256"; chmod 600 "$f.sha256"
 # In-cluster fast-path copy on pi3 (independent host, same LAN). Primary DR copy
 # remains the workstation archive above; this is a convenience landing zone so a
 # restore can start from the cluster without waiting on the workstation.
-PI3_BACKUP_DIR=/var/lib/market-data/backups/k3s
-python3 ops-tools/runcmd.py pi3 pi3 "mkdir -p -m 700 $PI3_BACKUP_DIR" >/dev/null 2>&1 || true
-if python3 ops-tools/putfile.py pi3 pi3 "$f" "$PI3_BACKUP_DIR/$(basename "$f")" >/dev/null 2>&1 \
-   && python3 ops-tools/putfile.py pi3 pi3 "$f.sha256" "$PI3_BACKUP_DIR/$(basename "$f.sha256")" >/dev/null 2>&1; then
-  echo "$(stamp) K3S-BACKUP-PI3-OK $(basename "$f") -> pi3:$PI3_BACKUP_DIR"
+#
+# 2026-11-15: lives in the pi3 user's HOME, never under /var/lib/market-data —
+# that tree is the root-owned hostPath mounted into pg-backup and restore-drill
+# (both run as root), so the token/CA keys would be readable from those pods.
+# The earlier path also never worked: mkdir as the pi3 user failed on the
+# root-owned dir and `|| true` hid it. Relative paths resolve against $HOME
+# for both runcmd (ssh) and putfile (sftp).
+PI3_BACKUP_DIR=k3s-cp-backups
+pi3_copy() {
+  local name; name=$(basename "$f")
+  python3 ops-tools/runcmd.py pi3 pi3 "mkdir -p $PI3_BACKUP_DIR && chmod 700 $PI3_BACKUP_DIR" >/dev/null || return 1
+  python3 ops-tools/putfile.py pi3 pi3 "$f" "$PI3_BACKUP_DIR/$name.part" >/dev/null || return 1
+  # sftp.put sets no mode: tighten BEFORE the final name exists, then verify there.
+  local remote_sum
+  remote_sum=$(python3 ops-tools/runcmd.py pi3 pi3 \
+    "cd $PI3_BACKUP_DIR && chmod 600 $name.part && mv $name.part $name && sha256sum $name" \
+    | sed -n 's/^\([0-9a-f]\{64\}\)  .*/\1/p')
+  [ "$remote_sum" = "$got" ] || { echo "pi3 sha256 ${remote_sum:0:12} != ${got:0:12}" >&2; return 1; }
+  python3 ops-tools/runcmd.py pi3 pi3 \
+    "cd $PI3_BACKUP_DIR && echo '$got  $name' > $name.sha256 && chmod 600 $name.sha256" >/dev/null || return 1
+  # Rotation on pi3: keep newest 7 archives, only files this script names.
+  python3 ops-tools/runcmd.py pi3 pi3 \
+    "cd $PI3_BACKUP_DIR && ls -1 k3s-cp-backup-????-??-??.tar.gz 2>/dev/null | sort -r | tail -n +8 | while read -r old; do rm -f \"\$old\" \"\$old.sha256\"; done" >/dev/null || true
+}
+if pi3_copy; then
+  echo "$(stamp) K3S-BACKUP-PI3-OK $(basename "$f") -> pi3:~/$PI3_BACKUP_DIR (mode 600, sha256 verified)"
 else
   echo "$(stamp) WARN: k3s control-plane backup could not be copied to pi3 (workstation copy complete)"
 fi
-
-# Rotation on pi3: keep newest 7 k3s control-plane archives.
-python3 ops-tools/runcmd.py pi3 pi3 \
-  "ls -1t $PI3_BACKUP_DIR/k3s-cp-backup-????-??-??.tar.gz 2>/dev/null | tail -n +8 | while read -r old; do rm -f \"\$old\" \"\$old.sha256\"; done" >/dev/null 2>&1 || true
 
 # Rotation: newest $KEEP archives, only files this script names.
 ls -1 "$DEST"/k3s-cp-backup-????-??-??.tar.gz 2>/dev/null | sort -r | tail -n +$((KEEP + 1)) | while read -r old; do

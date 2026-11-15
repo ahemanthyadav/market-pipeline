@@ -479,6 +479,19 @@ COMMANDS = {
     "rmuser": cmd_rmuser,
 }
 
+OWNER_ONLY = "That command is for the owner only."
+
+
+def run_command(cmd: str, text: str, chat: str) -> str:
+    """The ONE way handle() invokes a handler. Every path — direct dispatch, the
+    router for unknown commands, and the re-route after a usage error — goes
+    through here, so the ADMIN owner check cannot be skipped by routing
+    (e.g. "/multibagger /adduser 999 X" re-routing into /adduser)."""
+    if cmd in ADMIN and not REGISTRY.is_owner(chat):
+        return OWNER_ONLY
+    handler = COMMANDS[cmd]
+    return handler(text, chat) if cmd in PERSONAL else handler(text)
+
 
 AI_FLAGS = frozenset({"ai", "explain", "why", "summary", "?"})
 NO_AI_WRAP = frozenset({"help", "start", "ask", "route", "users", "adduser", "rmuser"})
@@ -558,7 +571,7 @@ def handle(update: dict) -> None:
             else:
                 notice = ""
             try:
-                out = COMMANDS[r_cmd](full_text, chat) if r_cmd in PERSONAL else COMMANDS[r_cmd](full_text)
+                out = run_command(r_cmd, full_text, chat)
                 send(notice + with_ai_takeaway(out, r_cmd, want_ai), chat)
                 print(f"routed /{r_cmd} ({r_conf})", flush=True)
                 return
@@ -582,7 +595,7 @@ def handle(update: dict) -> None:
         send(f"Unknown command. {chr(10)}" + cmd_help("", chat), chat)
         return
     if cmd in ADMIN and not REGISTRY.is_owner(chat):
-        send("That command is for the owner only.", chat)
+        send(OWNER_ONLY, chat)
         return
     # A no-argument command followed by a stock name means that stock:
     # "/status cub", "/movers cub" → /stock CUB.NS (ARG_COMMANDS keep their args).
@@ -592,10 +605,10 @@ def handle(update: dict) -> None:
     if sym:
         reroute_notice = (f"↪️ <i><code>/{html.escape(cmd)}</code> takes no stock argument — "
                           f"running <code>/stock {html.escape(sym)}</code>:</i>\n")
-        clean_text, cmd, handler = f"/stock {sym}", "stock", COMMANDS["stock"]
+        clean_text, cmd = f"/stock {sym}", "stock"
         print(f"rerouted /status-style → /stock {sym}", flush=True)
     try:
-        result = handler(clean_text, chat) if cmd in PERSONAL else handler(clean_text)
+        result = run_command(cmd, clean_text, chat)
         # If the handler returned an argument/usage error (e.g. "/top tcs", "/sectors tcs",
         # "/world tcs", "/multibagger tcs"), try deterministic router first, then AI router
         if isinstance(result, str) and result.startswith(
@@ -611,7 +624,7 @@ def handle(update: dict) -> None:
                           f"<code>{html.escape(args_text)}</code> — running "
                           f"<code>{html.escape(full_text)}</code>{via}:</i>\n")
                 try:
-                    out = COMMANDS[r_cmd](full_text, chat) if r_cmd in PERSONAL else COMMANDS[r_cmd](full_text)
+                    out = run_command(r_cmd, full_text, chat)
                     send(notice + with_ai_takeaway(out, r_cmd, want_ai), chat)
                     print(f"routed /{r_cmd} ({r_conf}) after handler failure", flush=True)
                     return

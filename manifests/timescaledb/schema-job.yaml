@@ -42,7 +42,11 @@ spec:
                   last_applied  TIMESTAMPTZ NOT NULL DEFAULT now())"
               for f in $(ls /schema/*.sql | sort); do
                 echo "== applying $f"
-                psql -h timescaledb -U postgres -d postgres -v ON_ERROR_STOP=1 -f "$f"
+                # A failed key must fail the Job (2026-11-15): without this the loop
+                # carried on, recorded the key's md5 and printed SCHEMA-OK over a
+                # half-applied file.
+                psql -h timescaledb -U postgres -d postgres -v ON_ERROR_STOP=1 -f "$f" \
+                  || { echo "SCHEMA-FAIL $f"; exit 1; }
                 sum=$(md5sum "$f" | cut -d' ' -f1)
                 base=$(basename "$f")
                 prev=$(psql -h timescaledb -U postgres -d postgres -At \

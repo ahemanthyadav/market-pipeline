@@ -5,6 +5,7 @@ An AI answer is shown only if every number in it appears in the facts it was giv
 sign of the number it introduces. Pure functions, standard library only — ships in the telegram image
 and in the llm-narrative ConfigMap (ops-tools/apply-llm.sh).
 """
+import math
 import re
 
 SMALL_INTS = set(range(0, 11))       # "two indices", "3 sectors" — harmless counts
@@ -33,6 +34,21 @@ def allowed_numbers(facts):
     return out
 
 
+def _same_at_precision(written, fact, decimals):
+    """True when `written` is `fact` rounded half-up or truncated to the number of decimals
+    the text actually shows ("1.2" for 1.21 or 1.29; "1.30" never for 1.21).
+
+    2026-11-15: replaces a flat ±0.1 window (loosened from ±0.01 on 2026-11-08) that let
+    small-percentage misstatements through ("1.30%" for a 1.21% fact)."""
+    scale = 10 ** decimals
+    x = fact * scale
+    eps = 1e-9 * max(1.0, x)
+    rounded = math.floor(x + 0.5 + eps) / scale
+    truncated = math.floor(x + eps) / scale
+    tol = 1e-9 * max(1.0, written)
+    return abs(written - rounded) < tol or abs(written - truncated) < tol
+
+
 def bad_numbers(text, facts):
     """Numbers in `text` that are not in the facts (any sign, rounded to 0-4 decimals).
 
@@ -57,7 +73,9 @@ def bad_numbers(text, facts):
         v = float(m.replace(",", "").replace("−", "-").replace("–", "-").lstrip("+"))
         if any(abs(abs(v) - abs(a)) < 1e-9 for a in ok):
             continue
-        if any(abs(abs(v) - abs(f)) < 0.1 or abs(abs(v) - round(abs(f) * 100, 2)) < 0.1 for f in raw):
+        d = len(m.split(".", 1)[1]) if "." in m else 0
+        if any(_same_at_precision(abs(v), abs(f), d) or _same_at_precision(abs(v), abs(f) * 100, d)
+               for f in raw):
             continue            # same number, rounded or truncated (models do both); percent form allowed too
         bad.append(m)
     return bad

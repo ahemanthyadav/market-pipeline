@@ -476,7 +476,7 @@ def index_quant(q, universe):
         return None
     # latest P/E and P/B per symbol (source-agnostic: newest filing wins)
     rows = q(
-        "SELECT DISTINCT ON (symbol) symbol, metric, value FROM stock_fundamentals "
+        "SELECT DISTINCT ON (symbol, metric) symbol, metric, value FROM stock_fundamentals "
         "WHERE symbol = ANY(%s) AND metric = ANY(%s) "
         "ORDER BY symbol, metric, ts DESC",
         (symbols, ["pe", "pb"]))

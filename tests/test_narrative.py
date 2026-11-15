@@ -31,6 +31,14 @@ class NumberCheck(unittest.TestCase):
     def test_rounding_and_small_counts_allowed(self):
         self.assertEqual(n.bad_numbers("Nifty dropped 1.2% to about 22,363; two of 3 indices fell.", FACTS), [])
 
+    def test_tolerance_is_the_written_precision_not_a_flat_window(self):
+        # Regression (2026-11-15 review): a flat ±0.1 window passed "1.30%" for a 1.21% fact.
+        facts = {"chg": 1.21, "ratio": 0.0259, "r2": 0.05, "x": 1.219}
+        for wrong in ("1.30%", "2.68%", "0.14", "1.3"):
+            self.assertEqual(n.bad_numbers(wrong, facts), [wrong.rstrip("%")], wrong)
+        for right in ("1.2%", "1.21%", "2.59%", "2.6%", "1.22", "1.21"):   # rounded / truncated / percent form
+            self.assertEqual(n.bad_numbers(right, facts), [], right)
+
     def test_unicode_minus_and_plus(self):
         self.assertEqual(n.bad_numbers("Sentiment −0.08, rupee +0.15%.", FACTS), [])
 
