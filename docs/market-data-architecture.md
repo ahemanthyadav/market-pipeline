@@ -30,7 +30,7 @@ Yahoo Finance · NSE API · FRED · RSS feeds · NSE FII/DII · RBI rates widget
 SEC EDGAR + Wikipedia/NSE archives (screener layer)
 │ daily pulls from Pi workers (keyless except FRED); hourly fast-movers
 ▼
-k3s CronJobs, namespace market-data — schedules fire NODE-LOCAL PDT (ADR 0002)
+k3s CronJobs, namespace market-data — schedules fire NODE-LOCAL (America/Los_Angeles) (ADR 0002)
 RBI 07:00 → NSE 11:15 → FII/DII 14:00 → yfinance 22:30 → fx 23:00 →
 yields 23:15 → rates 23:20 → news 23:45 (stage) → sentiment 00:15 (TX2) →
 TA 00:30 → headline-ner 00:45 (TX2) → backup 01:30 → health 01:45 →
@@ -141,7 +141,7 @@ flowchart TB
 
 ```mermaid
 flowchart TB
-    subgraph IN["Ingestion CronJobs — schedules fire node-local PDT (ADR 0002)"]
+    subgraph IN["Ingestion CronJobs — schedules fire node-local (America/Los_Angeles) (ADR 0002)"]
         direction LR
         RBIJ["rbi-fetcher<br/>07:00 daily"]
         NSEJ["nse-fetcher<br/>11:15 daily"]
@@ -219,15 +219,17 @@ whole DB via `pg_dump`.*
 
 ## 2. Infrastructure
 
-### 2.1 Nodes (all k3s Ready, verified 2026-10-03)
+### 2.1 Nodes (all k3s Ready, verified 2026-11-15)
 
 | Node | Hardware | LAN IP | Tailscale IP | k3s | Role |
 |---|---|---|---|---|---|
-| pi0 | Pi 1 B+, 512 MB | <pi0-ip> | — (not on tailnet) | — | Pi-hole v6.4.3 + unbound (DNS) |
-| pi1 | Pi 3 B, 1 GB, 233 GB SSD | <pi1-ip> | <pi1-tailnet-ip> | agent v1.36.4 | Worker — ingestion pool |
-| pi2 | Pi 3 B+, 1 GB | <pi2-ip> | <pi2-tailnet-ip> | server v1.36.4+k3s1 | **Control-plane — fragile, see §9** |
+| pi0 | Pi 1 B+, 512 MB | <pi0-ip> | — (not on tailnet) | — | Pi-hole v6.4.3 + unbound (DNS) — not a k8s node |
+| pi1 | Pi 3 B, 1 GB, 233 GB SSD | <pi1-ip> | <pi1-tailnet-ip> | agent v1.36.4 | Worker — Telegram bot + marketview (pinned) |
+| pi2 | Pi 3 B+, 1 GB | <pi2-ip> | <pi2-tailnet-ip> | server v1.36.4+k3s1 | **Control-plane — fragile + cordoned, see §9** |
 | pi3 | Pi 3 B, 1 GB | <pi3-ip> | <pi3-tailnet-ip> | agent v1.36.4 | Worker — Grafana + pg-backup pinned here |
-| ahytx2-desktop | Jetson TX2, 7.7 GB RAM | <tx2-ip> (DHCP, router-reserved) | <tx2-tailnet-ip> | agent pinned v1.35.3+k3s1 | GPU/tainted worker + DB host |
+| ahytx2-desktop | Jetson TX2, 7.7 GB RAM | <tx2-ip> (DHCP, router-reserved) | <tx2-tailnet-ip> | agent pinned v1.35.3+k3s1 | GPU/tainted worker + DB host + LLM gateway + image build host |
+| orin1 | Jetson Orin Nano, 8 GB, 1× GPU | <orin1-ip> | — | agent v1.37.2 | Worker — tainted `gpu=orin`, reserved for the STT/TTS voice layer (**not deployed**) |
+| orin2 | Jetson Orin Nano, 8 GB, 1× GPU | <orin2-ip> | — | agent v1.37.2 | Worker — untainted; **where the floating CronJobs run** (since 2026-11-13) |
 
 - Network `<lan-cidr>`, gateway `<gateway-ip>`; LAN DNS = pi0. Admin from `<admin-host>`
   (<admin-tailnet-ip>) via `~/.kube/pi-cluster.yaml`.
@@ -607,11 +609,11 @@ layer (JOINs on ticker/symbol), not in DDL.*
 - Pod spec conventions: `imagePullPolicy: Never`, `PGHOST/PGUSER/PGPASSWORD/PGDATABASE`
   env (password via `secretKeyRef`), `restartPolicy: OnFailure`, `backoffLimit` 1–2,
   requests ~256 Mi/100m, limits ~512 Mi/500m, tiny job-history limits.
-- No node pinning (scheduler balances pi1/pi2/pi3; pi2 kept light by policy).
+- No node pinning (scheduler balances the workers — pi1, pi3, orin2; pi2 kept light by policy).
 - Idempotency rule (§1.1): DELETE+INSERT own `(key, ts)` rows — safe re-runs.
 - Validate changes with `kubectl create job --from=cronjob/<name>` + log check + DB row check.
 
-### 5.2 Schedule (node-local PDT — ADR 0002; telegram-digest is explicit IST)
+### 5.2 Schedule (node-local — ADR 0002; telegram-digest + llm-narrative are explicit IST)
 
 | CronJob | Schedule | Image | Writes to |
 |---|---|---|---|
@@ -649,11 +651,14 @@ layer (JOINs on ticker/symbol), not in DDL.*
 | stock-metrics | 0 2 * * * | local/marketdata-data:v8 | stock_metrics_daily |
 | stock-screener | 15 2 * * * | local/marketdata-data:v8 | stock_scores + screening_runs |
 | stock-report | 30 2 * * * | local/marketdata-data:v8 | stock_reports (top-25/universe + digest) |
-| nse-fundamentals | 0 10 * * 0 | local/marketdata-data:v8 | financial_facts `nse_cons`/`nse_sa` — India results filings (G-6, ADR 0021); **suspended until the first backfill completes** |
+| nse-fundamentals | 0 10 * * 0 | local/marketdata-data:v8 | financial_facts `nse_cons`/`nse_sa` — India results filings (G-6, ADR 0021); **unsuspended since the backfill completed (verified 2026-11-15)** |
 | fdi-watch | 0 9 1 * * | local/marketdata-light:v1 | logs only → manual INSERT |
 
-**Schedules are node-local PDT, not UTC** (verified 2026-10-04 — the "02:00-02:30"
-screener chain fired at 09:00-09:30 UTC). Functionally fine; see ops manual §3.
+**Schedules are node-local, not UTC** (verified 2026-10-04 — the "02:00-02:30"
+screener chain fired at 09:00-09:30 UTC). The controller follows `America/Los_Angeles`
+on pi2, so the offset is **UTC−7 in summer / UTC−8 in winter** — every node-local
+job's UTC instant shifts by an hour at the DST boundary. Functionally fine; see
+ops manual §3.
 
 One-shot Jobs (kept as manifests, run on demand): `backfill-yfinance-1y`, `backfill-nse-1y`
 (history seeding), `timescaledb-schema`, `timescaledb-write-test`.
@@ -719,8 +724,8 @@ One-shot Jobs (kept as manifests, run on demand): `backfill-yfinance-1y`, `backf
 
 ### 5.8 Telegram layer (2026-10-09, ADR 0009)
 
-- **Digest:** CronJob `telegram-digest`, 08:00 IST — the only job with an explicit
-  `timeZone` (schedules otherwise fire node-local PDT, ADR 0002). Read-only
+- **Digest:** CronJob `telegram-digest`, 08:00 IST — explicit `timeZone`
+  (schedules otherwise fire node-local, America/Los_Angeles, ADR 0002). Read-only
   SELECTs (market snapshot + screener digest), `sendMessage` only.
 - **Two-way listener:** Deployment `telegram-bot` (1×, pinned pi1, same image,
   `args: bot.py`) — the ONLY `getUpdates` consumer (Telegram 409s a second
@@ -766,7 +771,7 @@ sequenceDiagram
     participant UP as upstream feed
     participant DB as TimescaleDB (TX2)
 
-    CRON->>POD: schedule fires — node-local PDT (ADR 0002)
+    CRON->>POD: schedule fires — node-local (America/Los_Angeles) (ADR 0002)
     POD->>UP: pull this window's rows (yfinance / FRED / RSS / NSE / RBI scrape)
     UP-->>POD: quotes / headlines / flows
     POD->>DB: reads with conn.autocommit = True

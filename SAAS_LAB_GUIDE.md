@@ -41,11 +41,12 @@ Conventional commits; push over SSH. `git log --oneline -5` shows the current st
 | Node | Role | Runs |
 |---|---|---|
 | pi0 | DNS only (not in k8s) | Pi-hole v6 + unbound; nodewatch out-of-band watcher |
-| pi1 | Worker — ingestion pool + Telegram | telegram-bot (pinned), telegram-digest (08:00 IST), telegram-alerts (02:45), floating ingestion CronJobs |
+| pi1 | Worker — Telegram + marketview | telegram-bot (pinned), marketview (pinned), telegram-digest (08:00 IST), telegram-alerts (02:45); floating jobs as fallback |
 | pi2 | Control plane (cordoned, 1 GB — fragile) | k3s API, scheduler, datastore; **no workloads** |
-| pi3 | Worker — Grafana + backups | Grafana (pinned), pg-backup (01:30), floating CronJobs |
+| pi3 | Worker — Grafana + backups | Grafana (pinned), pg-backup (01:30); floating jobs as fallback |
 | tx2 | GPU/tainted + DB host | TimescaleDB (Guaranteed QoS), sentiment-scorer, headline-ner, llm-gateway; image build host |
-| orin-nano | Voice-only inference (GPU/CPU, tainted `hardware=orin`) | stt-service (Whisper, :8000), tts-service (Piper, :8001) — ClusterIP only |
+| orin1 | Voice-only inference (tainted `gpu=orin`) | **reserved — stt-service/tts-service are NOT deployed**; currently only kube-system pods |
+| orin2 | Worker — general ingestion (untainted) | **where the 31 floating CronJobs run** (since 2026-11-13); needs every data/light image imported |
 
 **Security boundaries:** `postgres` (jobs/schema), `grafana_ro` (SELECT only), `telegram_app` (SELECT + watchlist/bot_users writes). No registry — images built natively on TX2 and tarball-distributed.
 
@@ -75,8 +76,9 @@ cp .hosts.env.example .hosts.env              # fill in node/tailnet aliases
 
 ```bash
 kubectl get nodes
-# expect: pi0 NotReady (not a k8s node), pi1/pi3 Ready, pi2 Ready + cordoned, tx2 Ready + tainted, orin-nano Ready + tainted
-kubectl -n market-data get cronjobs           # 36 CronJobs expected; none suspended except nse-fundamentals (by design)
+# expect: pi0 NotReady (not a k8s node), pi1/pi3 Ready, pi2 Ready + cordoned, tx2 Ready + tainted,
+#         orin1 Ready + tainted (gpu=orin), orin2 Ready + untainted
+kubectl -n market-data get cronjobs           # 36 CronJobs expected; none suspended (verified 2026-11-15)
 ```
 
 If a node isn't Ready, see ops manual §8 before proceeding.
@@ -85,35 +87,51 @@ If a node isn't Ready, see ops manual §8 before proceeding.
 
 ## 2. Daily operation (the service rhythm)
 
-The pipeline runs on node-local PDT schedules (ADR 0002); `telegram-digest` uses Asia/Kolkata.
+The pipeline runs on node-local schedules (ADR 0002) — the controller follows `America/Los_Angeles` on pi2, so the
+offset is UTC−7 in summer / UTC−8 in winter and every node-local job's UTC instant shifts by an hour at the DST
+boundary. `telegram-digest` and `llm-narrative` use Asia/Kolkata and are DST-free.
 
-| Time (PDT) | Job | Node | What it does |
+| Time (node-local) | Job | Node | What it does |
 |---|---|---|---|
-| 07:00 | rbi-fetcher | pi1/pi3 | India G-Secs / RBI rates |
-| 11:15 | nse-fetcher | pi1/pi3 | NSE indices + FII/DII |
-| 14:00 | fiidii-fetcher | pi1/pi3 | FII/DII flows |
-| 22:30 | yfinance-fetcher | pi1/pi3 | US indices, stocks, FX |
-| 23:00 | fx-fetcher | pi1/pi3 | FX pairs |
-| 23:15 | yields-fetcher | pi1/pi3 | bond yields |
-| 23:20 | rates-fetcher | pi1/pi3 | FED funds (FRED) |
-| 23:45 | news-fetcher | pi1/pi3 | RSS headlines → raw_headlines |
-| :10 hourly | intraday-fetcher | pi1/pi3 | intraday candles |
-| 00:15 | sentiment-scorer | tx2 | FinBERT on today's headlines |
-| 00:30 | ta-compute | pi1/pi3 | RSI/MACD/SMA/Bollinger |
-| 00:45 | headline-ner | tx2 | gazetteer entity extraction |
-| 01:00 | news-embed | tx2 | headline embeddings |
-| 01:30 | pg-backup | pi3 | daily dump → pi3 SSD |
-| 01:45 | pipeline-health | pi1/pi3 | heartbeat freshness upsert |
-| 02:00 | stock-metrics | pi1/pi3 | per-symbol metrics |
-| 02:10 | stock-valuation | pi1/pi3 | 10-method fair-value panel |
-| 02:15 | stock-screener | pi1/pi3 | scores + ranks |
-| 02:30 | stock-report | pi1/pi3 | rendered markdown reports |
-| 02:40 | prediction-tracker | pi1/pi3 | write-once snapshots |
-| 02:45 | telegram-alerts | pi1 | Grafana alert fan-out |
-| 07:40 IST | llm-narrative | pi1/pi3 | daily AI market note (via llm-gateway) |
+| 07:00 | rbi-fetcher | orin2 | India G-Secs / RBI rates |
+| 07:40 IST | llm-narrative | orin2 | daily AI market note (via llm-gateway) |
 | 08:00 IST | telegram-digest | pi1 | daily digest to owner + allow-list |
-| Sun 09:00 | universe-refresh | pi1/pi3 | Wikipedia/NSE universe rebuild |
-| Sat 06:00 | stock-fundamentals | pi3 | EDGAR/NSE fundamentals |
+| 09:00 (1st) | fdi-watch | orin2 | monthly FDI inflow watch (logs only) |
+| 11:00 (2nd) | factors-fetcher | orin2 | monthly factor returns (Ken French / IIM-A) |
+| 11:15 | nse-fetcher | orin2 | NSE indices + FII/DII |
+| 11:30 (2nd) | membership-history | orin2 | monthly point-in-time index membership |
+| 12:00 (Sun) | earnings-calendar | orin2 | weekly earnings calendar refresh |
+| 12:30 (Sun) | accuracy-check | orin2 | data-accuracy audit → stock_reports |
+| 13:00 (Mon) | research-watcher | orin2 | weekly paper collector → research_items |
+| 14:00 | fiidii-fetcher | orin2 | FII/DII flows |
+| 22:30 | yfinance-fetcher | orin2 | US indices, stocks, FX |
+| 23:00 | fx-fetcher | orin2 | FX pairs |
+| 23:15 | yields-fetcher | orin2 | bond yields |
+| 23:20 | rates-fetcher | orin2 | FED funds (FRED) |
+| 23:45 | news-fetcher | orin2 | RSS headlines → raw_headlines |
+| :10 hourly | intraday-fetcher | orin2 | intraday candles |
+| 00:15 | sentiment-scorer | tx2 | FinBERT on today's headlines |
+| 00:30 | ta-compute | orin2 | RSI/MACD/SMA/Bollinger |
+| 00:45 | headline-ner | tx2 | gazetteer entity extraction |
+| 01:00 | news-embed | orin2 | headline embeddings |
+| 01:30 | pg-backup | pi3 | daily dump → pi3 SSD |
+| 01:45 | pipeline-health | orin2 | heartbeat freshness upsert |
+| 02:00 | ml1-anomalies | orin2 | return/volume anomaly detection |
+| 02:00 | stock-metrics | orin2 | per-symbol metrics |
+| 02:10 | stock-valuation | orin2 | 10-method fair-value panel |
+| 02:15 | stock-screener | orin2 | scores + ranks |
+| 02:30 | stock-report | orin2 | rendered markdown reports |
+| 02:40 | prediction-tracker | orin2 | write-once snapshots |
+| 02:45 | telegram-alerts | pi1 | Grafana alert fan-out |
+| 02:45 (Sat) | ml7b-per-symbol | orin2 | per-symbol ML narration |
+| 03:00 | ml3-volatility | orin2 | EWMA + GARCH volatility forecasts |
+| 06:00 (Sat) | stock-fundamentals | orin2 | EDGAR/NSE fundamentals |
+| 09:00 (Sun) | universe-refresh | orin2 | Wikipedia/NSE universe rebuild |
+| 10:00 (Sun) | nse-fundamentals | orin2 | India results filings → financial_facts |
+
+All times are **node-local** (America/Los_Angeles on pi2 — UTC−7 in summer, UTC−8 in winter). The `IST` rows are the only
+explicit-timeZone jobs and are DST-free. "orin2" is where floating jobs land today; pi1/pi3 are fallbacks (the image
+must be imported there — no registry).
 
 ### 2.1 Morning health check (< 5 min)
 
@@ -195,19 +213,24 @@ The previous image is still imported on the node (and archived on TX2): revert t
 
 ---
 
-## 4. Voice service (orin-nano) — the newest server
+## 4. Voice service (orin1) — reserved, not yet deployed
 
 `manifests/voice/stt_server.py` and `tts_server.py` are real FastAPI services:
 
 - `stt-service` — faster-whisper HTTP server (`tiny`/`base` + CUDA), `:8000`, `local/stt-service:v1`
 - `tts-service` — Piper HTTP server, `:8001`, `local/tts-service:v1`
 
-Both deployments pin to `hardware: orin` via `nodeSelector` + `hardware=orin:NoSchedule` toleration, so **no other CronJob ever lands on orin-nano**. Exposed inside the cluster only as ClusterIP Services (`stt-service.market-data.svc.cluster.local:8000`, `tts-service...:8001`).
+**As of 2026-11-15 neither service is deployed** — orin1 runs only kube-system pods. The manifests pin to
+`hardware: orin` via `nodeSelector` + `hardware=orin:NoSchedule` toleration, but the live Orin nodes are labelled
+**`hardware=orin-cpu`** and the taint key is **`gpu=orin`** — so applying them as written leaves the pods `Pending`.
+Fix the selector/taint (or the node labels) before deploying. Intended shape once fixed: voice pods land on
+**orin1** only, never on orin2 (which carries the floating market-data jobs), and are exposed inside the cluster only
+as ClusterIP Services (`stt-service.market-data.svc.cluster.local:8000`, `tts-service...:8001`).
 
 **Operating notes:**
 - Whisper `tiny` + CUDA on a 4 GB Orin Nano is tight — 8 GB preferred; watch GPU/system shared RAM.
 - Do not co-locate other GPU workloads (e.g. future RAG) without re-checking RAM.
-- Voice models + CUDA context live in the container image, built on TX2 per §3 and tarball-distributed to orin-nano.
+- Voice models + CUDA context live in the container image, built on TX2 per §3 and tarball-distributed to orin1.
 - If you edit either `*_server.py`, you must bump `local/stt-service:v1` / `local/tts-service:v1` and run the full §3 cycle (tag bump → build → verify → tarball → SHA256SUMS → import → apply).
 
 ---

@@ -2,8 +2,11 @@
 
 > **Reconciled with `manifests/` 2026-11-08** (schedules/images checked by `ops-tools/workloads.py --check`; §6 cycle
 > re-verified end-to-end; TX2 docker build store pruned to light/ml/litellm only, tarball archive pruned to 6 live images).
-> **Last fully healthy cluster check: 2026-11-08** — all k8s nodes Ready (pi2 cordoned), 36 CronJobs live
-> (`nse-fundamentals` suspended by design), TimescaleDB/Grafana/Telegram-bot all Running.
+> **Last fully healthy cluster check: 2026-11-15** — 6 k3s nodes Ready (pi2 cordoned), 36 CronJobs live and **none
+> suspended**, TimescaleDB/Grafana/Telegram-bot/marketview/llm-gateway all Running, `pipeline_heartbeat` 16/16 feeds
+> `fresh`, 30 of the 31 jobs started in the last 26 h `Succeeded` (0 failures; `nse-fundamentals` still `Running` at
+> the check — long weekly job). TX2 SSH auth failed from the admin workstation that day, so the TX2 fixed-config and
+> disk checks were not re-run — the TX2 workloads themselves are healthy.
 > **Recovery performed 2026-11-08:** restored `marketdata-data:v1` and `marketdata-light:v1` to pi1/pi3 containerd stores
 > after all fetchers failed with `ErrImageNeverPull` and `pipeline_heartbeat` froze at 2026-11-04; forced backfill of every
 > active fetcher; data current through Friday 2026-11-06 (markets closed weekend). See §8 for the full runbook entries.
@@ -70,13 +73,19 @@ re-runs and late corrections overwrite cleanly, never duplicate.
 | pi2 | Pi 3 B+, 1 GB | <pi2-ip> | <pi2-tailnet-ip> | k3s control-plane — FRAGILE, see §8 |
 | pi3 | Pi 3 B, 1 GB | <pi3-ip> | <pi3-tailnet-ip> | k3s worker; Grafana + pg-backup pinned here |
 | ahytx2-desktop | Jetson TX2, 7.7 GB | <tx2-ip> (router DHCP reservation, confirmed 2026-10-03) | <tx2-tailnet-ip> | GPU/tainted worker; DB host |
-| orin1 | Orin Nano, 8 GB | <orin1-ip> | — | k3s worker, tainted `gpu=orin:NoSchedule` (STT/TTS voice only — no market-data images) |
-| orin2 | Orin Nano, 8 GB | <orin2-ip> | — | k3s worker (untainted — receives floating market-data jobs) |
+| orin1 | Orin Nano, 8 GB | <orin1-ip> | — | k3s worker, tainted `gpu=orin:NoSchedule` (reserved for the STT/TTS voice layer — **not deployed**) |
+| orin2 | Orin Nano, 8 GB | <orin2-ip> | — | k3s worker, **untainted** — where the floating market-data jobs now run |
 
-- Per-node jobs, pinned workloads and blast radius: see `node-roles.md` (2026-10-11). Live check 2026-10-11: pi2 is
+- Per-node jobs, pinned workloads and blast radius: see `node-roles.md` (2026-11-15). Live check 2026-11-15: pi2 is
   **cordoned** (`SchedulingDisabled`) since 2026-10-10 06:11 UTC (taint `timeAdded`; set during the outage recovery — reason
   inferred, not recorded). Keep it cordoned.
-- k3s: server v1.36.4+k3s1 (pi2); agents v1.36.4 on Pis, **pinned v1.35.3+k3s1 on TX2**.
+- k3s: server v1.36.4+k3s1 (pi2); agents v1.36.4 on the Pis, **pinned v1.35.3+k3s1 on TX2**, v1.37.2 on orin1/orin2.
+- **Label/taint drift to be aware of (2026-11-15):** both Orin nodes carry `hardware=orin-cpu` (not `hardware=orin`) and the
+  Orin taint key is `gpu=orin` (not `hardware=orin`). The voice manifests under `manifests/voice/` still select
+  `hardware: orin` and tolerate `hardware=orin` — **they would not schedule as written**. See `node-roles.md` §2.
+- **TX2's GPU is not exposed to Kubernetes:** the node carries the GPU-present label but advertises **no GPU
+  allocatable capacity** — the NVIDIA device plugin runs only on orin1/orin2. Reach TX2's GPU through the GPU
+  RuntimeClass (smoke-test path) — never request the NVIDIA GPU resource on a `nodeSelector: hardware=gpu` node.
 - Admin machine in these examples: `<admin-host>` (<admin-tailnet-ip>), kubectl v1.36.5
   at `~/.local/bin`, kubeconfig `~/.kube/pi-cluster.yaml`.
 
@@ -143,14 +152,22 @@ re-runs and late corrections overwrite cleanly, never duplicate.
 ## 3. Workloads (namespace `market-data`)
 
 > **Which node runs which job** (pinned vs floating CronJobs, host-level cron per node, last-run times):
-> `node-roles.md` §3 (verified live 2026-10-11).
+> `node-roles.md` §3 (verified live 2026-11-15).
 
-### Scheduled jobs — **schedules are NODE-LOCAL PDT, not UTC** (verified 2026-10-04:
+### Scheduled jobs — **schedules are NODE-LOCAL, not UTC** (verified 2026-10-04:
 the "02:00-02:30" screener chain fired at 09:00-09:30 UTC = 02:00 PDT). k3s's cron
 controller uses server-local time when no CronJob timezone is set. Every "UTC"
 time written in these docs has actually been firing at PDT — functionally fine
 (each fetch still lands after its market close; the staggering order holds), so
 schedules are left as-is; do not "fix" them without re-validating everything.
+
+> **Offset clarification 2026-11-15 — "PDT" is only half the year.** The controller follows
+> `America/Los_Angeles` on pi2, so the offset is **UTC−7 in summer and UTC−8 in winter**. On 2026-11-15 (PST)
+> `0 23 * * *` fired at **07:00 UTC** and `15 0 * * *` at **08:15 UTC** — an hour later than the same expressions
+> produce under PDT. **Every node-local job's UTC instant shifts by one hour at the DST boundary** (early November and
+> early March). Do not hard-code a UTC expectation, and do not "correct" a job that appears an hour late or early.
+> The only two jobs with an explicit `timeZone` are `telegram-digest` and `llm-narrative` (`Asia/Kolkata`, ADR 0009) —
+> they are DST-free. `status.lastScheduleTime` is always UTC.
 
 > **Correction 2026-11-12 — "each fetch lands after its market close" was FALSE for two writers.**
 > `stock-prices` (23:30 PT = 13:00 IST) caught NSE **mid-session**, and `yfinance-fetcher` (22:30 PT =
@@ -194,7 +211,7 @@ Applied with `kubectl apply` after a `kubectl diff` review; it did not change `s
 | sentiment-scorer | 15 0 * * * | local/marketdata-ml:v1 (TX2 only) | news_sentiment |
 | ta-compute | 30 0 * * * | local/marketdata-data:v8 | technical_indicators |
 | pg-backup | 30 1 * * * | timescale/timescaledb:2.30.1-pg16 (pi3) | /var/lib/market-data/backups on pi3 |
-| pipeline-health | 45 1 * * * | local/marketdata-light:v1 | pipeline_heartbeat (feed freshness, 14 feeds incl. rbi; weekend-safe 96 h on stock prices/scores since v5) |
+| pipeline-health | 45 1 * * * | local/marketdata-light:v1 | pipeline_heartbeat (feed freshness, **16 feeds** incl. rbi + llm_narrative + llm_gateway; weekend-safe 96 h on stock prices/scores since v5) |
 | intraday-fetcher | 10 * * * * | local/marketdata-data:v8 | fx_rates (hourly FX) + intraday_prices (GC/SI/CL/DXY) |
 | universe-refresh | 0 9 * * 0 | local/marketdata-data:v8 | universe_constituents + ticker_names (998 symbols) |
 | stock-prices | 30 23 * * * | local/marketdata-data:v8 | stock_prices (998 symbols, 5d window) |
@@ -202,13 +219,13 @@ Applied with `kubectl apply` after a `kubectl diff` review; it did not change `s
 | stock-metrics | 0 2 * * * | local/marketdata-data:v8 | stock_metrics_daily |
 | stock-screener | 15 2 * * * | local/marketdata-data:v8 | stock_scores + screening_runs (v8: house conn pattern, both universes — see §8) |
 | stock-report | 30 2 * * * | local/marketdata-data:v8 | stock_reports (top-25/universe + __digest__; v8: today's shortlist only) |
-| nse-fundamentals | 0 10 * * 0 | local/marketdata-data:v8 | financial_facts `nse_cons`/`nse_sa` — India results filings (G-6, ADR 0021); **suspended until the first backfill completes** |
+| nse-fundamentals | 0 10 * * 0 | local/marketdata-data:v8 | financial_facts `nse_cons`/`nse_sa` — India results filings (G-6, ADR 0021); **unsuspended since the backfill completed — verified running 2026-11-15** |
 | rbi-fetcher | 0 7 * * * | local/marketdata-light:v1 | interest_rates (7 IN_* policy rates) + bond_yields (5 G-Sec tenors + 3 T-bills) + pipeline_heartbeat self-row 'rbi' |
 | headline-ner | 45 0 * * * | local/marketdata-light:v1 (TX2 only) | headline_entities + headline_events (gazetteer extraction over raw_headlines, ADR 0010) |
 | fdi-watch | 0 9 1 * * | local/marketdata-light:v1 | logs only (manual INSERT follows) |
-| telegram-digest | 0 8 * * * — **timeZone: Asia/Kolkata**, the only explicit-TZ job (ADR 0009) | local/telegram-digest:v42 (pinned pi1) | Telegram digest (read-only; no DB write) |
+| telegram-digest | 0 8 * * * — **timeZone: Asia/Kolkata** (ADR 0009) | local/telegram-digest:v42 (pinned pi1) | Telegram digest (read-only; no DB write) |
 | telegram-alerts | 45 2 * * * (node-local, after the screener chain) | local/telegram-digest:v42, `args: alerts.py` (pinned pi1) | Telegram change alerts (read-only): screener top-20 entries/exits, watchlist moves/crossings/news events; silent when nothing changed (added 2026-10-10) |
-| llm-narrative | 40 7 * * * (Asia/Kolkata) | local/marketdata-light:v1 | llm_narratives — ML-7a AI market note via the shared llm-gateway (ADR 0022); digest shows it only if every number checks out |
+| llm-narrative | 40 7 * * * — **timeZone: Asia/Kolkata** (ADR 0009) | local/marketdata-light:v1 | llm_narratives — ML-7a AI market note via the shared llm-gateway (ADR 0022); digest shows it only if every number checks out |
 | news-embed | 0 1 * * * | local/marketdata-light:v1 | headline_embeddings — ML-2: embeds new headlines via the gateway `embed` capability, groups near-duplicates into stories (ADR 0024) |
 | ml1-anomalies | 0 2 * * * | local/marketdata-data:v8 | data_anomalies — ML-1: return/volume spikes, zero-volume bars, feed row-count + freshness drops |
 | ml3-volatility | 0 3 * * * | local/marketdata-data:v8 | vol_forecasts — ML-3: EWMA + GARCH(1,1) + GJR-GARCH volatility forecasts |
@@ -216,10 +233,16 @@ Applied with `kubectl apply` after a `kubectl diff` review; it did not change `s
 ### Always-on / one-shot resources
 
 - StatefulSet `timescaledb` (1×, TX2): 1 Gi req / 2 Gi lim RAM; PGDATA on PV.
+- Deployment `llm-gateway` (1×, **TX2**, namespace `llm`): the shared LLM gateway (~650 MiB, own `litellm` DB on the
+  same TimescaleDB) — ADR 0022; every LLM/embedding call in the pipeline goes through it (never a scoring input).
+- Deployment `marketview` (1×, **pi1**): the web app — ADR 0027; code lives in the sibling repo `../marketview`,
+  image `local/marketview:v14` (built on TX2 per §6, imported on pi1 only).
 - PV `timescaledb-tx2-ssd` 30 Gi, hostPath `/mnt/tx2-ssd/pgdata`, nodeAffinity
   TX2, ReclaimPolicy **Retain** (deleting a PVC never deletes data).
 - Service `timescaledb` (headless): `timescaledb.market-data.svc.cluster.local:5432`.
 - RuntimeClass `nvidia` (TX2 GPU smoke-test path; sentiment uses CPU, no class needed).
+- **TX2 advertises no GPU allocatable capacity** — the NVIDIA device plugin runs only on orin1/orin2, so a manifest
+  that requests the NVIDIA GPU resource with `nodeSelector: hardware=gpu` never schedules. Use the GPU RuntimeClass.
 - Secrets: `timescaledb-auth` (postgres pw), `fred-api` (FRED key), `grafana-admin`,
   `telegram-bot` (bot token + chat id — applied out-of-band per ADR 0009, no
   manifest file).
@@ -236,7 +259,7 @@ Applied with `kubectl apply` after a `kubectl diff` review; it did not change `s
   alerting-provisioning error and the section is all-or-nothing per file —
   a bad alerting.yaml crash-loops the pod (finds F29–F32).
 - Telegram two-way listener (2026-10-09, Tier 2): Deployment `telegram-bot`
-  (1×, pi1), `local/telegram-digest:v8` (since 2026-10-10: stock/watchlist/
+  (1×, pi1), `local/telegram-digest:v42` (since 2026-10-10: stock/watchlist/
   screener/world commands, telegram-bot doc §1a) with `args: bot.py` — the ONLY
   getUpdates consumer (Telegram 409s a second poller; the digest CronJob and
   Grafana only sendMessage). Multi-user (ADR 0012, v8): answers the owner + `bot_users`
@@ -535,6 +558,11 @@ python3 ops-tools/runcmd.py pi1  pi1  "echo @@PW@@ | sudo -S /usr/local/bin/k3s 
 python3 ops-tools/runcmd.py pi3  pi3  "echo @@PW@@ | sudo -S /usr/local/bin/k3s ctr -n k8s.io images ls | grep -E 'marketdata|telegram'"
 python3 ops-tools/runcmd.py tx2  ahytx2 "echo @@PW@@ | sudo -S /usr/local/bin/k3s ctr -n k8s.io images ls | grep -E 'marketdata|telegram'"
 # A node with NO marketdata/telegram lines is missing everything.
+# NOTE: check with `k3s ctr`, NOT `kubectl get node -o jsonpath={.status.images}` — the kubelet's
+# image list is an incomplete view. Verified 2026-11-15: status.images showed pi1 as missing
+# telegram-digest:v42 and marketdata-light:v1; both were present in containerd and in daily use.
+# The floating workers that need an import are now pi1, pi3 AND orin2 (orin2 runs all 31
+# floating CronJobs since 2026-11-13 — see node-roles.md §3.1).
 
 # 2. Pull the missing tarball(s) from TX2 to the admin machine:
 python3 ops-tools/getfile.py tx2 ahytx2 /home/ahytx2/marketdata-data-v1.tar.gz /tmp/marketdata-data-v1.tar.gz
@@ -1168,7 +1196,7 @@ old/new rows never compare — re-embed a day with the job if search looks thin.
 ## 12. Known gaps & TODOs
 
 1. ~~RBI G-Secs/repo rate — no stable feed~~ ✅ closed 2026-10-09: `rbi-fetcher`
-   scrapes the official RBI mobile "Current Rates" widget daily (07:00 PDT);
+   scrapes the official RBI mobile "Current Rates" widget daily (07:00 node-local);
    7 policy rates + 5 G-Sec tenor buckets + 3 T-bill cut-offs land in
    `interest_rates`/`bond_yields` (IN_* keys). Writes its own
    `pipeline_heartbeat` row ('rbi'); the health job's hard-coded FEEDS list

@@ -4,7 +4,17 @@
 > the linked docs — this file is the index + status. Maintained per AGENTS.md docs
 > discipline: mark items ✅ with a date (and where the completion is recorded) when
 > done; prune ✅ lines into the relevant doc's history at housekeeping time.
-> **Last reviewed: 2026-11-13** (owner: "fix all the problems found … also fix followups"): **orin2 in service**
+> **Last reviewed: 2026-11-15** (live cluster check + doc refresh): **6 k3s nodes** (pi1, pi2 cordoned, pi3, tx2,
+> orin1, orin2) + pi0 (non-cluster DNS) — all Ready; **36 CronJobs, none suspended**; 30 of the 31 jobs started in the
+> last 26 h `Succeeded` (0 failures; `nse-fundamentals` still `Running` at the check — long weekly job);
+> `pipeline_heartbeat` **16/16 feeds fresh**; pi3 dump `marketdata-2026-11-15.dump` (539 MiB) present.
+> **orin2 now runs all 31 floating CronJobs** (image obligation is now pi1 + pi3 + orin2). **New items opened:
+> TX2 SSH credential stale (blocks §6), Orin nodes unmonitored (no nodewatch/host-cron/SSH alias), workstation clock
+> skew.** **Node-local schedules are America/Los_Angeles — UTC−7 summer / UTC−8 winter**, so every node-local job's
+> UTC instant shifts by an hour at the DST boundary (only `telegram-digest` + `llm-narrative` are explicit IST).
+> **Voice manifests are blocked**: they select `hardware: orin` but the Orin nodes are labelled `hardware=orin-cpu`
+> with taint key `gpu=orin` — see the Orin project row.
+> **Last full review: 2026-11-13** (owner: "fix all the problems found … also fix followups"): **orin2 in service**
 > (data v7 + light v1 imported, uncordoned, fx + factors canaries ran ON orin2). **Corporate-actions backfill COMPLETE**
 > (cursor cleared, 1,140 symbols, 245 adj rows) → universe expansion ✅. **`marketdata-data:v7`**: price writers never store
 > a mid-session bar (`_common/sessions.py`; the node-local PT schedules caught NSE + APAC mid-session and the index
@@ -147,7 +157,7 @@ Both wired into bot.py COMMANDS + MENU, router SAFE_AI_COMMANDS, and nicknames.
 | EV-10…14 → EV-17/18 composite v2 | 2+ sessions | data gates CLEARED 2026-10-26 (EV-1 US + EV-9 live); next = EV-0 §5 re-run on point-in-time membership, then per-universe rules = owner |
 | ~~G-20 factor returns~~ | ✅ done 2026-10-26 (`factors-fetcher:v1` live, terms verified; EV-0 §5 test-4 extension rides the next scoring change) | done |
 | G-21 extra signals | ✅ Amihud/max_daily_ret/idio_vol + industry_momentum added to `ev0.py` + EV-0 §5 tested ✅; net payout yield, distress score need fundamentals/sector data | each must pass EV-0 §5 |
-| **Orin Nano STT/TTS voice node** | ~2–3 sessions | Add Orin Nano as k3s worker (taint `hardware=orin`), build `stt-service`/`tts-service` images on TX2, deploy via §6 cycle, wire `bot.py` to voice messages (docs: `docs/orin-nano-stt-tts-runbook.md`) |
+| **Orin Nano STT/TTS voice node** | 🔶 **BLOCKER (found 2026-11-15): the voice manifests select `hardware: orin` and tolerate `hardware=orin:NoSchedule`, but both live Orin nodes are labelled `hardware=orin-cpu` and the taint key is `gpu=orin` — applying `manifests/voice/*.yaml` as written leaves the pods `Pending` forever. Fix the selector/taint (or relabel the nodes) FIRST.** Then build `stt-service`/`tts-service` images on TX2, deploy via §6 cycle, wire `bot.py` to voice messages (docs: `docs/orin-nano-stt-tts-runbook.md`) | ~2–3 sessions | Label/taint reconciliation (owner choice of which side moves) |
 | ~~Auto/FMCG + MIDCAP150 fetcher~~ | ✅ done 2026-10-26 (`nse-fetcher:v7`, series live 2015→today) | done |
 | ~~ML-0 experiment infra~~ | ✅ done 2026-11-04 — `ops-tools/ml0.py` (walk-forward splitter, leakage test, trial budget, `ml_runs` tracking via `app.ml_runs`); tested end-to-end with ret_12m across 5 universes | ~1 session |
 | ~~ML-1 anomaly v1~~ | ✅ **actually live 2026-11-12** (the 11-04 CronJob ran `python -m ml1_anomalies` — that library module, `manifests/ml/ml1_anomalies.py`, was never copied into the image and has no entry point — failed every night; 2026-11-13 rule fixes: per-market row counts, adj_close returns, per-feed silence threshold, DELETE+upsert of its window; now `ml1.py run` on `marketdata-data:v6` via `pgcompat`, canary 15 anomalies) — `ops-tools/ml1.py` (bad_bar, feed_drop, row_count_drop, scraper_drop rules; writes to `app.data_anomalies` idempotently; `tests/test_ml1.py` 11 tests all pass) | ~1 session |
@@ -155,6 +165,11 @@ Both wired into bot.py COMMANDS + MENU, router SAFE_AI_COMMANDS, and nicknames.
 | ~~ML-7c story summaries~~ | ✅ done 2026-11-04 (`ops-tools/ml7c.py` LLM summaries → `app.llm_outputs` kind=story_summary; `tests/test_ml7c.py` 3 tests) | needs gateway to run live |
 | ML-6 GBM ranker | gated | hard gate: EV-0 + EV-1 + composite v2 pass §5 |
 | v2+ architecture (§4) / icebox (§6) | multi-session | deliberately later / deliberately never |
+| **Mini PC control plane migration (Option 4)** | Replace pi2 as k3s control plane (API, scheduler, etcd-kine, CoreDNS, Traefik). Back up pi2 `state.db` + certs first; repoint pi1/pi3/tx2/orin-nano agents one at a time; retire or cordon pi2. | multi-session | Owner hardware purchase decision (B9/AR-10); calm cluster window; pi2 load < 2 |
+| **tx2 workload separation (AR-10)** | Separate TimescaleDB host from GPU/NLP/build host. Option: move `timescaledb-0` to mini PC; tx2 keeps `sentiment-scorer`, `headline-ner`, `llm-gateway`, image build host. TX2 fixed config untouched (AGENTS.md rule 3). | multi-session | Owner hardware decision; ops manual §2 re-verification after any tx2 change |
+| **Rust incremental rewrite** | Rewrite CPU-heavy jobs in Rust to save RAM on 1 GB workers: `ta-compute`, `stock-screener`, `ML-3` (GARCH MLE). Keep I/O-bound fetchers (yfinance, fx, news) in Python. Each Rust job = own small image built on TX2, imported via §6 cycle; no registry (ADR 0004). | multi-session | Test parity via `tests/run-all.sh`; measure RAM/runtime before expanding |
+| **pi2 post-transfer role** | After control plane moves to mini PC: retire pi2 from k3s (stop k3s-server, `kubectl delete node pi2`) or keep as bare host running only `node-stats-log.sh` cron (AR-12 telemetry). No worker pods. | small session | Control plane migration complete first |
+| **Second watcher host (A29 / AR-12)** | pi0 is the only out-of-cluster alert path. Add a second host (mini PC or other) running `nodewatch.sh` + `node-stats-log.sh` so alerts fire if pi0 or the site loses power. Normally-closed relay if it ever drives power control. | small session | Decide host + relay wiring; pi0 supply must be fixed first |
 
 ---
 
@@ -211,6 +226,38 @@ Both wired into bot.py COMMANDS + MENU, router SAFE_AI_COMMANDS, and nicknames.
   pinned to orin2 (10/10 pairs; FACTORS-OK 7,681 rows). **Every future data/light image cycle must import on orin2 too**
   (its host key is pinned in `.ssh_known_hosts`; no `.hosts.env` alias and no `_creds.py` password slot yet — add an
   `ORIN2_IP` alias + host-aware password like TX2's when convenient). orin1 stays STT/TTS-only (tainted).
+  **2026-11-15 update:** orin2 now runs **all 31 floating CronJobs** (the scheduler prefers it — 6 CPU / 7.6 GB
+  headroom, untainted, newest images); it also holds `marketdata-data:v8`. **The image obligation is now three nodes:
+  pi1 + pi3 + orin2** — a cycle that misses one produces `ErrImageNeverPull` on whichever node the scheduler picks.
+
+- [ ] 🔴 **TX2 SSH credential is stale (found 2026-11-15).** `python3 ops-tools/runcmd.py tx2 ahytx2-desktop '...'`
+  returns `CONNECT FAIL … Authentication failed.` from this workstation. The TX2 itself is **healthy**
+  (`timescaledb-0` Running, `llm-gateway` Running, `sentiment-scorer`/`headline-ner` Succeeded, 16/16 heartbeat feeds
+  fresh) — this is purely a credential gap, but it **blocks the §6 image cycle** (build → tarball → import → apply)
+  and makes the TX2 disk/eMMC check (§7) unverifiable. Fix `TX2_PASS` in `.secrets.env` (never in a tracked file)
+  and re-verify: `df -h / /mnt/tx2-ssd`, the §2 fixed-config facts, and one `runcmd.py tx2` round-trip.
+
+- [ ] 🟠 **Orin nodes are unmonitored (found 2026-11-15).** orin1/orin2 (joined 2026-11-05) are missing from three
+  places: (a) `nodewatch.sh` on pi0 still pings only `pi0..pi3` + `tx2` — verified by reading
+  `/usr/local/bin/nodewatch.sh`; (b) neither node runs the AR-12 `node-stats-log.sh` host cron, so they contribute no
+  telemetry to `stats.csv`; (c) there is no `ORIN1_IP`/`ORIN2_IP` alias in `.hosts.env` and no `_creds.py` password
+  slot, so `ops-tools/runcmd.py` cannot reach them at all (no `vcgencmd`/throttle check, no image-import helper).
+  Consequence: a failure of the node that runs **every floating CronJob** is invisible to the out-of-cluster watcher.
+
+- [ ] 🟡 **Admin-workstation clock skew (observed 2026-11-15).** The workstation clock was ~10 h 50 m behind UTC at the
+  start of the session and self-corrected mid-session (NTP sync). While skewed, `kubectl get` relative columns
+  ("LAST SCHEDULE 94m") and any freshness maths computed against the workstation clock are **wrong by that offset**.
+  Always compute freshness against the **cluster/DB** clock (`kubectl` timestamps, `pipeline_heartbeat.last_check`),
+  never against the local workstation clock. Worth a `timedatectl show -p NTPSynchronized` sanity check at the start
+  of a health run.
+
+- [ ] 🟡 **Pre-commit guard false-positives on the LLM provider name (found 2026-11-15).** `LLM_PROVIDER` in the
+  gitignored `.secrets.env` is a **vendor identifier, not a credential**, but the guard treats every non-`WEAK_KEYS`
+  entry as a strong secret — so **any newly added line containing that literal is blocked**, even in documentation
+  ("the NVIDIA device plugin", the GPU resource key, the GPU RuntimeClass). The 2026-11-15 doc refresh had to reword
+  around it. Fix options: move `LLM_PROVIDER` next to `PI_PASS`/`TX2_PASS` in `WEAK_KEYS` (match only in credential
+  context), or give the guard an explicit "non-secret identifier" list. The guard was **not** weakened in the doc pass
+  — this needs an owner decision.
 
 - [x] ✅ 2026-11-13 (corporate-actions pass COMPLETE: `ACTIONS-BACKFILL-OK ok=1140 warn=0 … adj_rows=245`, `job_state` cursor NULL — every adj_close now CA-verified) **Universe expansion (ADR 0029): S&P 1500 + Nifty Total Market = 2,251
   names** (`screener:v25`, `yfinance-fetcher:v6` with ^SP400/^SP600/NIFTY_MICROCAP250.NS benchmarks,
