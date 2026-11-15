@@ -1014,6 +1014,8 @@ Also: `ps`/`pgrep -af` on a host while a `runcmd.py` command runs shows the expa
 
 ## 9. Backup & restore (copy-paste commands)
 
+> Full runbook: `docs/backup-restore-runbook.md` (hardware matrix, DR scenarios, schedule summary, quick-reference commands). This section contains the copy-paste restore commands; the runbook has the complete picture.
+
 ### Control-plane datastore (pi2) — daily second copy since 2026-10-18
 k3s runs kine on SQLite (`/var/lib/rancher/k3s/server/db/state.db`), so `k3s etcd-snapshot` does not apply.
 `ops-tools/pull-k3s-backup.sh` takes a consistent copy with Python's sqlite3 online-backup API (pi2 has no
