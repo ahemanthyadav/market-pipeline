@@ -106,6 +106,8 @@
 - **Responsibility:** the node-side copy of the DB dumps. `pg-backup` ran on schedule 2026-11-15 01:50 PST
   (`marketdata-2026-11-15.dump`, 539 MiB, `.sha256` sidecar at 01:52) — 28 dump files retained on the SSD.
   A second copy is pulled to the workstation with `ops-tools/pull-backups.py`; an off-site copy is still open (tracker §1, AR-11).
+  Also holds the in-cluster **k3s control-plane backup** (`k3s-cp-backup-<date>.tar.gz`, mode 600, keeps 7) pushed
+  nightly by `ops-tools/pull-k3s-backup.sh` — a fast-path restore landing zone independent of the workstation copy.
 - **Host jobs:** node-stats logger — was broken (empty `stats.csv`, empty crontab); root cron added 2026-10-11 (AR-12).
   Throttle flags `0x50000` (since boot, none live) on 2026-10-11.
 - **Power:** its own supply since ~02:30 UTC 2026-10-12; review PASS — `0x0`, 0 `dmesg` undervoltage events, and it held through the
@@ -145,8 +147,11 @@
   `tts-service...:8001`).
 - **Labels/taints (live):** `hardware=orin-cpu`, `tier=saas`, 1× GPU allocatable, taint **`gpu=orin:NoSchedule`**.
 - **Status 2026-11-15: the voice layer is NOT deployed.** `stt-service`/`tts-service` have no Deployment in the
-  cluster (only `timescaledb`, `grafana`, `marketview`, `telegram-bot` exist), so orin1 currently runs **nothing but
-  kube-system pods** (the NVIDIA device plugin + the Traefik service LB).
+  cluster, so orin1 currently runs **nothing but kube-system pods** (the NVIDIA device plugin + the Traefik service LB).
+- **Live 2026-11-15:** k3s-agent active, Ready, v1.37.2+k3s1, up 10 d 12 h, load 0.02, 854 MiB peak (k3s agent),
+  GPU present but idle — no CUDA processes, no GPU memory in use. Running a desktop session (Firefox, GNOME shell,
+  Xorg) in addition to k3s — the node doubles as a GUI workstation. **Passwordless SSH now works from the admin
+  workstation via `ssh orin1`.** Joined the tailnet 2026-11-05; Tailscale IP reachable.
 - **⚠ Selector/label mismatch — the manifests would not schedule.** `manifests/voice/stt-service-deployment.yaml` and
   `manifests/voice/tts-service-deployment.yaml` select `nodeSelector: {hardware: orin}` and tolerate
   `hardware=orin:NoSchedule`, but **both live Orin nodes are labelled `hardware=orin-cpu`** and the taint key is
@@ -159,16 +164,17 @@
 
 ### orin2 — general ingestion worker (untainted)
 
-- **Does:** the node the **floating market-data CronJobs actually run on** since 2026-11-13. Live 2026-11-15: 49 pods
+- **Does:** the node the **floating market-data CronJobs actually run on** since 2026-11-13. Live 2026-11-15: ~49 pods
   scheduled here — every floating CronJob (`fx`, `yields`, `rates`, `stock-prices`, `news`, `ta-compute`,
   `pipeline-health`, `stock-metrics`, `stock-screener`, `stock-report`, `stock-valuation`, `prediction-tracker`,
   `ml1-anomalies`, `ml3-volatility`, `ml7b-per-symbol`, `llm-narrative`, `news-embed`, `nse-fetcher`,
   `stock-fundamentals`, `rbi-fetcher`, `fiidii-fetcher`, `intraday-fetcher`, `universe-refresh`, …).
-  **Orin2 holds NO market data** — no PVC or hostPath mount on either Orin node; jobs write only to TimescaleDB on tx2.
-  **Not a single point of failure:** every floating job's image (`marketdata-data:v8`, `marketdata-light:v1`) is
-  imported on pi1 and pi3 as well as orin2, so if orin2 dies the scheduler reschedules onto the Pis — no data lost,
-  no availability gap (the Orins ran nothing before 2026-11-13). The gap is *observability*: orin2 isn't pinged by
-  nodewatch, has no node-stats logger, no SSH alias (tracker §1).
+  **One job currently Running:** `nse-fundamentals-29912760-5974f` (~3 h, weekly NSE fundamentals fetcher); all other
+  market-data pods are `Completed`. **Orin2 holds NO market data** — no PVC or hostPath mount on either Orin node;
+  jobs write only to TimescaleDB on tx2. **Not a single point of failure:** every floating job's image
+  (`marketdata-data:v8`, `marketdata-light:v1`) is imported on pi1 and pi3 as well as orin2, so if orin2 dies the
+  scheduler reschedules onto the Pis — no data lost, no availability gap (the Orins ran nothing before 2026-11-13).
+  The gap is *observability*: orin2 isn't pinged by nodewatch and has no node-stats logger host cron.
 - **Labels/taints (live):** `hardware=orin-cpu`, `tier=saas`, 1× GPU allocatable, **no taint** — which is exactly why
   it takes floating work (the `gpu=orin` taint on orin1 keeps voice pods off it and vice-versa).
 - **Pinned:** none. Every pinned workload (tx2 GPU jobs, pi1 Telegram, pi3 Grafana/backup) stays where it is.
@@ -177,9 +183,13 @@
   orin2 leaves floating jobs able to fall back to the Pis but orin2 itself would start failing with `ErrImageNeverPull`
   (`imagePullPolicy: Never`, no registry — AGENTS.md rule 6).
 - **Capacity:** 6 CPU / 7.6 GB RAM / 476 GB SSD — the most headroom of any worker, which is why it wins floating jobs.
-- **Not yet covered by ops tooling:** no `ORIN1_IP`/`ORIN2_IP` alias in `.hosts.env` and no host password, so
-  `ops-tools/runcmd.py` cannot reach orin1/orin2 — no node-stats logger, no `vcgencmd`/throttle check, no image-import
-  helper. Tracker §1.
+- **Live 2026-11-15:** k3s-agent active, Ready, v1.37.2+k3s1, up 10 d 3 h, load 0.06, 3.3 GiB peak (k3s agent),
+  GPU present but idle — no CUDA processes, no GPU memory in use. **Passwordless SSH now works from the admin
+  workstation via `ssh orin2`.** Joined the tailnet 2026-11-05; Tailscale IP reachable.
+- **Not yet covered by ops tooling:** `ORIN1_IP`/`ORIN2_IP` aliases now exist in `.hosts.env` (added 2026-11-15),
+  but no `_creds.py` host password slot yet, so `ops-tools/runcmd.py` still cannot reach orin1/orin2 — no
+  node-stats logger host cron, no `vcgencmd`/throttle check, no image-import helper via that tool.
+  Direct `ssh orin1` / `ssh orin2` works passwordless from the admin workstation. Tracker §1.
 
 ## 3. Every scheduled job, by node
 

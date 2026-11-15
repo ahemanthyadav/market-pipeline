@@ -247,7 +247,9 @@ Both wired into bot.py COMMANDS + MENU, router SAFE_AI_COMMANDS, and nicknames.
   places: (a) `nodewatch.sh` on pi0 still pings only `pi0..pi3` + `tx2` — verified by reading
   `/usr/local/bin/nodewatch.sh`; (b) neither node runs the AR-12 `node-stats-log.sh` host cron, so they contribute no
   telemetry to `stats.csv`; (c) there is no `ORIN1_IP`/`ORIN2_IP` alias in `.hosts.env` and no `_creds.py` password
-  slot, so `ops-tools/runcmd.py` cannot reach them at all (no `vcgencmd`/throttle check, no image-import helper).
+  slot, so `ops-tools/runcmd.py` cannot reach them (no `vcgencmd`/throttle check, no image-import helper via that tool).
+  Direct `ssh orin1` / `ssh orin2` now works passwordless from the admin workstation (Tailscale IPs reachable),
+  but `ops-tools` host-aware commands still need `.hosts.env` + `_creds.py` entries.
   Consequence: a failure of the node that runs **every floating CronJob** is invisible to the out-of-cluster watcher.
 
 - [ ] 🟡 **Admin-workstation clock skew (observed 2026-11-15).** The workstation clock was ~10 h 50 m behind UTC at the
@@ -708,6 +710,9 @@ Full evidence and rationale: `architecture-review-2026-10-10.md`. Order = its §
     `851c663e…` identical on both ends, removed from pi2 `/tmp`. ✅ **Recurring since 2026-10-18:** `ops-tools/pull-k3s-backup.sh` (adds
     `server/tls` + `server/cred` so a rebuilt pi2 keeps the cluster CA; load gate: skips if pi2 load1 > 3; keeps 14), workstation cron 03:30 local;
     restore steps in ops manual §9. 🔶 **Restore never rehearsed** — drill it on a spare SSD before relying on it. Cron needs the workstation on at 03:30.
+    - ✅ **2026-11-15 in-cluster fast-path copy added:** `pull-k3s-backup.sh` now also pushes each archive to pi3 at
+      `/var/lib/market-data/backups/k3s/k3s-cp-backup-<date>.tar.gz` (mode 600, keeps 7), so a restore can start from the cluster without waiting
+      on the workstation. Workstation copy remains the primary off-cluster DR copy.
   - Off-site copy: **needs an owner decision** — no cloud tool or remote is configured on the workstation (no rclone/restic/aws/b2). Pick a
     destination + encryption (e.g. `restic` to B2/S3, or rclone crypt); dumps hold `bot_users` chat ids and the k3s archive holds the join token.
 - [ ] 🔶 **AR-11 (Phase 0)** fix `pg-backup` — **applied + canary-validated 2026-10-11 ~23:40 UTC (not by this session — applied

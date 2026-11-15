@@ -70,6 +70,22 @@ fi
 mv "$f.part" "$f"; chmod 600 "$f"
 echo "$got  $(basename "$f")" > "$f.sha256"; chmod 600 "$f.sha256"
 
+# In-cluster fast-path copy on pi3 (independent host, same LAN). Primary DR copy
+# remains the workstation archive above; this is a convenience landing zone so a
+# restore can start from the cluster without waiting on the workstation.
+PI3_BACKUP_DIR=/var/lib/market-data/backups/k3s
+python3 ops-tools/runcmd.py pi3 pi3 "mkdir -p -m 700 $PI3_BACKUP_DIR" >/dev/null 2>&1 || true
+if python3 ops-tools/putfile.py pi3 pi3 "$f" "$PI3_BACKUP_DIR/$(basename "$f")" >/dev/null 2>&1 \
+   && python3 ops-tools/putfile.py pi3 pi3 "$f.sha256" "$PI3_BACKUP_DIR/$(basename "$f.sha256")" >/dev/null 2>&1; then
+  echo "$(stamp) K3S-BACKUP-PI3-OK $(basename "$f") -> pi3:$PI3_BACKUP_DIR"
+else
+  echo "$(stamp) WARN: k3s control-plane backup could not be copied to pi3 (workstation copy complete)"
+fi
+
+# Rotation on pi3: keep newest 7 k3s control-plane archives.
+python3 ops-tools/runcmd.py pi3 pi3 \
+  "ls -1t $PI3_BACKUP_DIR/k3s-cp-backup-????-??-??.tar.gz 2>/dev/null | tail -n +8 | while read -r old; do rm -f \"\$old\" \"\$old.sha256\"; done" >/dev/null 2>&1 || true
+
 # Rotation: newest $KEEP archives, only files this script names.
 ls -1 "$DEST"/k3s-cp-backup-????-??-??.tar.gz 2>/dev/null | sort -r | tail -n +$((KEEP + 1)) | while read -r old; do
   rm -f "$old" "$old.sha256"; echo "$(stamp) pruned $(basename "$old")"

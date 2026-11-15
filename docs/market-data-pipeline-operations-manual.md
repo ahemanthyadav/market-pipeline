@@ -479,8 +479,9 @@ python3 ops-tools/getfile.py tx2 ahytx2 \
 #    · node-pinned images (telegram-digest, marketview → pi1): that node only
 #    · TX2-only images (sentiment, headline-ner, …): skip this step entirely
 #    · unpinned CronJobs: all Pi workers (pi1/pi2/pi3)
-#    · data + light images ALSO on orin2 (worker since 2026-11-13; sudo password is NOT the Pi one —
-#      runcmd/putfile with SSH_PASS set for that call, host key pinned, address from `kubectl get node orin2`)
+#    · data + light images ALSO on orin2 (worker since 2026-11-13; `ssh orin2` works passwordless from the admin
+#      workstation — use `runcmd.py orin2 orin2` or putfile directly; host key pinned, address from
+#      `kubectl get node orin2`)
 for h in pi1 pi3; do   # data image runs on pi1/pi3; light runs on TX2 too; ml is TX2-only
   python3 ops-tools/putfile.py $h $h /tmp/marketdata-data-v1.tar.gz /home/$h/marketdata-data-v1.tar.gz
   python3 ops-tools/runcmd.py $h $h "echo @@PW@@ | sudo -S /usr/local/bin/k3s ctr -n k8s.io images import /home/$h/marketdata-data-v1.tar.gz 2>&1 | tail -1 && rm /home/$h/marketdata-data-v1.tar.gz"
@@ -575,7 +576,7 @@ for h in pi1 pi3; do
 done
 # pi2: must run detached (nohup) + poll — a foreground import wedges the session.
 # orin1: SKIP — tainted `gpu=orin:NoSchedule`, STT/TTS voice only, no market-data images.
-# orin2: import only if uncordoned and will receive floating jobs; find its SSH username first.
+# orin2: uncordoned and receiving floating jobs; import via `ssh orin2` (passwordless from admin workstation).
 
 # 4. Verify imports landed:
 python3 ops-tools/runcmd.py pi1 pi1 "echo @@PW@@ | sudo -S /usr/local/bin/k3s ctr -n k8s.io images ls | grep marketdata-data:v1 | head -1"
@@ -609,7 +610,7 @@ kubectl uncordon orin2
 When backfilling multiple fetchers at once (e.g. after an image outage), yfinance and NSE
 rate-limit per-IP. The order below avoids hitting limits on the slower feeds by doing
 the fast fetches first, then the slow ones with gaps. All one-shot Jobs land on pi1/pi3
-(orin2 cordoned unless its images are restored).
+(orin2 uncordoned and receiving floating jobs; verify its images are present before backfilling).
 
 **Order (each is `kubectl create job --from=cronjob/<name>` → poll → check logs → delete):**
 
@@ -1018,8 +1019,10 @@ k3s runs kine on SQLite (`/var/lib/rancher/k3s/server/db/state.db`), so `k3s etc
 `ops-tools/pull-k3s-backup.sh` takes a consistent copy with Python's sqlite3 online-backup API (pi2 has no
 `sqlite3` CLI), checks `PRAGMA integrity_check`, adds the server `token`, `server/tls` (CA + keys) and `server/cred`, pulls it to
 `out/backups/k3s/k3s-cp-backup-<date>.tar.gz` (mode 600 — **contains the join token and the cluster CA private keys**), verifies sha256,
-deletes the remote copy, keeps 14. Skips (exit 5) if pi2 load1 > 3. Workstation cron 03:30 local →
-`out/logs/k3s-backup.log`; `pull-backups.py --prune-local 7` at 03:00 → `out/logs/pull-backups.log`.
+deletes the remote copy, keeps 14. Skips (exit 5) if pi2 load1 > 3.
+Each run also pushes the same archive to pi3 at `/var/lib/market-data/backups/k3s/k3s-cp-backup-<date>.tar.gz` (mode 600, keeps 7)
+as an in-cluster fast-path restore landing zone; the workstation copy remains the primary off-cluster DR copy.
+Workstation cron 03:30 local → `out/logs/k3s-backup.log`; `pull-backups.py --prune-local 7` at 03:00 → `out/logs/pull-backups.log`.
 **Restore (pi2 disk/datastore lost — untested drill, quiet window, agents stay up):**
 ```bash
 # 1. on pi2 (same hostname/IP; k3s installed):  sudo systemctl stop k3s
