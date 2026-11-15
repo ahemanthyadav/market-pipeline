@@ -175,6 +175,73 @@ Both wired into bot.py COMMANDS + MENU, router SAFE_AI_COMMANDS, and nicknames.
 
 ## 1. Immediate (next checkpoint: tomorrow's `/health`)
 
+### 2026-11-15 branch review (`feat/telegram-v4-market-views` vs `main`)
+
+Three-area code review plus live read-only checks. Gates were green before it started. Six findings fixed in code,
+each with a regression test that fails on the old code. **Deploy is still pending.**
+
+- [x] ✅ **R-1 Bot admin bypass:** the usage-error re-route and the unknown-command router called handlers without
+  the owner check, so `/multibagger /adduser <id> X` let any member add users (`/top /users` leaked chat ids).
+  - Fix: every path goes through `bot.run_command()`, which enforces `ADMIN`.
+  - Tests: `test_multiuser.py` `test_member_cannot_reach_admin_commands_via_reroute`, `test_run_command_enforces_owner_on_every_admin_command`.
+- [x] ✅ **R-2 Schema re-run broken:** key 22 re-defined three views that key 25 widened, so every re-run after key 25
+  would fail "cannot drop columns from view".
+  - Fix: key 22 now only creates those views when they don't exist yet (`to_regclass` guard).
+  - Verified on a scratch `timescaledb:2.30.1-pg16` container: fresh DB ×2, and old→new→new (the live upgrade path) — all clean, views keep 31 columns.
+- [x] ✅ **R-3 k3s backup copy to pi3** (commit `4952137`): it targeted the pod-mounted `/var/lib/market-data/backups`
+  hostPath and never landed.
+  - Now `~/k3s-cp-backups/` (700/600, sha256 re-checked on pi3). First copy verified live 2026-11-15. Details: backup runbook.
+- [x] ✅ **R-4 Fresh/DR schema build failed:** key 23 granted to `pipeline_rw`, but no key created it, and the job
+  printed `SCHEMA-OK` anyway.
+  - Fix: key 10 creates `pipeline_rw` NOLOGIN with the AR-8 DML grants; `schema-job.yaml` now exits on `SCHEMA-FAIL`.
+  - Also: `valuation.py` no longer runs DDL at runtime (`upsert_catalog()` only). Key 25 already creates everything it
+    added, and a DML-only `pipeline_rw` fails `ALTER TABLE` ("must be owner"), which was verified on the scratch DB.
+  - Test: `test_manifest_safeguards.py` `SchemaReapplySafety` (static, CI-safe).
+- [x] ✅ **R-5 Fact-check gate loosened:** the tolerance went from ±0.01 to ±0.1 on 2026-11-08, so "1.30%" passed for a 1.21% fact.
+  - Fix: a number now passes only if it equals the fact rounded or truncated to the decimals actually written (percent form included).
+  - Test: `test_narrative.py` `test_tolerance_is_the_written_precision_not_a_flat_window`.
+- [x] ✅ **R-6 `/sp500`, `/index` P/E always "–":** the query used `DISTINCT ON (symbol)`, which dropped the P/E row.
+  - Fix: `DISTINCT ON (symbol, metric)`.
+  - Test: `test_stocks.py` `test_distinct_on_keeps_latest_pe_and_pb_per_symbol` (the fake applies the query's own key).
+- [ ] 🔶 **Deploy R-1/R-5/R-6 and the R-2/R-4 schema changes.** Blocked by the stale TX2 credential below (§6 needs TX2).
+  1. `telegram-digest` v42→v43 (bot.py, stocks.py, factcheck.py); also `ops-tools/apply-llm.sh` (ships factcheck.py).
+  2. `marketdata-data` v8→v9 (valuation.py, no runtime DDL).
+  3. Apply the ConfigMap and run the schema job under a new name (`schema-review-1115`). Expect a one-time md5 WARN for keys 10 and 22.
+- [ ] 🤔 **Ownership drift — needs owner approval (non-SELECT SQL), run only AFTER `marketdata-data:v9` is live.**
+  - Live state: `pipeline_rw` owns `stock_valuations`, `stock_scientific_metrics`, `sector_metrics` and has CREATE on `public`.
+  - Cause: Schema 25 was first applied by `valuation.py` running as `pipeline_rw` (rollout step 1 below).
+  - Fix, as `postgres`:
+    `ALTER TABLE stock_valuations OWNER TO postgres; ALTER TABLE stock_scientific_metrics OWNER TO postgres;
+    ALTER TABLE sector_metrics OWNER TO postgres; REVOKE CREATE ON SCHEMA public FROM pipeline_rw;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON stock_valuations, stock_scientific_metrics, sector_metrics TO pipeline_rw;`
+  - Then trigger one `stock-valuation` run and check `job_runs`.
+- [ ] 🔶 **Review findings not yet fixed** (reported by reviewers, not independently re-verified; verify each before fixing):
+  - Data:
+    - `predictions.py` stores an absolute `adj_close` base, so splits book fake returns and outcomes are write-once.
+    - `ev0.py` G-21 `distress_score` joins financials on `period_end`, not `filed` (look-ahead).
+    - `ev0.py` `industry_momentum` compounds (2+r), and NaN blanks the sector.
+    - `stock_prices.py` never phantom-checks the oldest bar in the window (seed `prev_close` from the DB).
+    - `ml1.py:284` deletes 100 days but rewrites 90.
+    - `ml3_volatility.py` EWMA is one day stale.
+    - `valuation.py` `easton_mpeg` uses g instead of r on the dps term.
+    - `universe_refresh.py` errors in the SEC CIK map fail the SP400/600 refresh.
+  - Bot:
+    - `router.py:364` `format_route` doesn't escape args.
+    - `valuation_text` crashes on NULL `upside_pct`.
+    - The facts fallback makes one 20 s gateway call per word on the poll loop.
+    - Nickname rows aren't checked against `universe_constituents`.
+    - The AI route to `watch` can write the watchlist.
+    - `/sectors` exceeds PHONE_WIDTH.
+    - `/scorecard` d1/d10 direction is unlabelled.
+    - `/methods` is truncated at 4096 characters.
+  - Ops:
+    - Voice services have no Dockerfiles, no auth, and a likely wrong piper import.
+    - `images/ml` torch/FinBERT are unpinned.
+    - `images/*/Dockerfile` comments name `-v1` tarballs and pi2 imports.
+    - `opencode.jsonc` runs an unpinned `mcp-telegram-bot` with the prod token.
+    - `ml7b` 600 s deadline vs 40×2×180 s.
+    - Floating CronJobs rely only on pi2's cordon.
+
 - [ ] ⏸ **Roll out ADR 0033 & Schema 25 (`25-valuation-and-metrics-catalog.sql`) to the cluster (§6 cycle):** steps 1–4 ✅ (verified 2026-11-12: `valuation_methods` 34 rows, `stock_scientific_metrics` + `calibration_metrics` + `v_*` views present, sector_metrics lens columns live, 2,239 valuations for 11-12); **only step 5 remains, time-blocked** (first `prediction_outcomes` resolve ~2026-11-26; needs ≥6 resolved cross-sections).
   Code and hermetic unit tests are committed across `marketdata` and `marketview`:
   1. ✅ (applied via `valuation.ensure_schema_and_catalog()` with the v3 image, 2026-11-09) **Apply TimescaleDB Schema 25:** `kubectl apply -f manifests/timescaledb/schema-configmap.yaml` and run the schema job (or trigger one `stock-valuation` job, as `valuation.ensure_schema_and_catalog()` idempotently creates `valuation_methods`, `stock_scientific_metrics`, `calibration_metrics`, additive columns on `stock_valuations` and `sector_metrics`, contract views `v_valuation_methods`, `v_latest_scientific_metrics`, `v_latest_calibration`, and grants `SELECT` to `grafana_ro` and `telegram_app`).
@@ -711,8 +778,11 @@ Full evidence and rationale: `architecture-review-2026-10-10.md`. Order = its §
     `server/tls` + `server/cred` so a rebuilt pi2 keeps the cluster CA; load gate: skips if pi2 load1 > 3; keeps 14), workstation cron 03:30 local;
     restore steps in ops manual §9. 🔶 **Restore never rehearsed** — drill it on a spare SSD before relying on it. Cron needs the workstation on at 03:30.
     - ✅ **2026-11-15 in-cluster fast-path copy added:** `pull-k3s-backup.sh` now also pushes each archive to pi3 at
-      `/var/lib/market-data/backups/k3s/k3s-cp-backup-<date>.tar.gz` (mode 600, keeps 7), so a restore can start from the cluster without waiting
+      `~/k3s-cp-backups/k3s-cp-backup-<date>.tar.gz` (mode 600, keeps 7), so a restore can start from the cluster without waiting
       on the workstation. Workstation copy remains the primary off-cluster DR copy.
+      ✅ **2026-11-15 fixed (review):** the first target was under the pod-mounted `/var/lib/market-data/backups` hostPath
+      (secrets readable from `pg-backup`/`restore-drill`) and never landed (root-owned dir, error hidden). Now the pi3 user's
+      `~/k3s-cp-backups/` (700/600, sha256 re-verified on pi3); first copy landed and verified 2026-11-15.
   - Off-site copy: **needs an owner decision** — no cloud tool or remote is configured on the workstation (no rclone/restic/aws/b2). Pick a
     destination + encryption (e.g. `restic` to B2/S3, or rclone crypt); dumps hold `bot_users` chat ids and the k3s archive holds the join token.
 - [ ] 🔶 **AR-11 (Phase 0)** fix `pg-backup` — **applied + canary-validated 2026-10-11 ~23:40 UTC (not by this session — applied

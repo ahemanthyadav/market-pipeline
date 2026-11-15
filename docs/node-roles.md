@@ -107,7 +107,8 @@
   (`marketdata-2026-11-15.dump`, 539 MiB, `.sha256` sidecar at 01:52) — 28 dump files retained on the SSD.
   A second copy is pulled to the workstation with `ops-tools/pull-backups.py`; an off-site copy is still open (tracker §1, AR-11).
   Also holds the in-cluster **k3s control-plane backup** (`k3s-cp-backup-<date>.tar.gz`, mode 600, keeps 7) pushed
-  nightly by `ops-tools/pull-k3s-backup.sh` — a fast-path restore landing zone independent of the workstation copy.
+  nightly by `ops-tools/pull-k3s-backup.sh` to `~/k3s-cp-backups/` (pi3 user's home, dir 700 — deliberately NOT under the
+  `/var/lib/market-data/backups` hostPath the backup pods mount) — a fast-path restore landing zone independent of the workstation copy.
 - **Host jobs:** node-stats logger — was broken (empty `stats.csv`, empty crontab); root cron added 2026-10-11 (AR-12).
   Throttle flags `0x50000` (since boot, none live) on 2026-10-11.
 - **Power:** its own supply since ~02:30 UTC 2026-10-12; review PASS — `0x0`, 0 `dmesg` undervoltage events, and it held through the

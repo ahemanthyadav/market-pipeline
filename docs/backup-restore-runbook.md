@@ -10,7 +10,7 @@ Two independent backups run on different schedules to different destinations:
 
 | Backup | What it protects | Source | Schedule | Destination | Retention |
 |---|---|---|---|---|---|
-| **k3s control-plane** (`pull-k3s-backup.sh`) | Cluster config: 36 CronJobs, secrets, ConfigMaps, Deployments, node join tokens, TLS certs | pi2 `state.db` (~8 MB SQLite) | Workstation cron 03:30 local | Workstation `out/backups/k3s/` (primary DR) + pi3 `/var/lib/market-data/backups/k3s/` (fast-path) | 14 (workstation) / 7 (pi3) |
+| **k3s control-plane** (`pull-k3s-backup.sh`) | Cluster config: 36 CronJobs, secrets, ConfigMaps, Deployments, node join tokens, TLS certs | pi2 `state.db` (~8 MB SQLite) | Workstation cron 03:30 local | Workstation `out/backups/k3s/` (primary DR) + pi3 `~/k3s-cp-backups/` (fast-path) | 14 (workstation) / 7 (pi3) |
 | **TimescaleDB** (`pg-backup` CronJob) | Market data: all prices, fundamentals, sentiment, scores, etc. | TimescaleDB on tx2 (`sda4` SSD) | 01:30 UTC node-local | pi3 `/var/lib/market-data/backups/` + workstation via `pull-backups.py` | 7 daily |
 
 The control-plane backup is **tiny** (~8 MB + keys) because it holds cluster *configuration*, not market data. The TimescaleDB dump is **~539 MB** because it holds all market data.
@@ -42,14 +42,14 @@ The control-plane backup is **tiny** (~8 MB + keys) because it holds cluster *co
 4. Copies `token`, `tls`, `cred`; tars + gzips to `/tmp/k3s-cp-backup.tar.gz` on pi2, mode 600
 5. `getfile.py` pulls tarball + `.sha256` to workstation `out/backups/k3s/k3s-cp-backup-<date>.tar.gz`
 6. Remote `/tmp` copy deleted from pi2
-7. **NEW 2026-11-15:** `putfile.py` pushes the same archive to pi3 at `/var/lib/market-data/backups/k3s/k3s-cp-backup-<date>.tar.gz` (mode 600, keeps newest 7) as in-cluster fast-path copy
+7. **NEW 2026-11-15:** `putfile.py` pushes the same archive to pi3 at `~/k3s-cp-backups/k3s-cp-backup-<date>.tar.gz` (dir 700 + files 600 owned by the pi3 user, sha256 re-verified on pi3, keeps newest 7) as in-cluster fast-path copy. **Fixed 2026-11-15:** the first version targeted `/var/lib/market-data/backups/k3s/` — that is the root-owned hostPath mounted (as root) into `pg-backup`/`restore-drill`, so the token/CA keys would have been readable from those pods, and the copy never actually landed (mkdir failed silently). The home directory is outside every hostPath; first verified copy 2026-11-15.
 8. Workstation keeps 14; pi3 keeps 7; rotation deletes older
 
 ### Where copies live
 | Copy | Location | Mode | Retention | Purpose |
 |---|---|---|---|---|
 | Primary DR | `out/backups/k3s/k3s-cp-backup-<date>.tar.gz` (workstation) | 600 | 14 | Off-cluster disaster recovery |
-| Fast-path | `/var/lib/market-data/backups/k3s/k3s-cp-backup-<date>.tar.gz` (pi3) | 600 | 7 | In-cluster restore without waiting on workstation |
+| Fast-path | `~/k3s-cp-backups/k3s-cp-backup-<date>.tar.gz` (pi3) | 600 | 7 | In-cluster restore without waiting on workstation |
 
 ### Verify it ran
 ```bash
@@ -58,7 +58,7 @@ ls -lh out/backups/k3s/ | tail -5
 cat out/logs/k3s-backup.log | tail -5
 
 # Pi3 in-cluster copy
-python3 ops-tools/runcmd.py pi3 pi3 'ls -lh /var/lib/market-data/backups/k3s/ | tail -5'
+python3 ops-tools/runcmd.py pi3 pi3 'ls -lh ~/k3s-cp-backups/ | tail -5'
 ```
 
 ### Restore procedure (from either copy)
@@ -70,7 +70,7 @@ python3 ops-tools/runcmd.py pi3 pi3 'ls -lh /var/lib/market-data/backups/k3s/ | 
 # From workstation:
 python3 ops-tools/putfile.py pi2 pi2 out/backups/k3s/k3s-cp-backup-<date>.tar.gz /tmp/k3s-cp-backup.tar.gz
 # From pi3:
-python3 ops-tools/runcmd.py pi3 pi3 'cat /var/lib/market-data/backups/k3s/k3s-cp-backup-<date>.tar.gz' > /tmp/k3s-cp-backup.tar.gz
+python3 ops-tools/runcmd.py pi3 pi3 'cat ~/k3s-cp-backups/k3s-cp-backup-<date>.tar.gz' > /tmp/k3s-cp-backup.tar.gz
 python3 ops-tools/putfile.py pi2 pi2 /tmp/k3s-cp-backup.tar.gz /tmp/k3s-cp-backup.tar.gz
 
 # 1. Stop k3s on pi2
@@ -241,7 +241,7 @@ kubectl get jobs -n market-data --sort-by=.metadata.creationTimestamp | tail -10
 
 # Verify backups ran
 python3 ops-tools/runcmd.py pi3 pi3 'ls -lh /var/lib/market-data/backups/ | tail -5'
-python3 ops-tools/runcmd.py pi3 pi3 'ls -lh /var/lib/market-data/backups/k3s/ | tail -5'
+python3 ops-tools/runcmd.py pi3 pi3 'ls -lh ~/k3s-cp-backups/ | tail -5'
 ls -lh out/backups/ | tail -5
 ls -lh out/backups/k3s/ | tail -5
 
@@ -251,7 +251,7 @@ kubectl -n market-data exec timescaledb-0 -- env PGPASSWORD="$PW" \
   psql -U postgres -d postgres -c "SELECT feed, last_check, fresh FROM pipeline_heartbeat ORDER BY feed;"
 
 # Restore k3s from pi3 copy
-python3 ops-tools/runcmd.py pi3 pi3 'cat /var/lib/market-data/backups/k3s/k3s-cp-backup-<date>.tar.gz' > /tmp/k3s-cp-backup.tar.gz
+python3 ops-tools/runcmd.py pi3 pi3 'cat ~/k3s-cp-backups/k3s-cp-backup-<date>.tar.gz' > /tmp/k3s-cp-backup.tar.gz
 python3 ops-tools/putfile.py pi2 pi2 /tmp/k3s-cp-backup.tar.gz /tmp/k3s-cp-backup.tar.gz
 # ... then follow §2 restore steps
 

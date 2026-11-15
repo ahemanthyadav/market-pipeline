@@ -273,6 +273,11 @@ Applied with `kubectl apply` after a `kubectl diff` review; it did not change `s
   replace only line 8 — the ConfigMap reference further down must keep its name). The permission config denies deleting
   anything named `timescaledb…` (rule 5), so the old Job cannot be deleted and re-created. Schema 09 (multi-user bot) was applied
   this way on 2026-10-12 as `schema-multiuser-09`; a first attempt (`timescaledb-schema-09`, ConfigMap name rewritten by a too-broad
+  sed) never started and was suspended, not deleted.
+  **Every key is re-applied on every run** — since 2026-11-15 a failing key fails the Job with `SCHEMA-FAIL <file>` in the log
+  (before, the loop carried on and printed `SCHEMA-OK`). Check the log for `SCHEMA-OK` *and* the Job status. Before applying,
+  `python3 tests/test_manifest_safeguards.py` checks re-apply safety (one unguarded definition per view; roles created before
+  they are granted) — database-contract §2.
    **Schema 23 — ML tables (2026-10-31):** added `app.ml_runs`, `app.data_anomalies`,
    `app.vol_forecasts`, `app.regime_labels`, `app.peer_clusters`, `app.model_scores`,
    `app.llm_calls`, `app.llm_outputs` (all additive, idempotent CREATE IF NOT EXISTS).
@@ -1022,7 +1027,7 @@ k3s runs kine on SQLite (`/var/lib/rancher/k3s/server/db/state.db`), so `k3s etc
 `sqlite3` CLI), checks `PRAGMA integrity_check`, adds the server `token`, `server/tls` (CA + keys) and `server/cred`, pulls it to
 `out/backups/k3s/k3s-cp-backup-<date>.tar.gz` (mode 600 — **contains the join token and the cluster CA private keys**), verifies sha256,
 deletes the remote copy, keeps 14. Skips (exit 5) if pi2 load1 > 3.
-Each run also pushes the same archive to pi3 at `/var/lib/market-data/backups/k3s/k3s-cp-backup-<date>.tar.gz` (mode 600, keeps 7)
+Each run also pushes the same archive to pi3 at `~/k3s-cp-backups/k3s-cp-backup-<date>.tar.gz` (mode 600, keeps 7)
 as an in-cluster fast-path restore landing zone; the workstation copy remains the primary off-cluster DR copy.
 Workstation cron 03:30 local → `out/logs/k3s-backup.log`; `pull-backups.py --prune-local 7` at 03:00 → `out/logs/pull-backups.log`.
 **Restore (pi2 disk/datastore lost — untested drill, quiet window, agents stay up):**
