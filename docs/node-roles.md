@@ -25,6 +25,23 @@
 | **orin1** | Jetson Orin Nano, 8 GB, 932 GB SSD, 1×GPU | Worker (tainted `gpu=orin`) | **STT/TTS voice layer only** — reserved, not yet deployed | `stt-service` (Whisper), `tts-service` (Piper) — *manifests exist, deployments not applied* | Voice input/output stays silent; Telegram text commands and marketview still work |
 | **orin2** | Jetson Orin Nano, 8 GB, 476 GB SSD, 1×GPU | Worker (untainted) | **General ingestion pool** — where the floating CronJobs actually run | none (takes floating jobs) | Floating jobs reschedule to pi1/pi3; no pinned workload lost |
 
+### 1b. Target layout (decided 2026-11-15, **not applied yet**; §1 above is the live state)
+
+| Node | Target role | What changes |
+|---|---|---|
+| **k3s-cp** (VM on the N100 mini PC, home) | k3s control plane only | New. Tainted `CriticalAddonsOnly=true:NoExecute` (amd64: must never run marketdata pods) |
+| **pi2** | Worker, CPU jobs | Stops being the control plane; the pi2-fragility rules relax after the move |
+| **pi1, pi3** | Workers, CPU jobs + their pinned workloads | Take the floating jobs back from orin2 |
+| **4th Pi 3** (870 EVO boot) | Worker, CPU jobs | New; joins after the control-plane move |
+| **tx2** | TimescaleDB, `llm-gateway`, image builds | GPU jobs (`sentiment-scorer`, `headline-ner`) move to orin1 |
+| **orin1** | GPU only: market-data inference | Was reserved for voice |
+| **orin2** | GPU only: voice (STT/TTS) + robotics | Floating jobs leave; may go mobile without affecting the cluster |
+| **Vostros** (remote, not in k3s) | Off-site encrypted backups, site-down watcher, restore drills | New (AR-11, AR-12) |
+
+Both Orins get the soft taint `gpu=orin:PreferNoSchedule`: CPU jobs prefer the Pis but may overflow onto an
+Orin. Order and steps: `pending-tasks.md` (control-plane migration, Orins GPU-only, 4th Pi, AR-10/11/12) and
+the workspace `hardware/ROADMAP.md` + `hardware/CONTROL-PLANE-MIGRATION.md`.
+
 ## 2. Per node
 
 ### pi0 — DNS + watcher (not a cluster node)
