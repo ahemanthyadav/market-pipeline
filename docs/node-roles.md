@@ -160,7 +160,7 @@ the workspace `hardware/ROADMAP.md` + `hardware/CONTROL-PLANE-MIGRATION.md`.
   allocatable capacity** — the NVIDIA device plugin runs only on orin1/orin2. TX2's GPU is reached through the GPU
   RuntimeClass path (GPU smoke test), not via device-plugin resource requests. Do not write a manifest that requests
   the NVIDIA GPU resource with `nodeSelector: hardware=gpu` — it will never schedule.
-- **Live 2026-11-16:** Ready worker against k3s-cp (`K3S_URL` repointed from pi2 to k3s-cp). Disk checked: eMMC 60%, SSD 16%, load 0.2. The fixed-config re-verification (ops manual §2) is still to do.
+- **Live 2026-11-16:** Ready worker against k3s-cp (`K3S_URL` repointed from pi2 to k3s-cp). Disk checked: eMMC 60%, SSD 16%, load 0.2. **SSH key auth + passwordless sudo now configured** (`sudo -n` works without a sudo password). The fixed-config re-verification (ops manual §2) is still to do.
 
 ### orin1 — STT/TTS voice inference (reserved, not yet running)
 
@@ -173,8 +173,9 @@ the workspace `hardware/ROADMAP.md` + `hardware/CONTROL-PLANE-MIGRATION.md`.
   k3s-agent repointed from pi2 to k3s-cp and Ready against k3s-cp.
 - **Live 2026-11-16:** Ready worker against k3s-cp (K3S_URL repointed from pi2 to k3s-cp), v1.37.2+k3s1, up 10 d 12 h,
   load 0.02, 854 MiB peak (k3s agent), GPU present but idle — no CUDA processes, no GPU memory in use. Running a desktop
-  session (Firefox, GNOME shell, Xorg) in addition to k3s — the node doubles as a GUI workstation. **Passwordless SSH now
-  works from the admin workstation via `ssh orin1`.** Joined the tailnet 2026-11-05; Tailscale IP reachable.
+  session (Firefox, GNOME shell, Xorg) in addition to k3s — the node doubles as a GUI workstation. **Passwordless SSH +
+  passwordless sudo now configured** via `ssh orin1` (`sudo -n` works without a sudo password). Joined the tailnet
+  2026-11-05; Tailscale IP reachable.
 - **⚠ Selector/label mismatch — the manifests would not schedule.** `manifests/voice/stt-service-deployment.yaml` and
   `manifests/voice/tts-service-deployment.yaml` select `nodeSelector: {hardware: orin}` and tolerate
   `hardware=orin:NoSchedule`, but **both live Orin nodes are labelled `hardware=orin-cpu`** and the taint key is
@@ -208,7 +209,8 @@ the workspace `hardware/ROADMAP.md` + `hardware/CONTROL-PLANE-MIGRATION.md`.
 - **Capacity:** 6 CPU / 7.6 GB RAM / 476 GB SSD — the most headroom of any worker, which is why it wins floating jobs.
 - **Live 2026-11-16:** Ready worker against k3s-cp (`K3S_URL` repointed from pi2 to k3s-cp), v1.37.2+k3s1, up 10 d 3 h,
   load 0.06, 3.3 GiB peak (k3s agent), GPU present but idle — no CUDA processes, no GPU memory in use. **Passwordless SSH
-  now works from the admin workstation via `ssh orin2`.** Joined the tailnet 2026-11-05; Tailscale IP reachable.
+  + passwordless sudo now configured** via `ssh orin2` (`sudo -n` works without a sudo password). Joined the tailnet
+  2026-11-05; Tailscale IP reachable.
 - **Not yet covered by ops tooling:** `ORIN1_IP`/`ORIN2_IP` aliases now exist in `.hosts.env` (added 2026-11-15),
   but no `_creds.py` host password slot yet, so `ops-tools/runcmd.py` still cannot reach orin1/orin2 — no
   node-stats logger host cron, no `vcgencmd`/throttle check, no image-import helper via that tool.

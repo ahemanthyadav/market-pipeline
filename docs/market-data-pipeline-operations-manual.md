@@ -70,7 +70,8 @@ re-runs and late corrections overwrite cleanly, never duplicate.
 |---|---|---|---|---|
 | pi0 | Pi 1 B+, 512 MB | <pi0-ip> | <pi0-tailnet-ip> (joined 2026-10-11) | Pi-hole v6.4.3 + unbound (DNS) |
 | pi1 | Pi 3 B, 1 GB, 233 GB SSD | <pi1-ip> | <pi1-tailnet-ip> | k3s worker (ingestion pool) |
-| pi2 | Pi 3 B+, 1 GB | <pi2-ip> | <pi2-tailnet-ip> | k3s control-plane — FRAGILE, see §8 |
+| pi2 | Pi 3 B+, 1 GB | <pi2-ip> | <pi2-tailnet-ip> | k3s worker (formerly control-plane; moved to k3s-cp on N100, 2026-11-16) |
+| k3s-cp | N100 mini PC, 4 cores / 16 GB, amd64 | <K3S_CP_IP> | <K3S_CP_TS_IP> | k3s control-plane only; tainted `CriticalAddonsOnly=true:NoExecute` |
 | pi3 | Pi 3 B, 1 GB | <pi3-ip> | <pi3-tailnet-ip> | k3s worker; Grafana + pg-backup pinned here |
 | ahytx2-desktop | Jetson TX2, 7.7 GB | <tx2-ip> (router DHCP reservation, confirmed 2026-10-03) | <tx2-tailnet-ip> | GPU/tainted worker; DB host |
 | orin1 | Orin Nano, 8 GB | <orin1-ip> | — | k3s worker, tainted `gpu=orin:NoSchedule` (reserved for the STT/TTS voice layer — **not deployed**) |
@@ -1022,26 +1023,28 @@ Also: `ps`/`pgrep -af` on a host while a `runcmd.py` command runs shows the expa
 
 > Full runbook: `docs/backup-restore-runbook.md` (hardware matrix, DR scenarios, schedule summary, quick-reference commands). This section contains the copy-paste restore commands; the runbook has the complete picture.
 
-### Control-plane datastore (pi2) — daily second copy since 2026-10-18
+### Control-plane datastore (k3s-cp / minipc) — daily second copy since 2026-10-18
 k3s runs kine on SQLite (`/var/lib/rancher/k3s/server/db/state.db`), so `k3s etcd-snapshot` does not apply.
-`ops-tools/pull-k3s-backup.sh` takes a consistent copy with Python's sqlite3 online-backup API (pi2 has no
-`sqlite3` CLI), checks `PRAGMA integrity_check`, adds the server `token`, `server/tls` (CA + keys) and `server/cred`, pulls it to
-`out/backups/k3s/k3s-cp-backup-<date>.tar.gz` (mode 600 — **contains the join token and the cluster CA private keys**), verifies sha256,
-deletes the remote copy, keeps 14. Skips (exit 5) if pi2 load1 > 3.
-Each run also pushes the same archive to pi3 at `~/k3s-cp-backups/k3s-cp-backup-<date>.tar.gz` (mode 600, keeps 7)
+`ops-tools/pull-k3s-backup.sh` takes a consistent copy with Python's sqlite3 online-backup API
+(k3s-cp/minipc has no `sqlite3` CLI), checks `PRAGMA integrity_check`, adds the server `token`,
+`server/tls` (CA + keys) and `server/cred`, pulls it to
+`out/backups/k3s/k3s-cp-backup-<date>.tar.gz` (mode 600 — **contains the join token and the cluster
+CA private keys**), verifies sha256, deletes the remote copy, keeps 14. Each run also pushes the
+same archive to pi3 at `~/k3s-cp-backups/k3s-cp-backup-<date>.tar.gz` (mode 600, keeps 7)
 as an in-cluster fast-path restore landing zone; the workstation copy remains the primary off-cluster DR copy.
 Workstation cron 03:30 local → `out/logs/k3s-backup.log`; `pull-backups.py --prune-local 7` at 03:00 → `out/logs/pull-backups.log`.
-**Restore (pi2 disk/datastore lost — untested drill, quiet window, agents stay up):**
+**Restore (k3s-cp/minipc disk/datastore lost — untested drill, quiet window, agents stay up):**
 ```bash
-# 1. on pi2 (same hostname/IP; k3s installed):  sudo systemctl stop k3s
+# 1. on k3s-cp/minipc (same hostname/IP; k3s installed):  sudo systemctl stop k3s
 # 2. putfile the archive, then:  tar -xzf k3s-cp-backup-<date>.tar.gz -C /tmp
 # 3. sudo cp /var/lib/rancher/k3s/server/db/state.db /tmp/state.db.broken 2>/dev/null; \
 #    sudo rm -f /var/lib/rancher/k3s/server/db/state.db-{wal,shm}; \
 #    sudo cp /tmp/k3s-cp-backup/state.db /var/lib/rancher/k3s/server/db/state.db
 # 4. same token + certs: sudo cp /tmp/k3s-cp-backup/token /var/lib/rancher/k3s/server/token; \
-#    sudo cp -a /tmp/k3s-cp-backup/tls /tmp/k3s-cp-backup/cred /var/lib/rancher/k3s/server/
+#    sudo cp -a /tmp/k3s-cp-backup/tls /var/lib/rancher/k3s/server/tls; \
+#    sudo cp -a /tmp/k3s-cp-backup/cred /var/lib/rancher/k3s/server/cred
 # 5. sudo systemctl start k3s → kubectl get nodes (agents keep trusting the restored CA and reconnect).
-#    Never rehearsed — do a drill on a spare SD/SSD before relying on it.
+#    Never rehearsed — do a drill on a spare SSD/SSD image before relying on it.
 ```
 
 ### Verify backup ran (daily 01:30 UTC)
