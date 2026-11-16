@@ -2,11 +2,7 @@
 
 > **Purpose:** one place that answers "what does each machine do, what breaks if it dies, and what must I
 > never do to it". Detail stays in the linked docs; this file is the index per node.
-> **Last verified: 2026-11-15** — live `kubectl`: 6 k3s nodes Ready (pi2 cordoned), **36 CronJobs, none suspended**;
-> 30 of the 31 jobs started in the last 26 h completed `Succeeded` (0 failures; `nse-fundamentals` still `Running` at
-> the check — long weekly job); `pipeline_heartbeat` 16/16 feeds `fresh`; pi3 backup `marketdata-2026-11-15.dump`
-> present with `.sha256` sidecar; per-host `uptime`/`free`/`vcgencmd` on pi0/pi1/pi2/pi3; image lists read from
-> containerd (`ctr -n k8s.io images ls`) on pi1/pi3 and from `node.status.images` on orin1/orin2.
+> **Last verified: 2026-11-16** — live `kubectl`: k3s-cp (N100 VM) is the control plane (tainted `CriticalAddonsOnly=true:NoExecute`); pi1, pi2, pi3 workers Ready; tx2/orin1/orin2 agents still point at stopped pi2 (awaiting their sudo passwords to repoint `K3S_URL` → k3s-cp); **36 CronJobs, none suspended**.
 > **Not re-verified 2026-11-15:** TX2 fixed config (TX2 disk WAS checked later that day: eMMC 60%, SSD 16%; the earlier "SSH auth failed" was a wrong SSH user — §5),
 > per-Pi thermal detail, pi1 24 h power acceptance.
 > The 2026-10-20 pi2 findings below still stand (reboot ~01:56 UTC, cause unknown, no journal trace; case removed
@@ -18,20 +14,21 @@
 | Node | Hardware | In k3s? | Primary job | Pinned workloads | If it dies |
 |---|---|---|---|---|---|
 | **pi0** | Pi 1 B+, 512 MB, SD | **No** | LAN DNS (Pi-hole + unbound), out-of-cluster watcher | none (not a k8s node) | LAN ad-block DNS gone; the dead-man's switch goes silent |
+| **k3s-cp** (N100 VM) | N100 mini PC, 2 vCPU / 4 GB, amd64 | **Control plane** | k3s server (API, scheduler, datastore, CoreDNS) | none (tainted `CriticalAddonsOnly=true:NoExecute`) | Cluster loses API; restore from k3s control-plane backup (ops manual §9) |
 | **pi1** | Pi 3 B, 1 GB, 233 GB SSD | Worker | Telegram bot + marketview host; general ingestion pool | `telegram-bot`, `telegram-digest`, `telegram-alerts`, `marketview` | Bot stops answering; digest/alerts not sent; unpinned jobs land on pi3/orin2. Power supply replaced 2026-10-14; 24h acceptance PASSED 2026-10-20 — item CLOSED (tracker §1). |
-| **pi2** | Pi 3 B+, 1 GB | **Control plane** | k3s server (API, scheduler, datastore, CoreDNS, Traefik) | none (**cordoned**) | Whole cluster loses its API; nothing new schedules (see §4) |
+| **pi2** | Pi 3 B+, 1 GB | Worker (after control-plane move) | CPU jobs fallback; formerly the control plane | none (was cordoned) | Unpinned jobs land here if image imported; pi2 no longer holds cluster API (see §4) |
 | **pi3** | Pi 3 B, 1 GB, SSD | Worker | Grafana, backups, general ingestion pool | `grafana`, `pg-backup`, `restore-drill` (Job) | No dashboards, no nightly dump; unpinned jobs land on pi1/orin2 |
 | **tx2** (`ahytx2-desktop`) | Jetson TX2, 7.7 GB, eMMC + 224 GB SSD | Worker (tainted `gpu=true`) | **The database**, NLP jobs, LLM gateway, image build host | `timescaledb`, `llm-gateway` (ns `llm`), `sentiment-scorer`, `headline-ner` | **Every pipeline write fails** (DB down); data is safe on the Retain PV |
 | **orin1** | Jetson Orin Nano, 8 GB, 932 GB SSD, 1×GPU | Worker (tainted `gpu=orin`) | **STT/TTS voice layer only** — reserved, not yet deployed | `stt-service` (Whisper), `tts-service` (Piper) — *manifests exist, deployments not applied* | Voice input/output stays silent; Telegram text commands and marketview still work |
 | **orin2** | Jetson Orin Nano, 8 GB, 476 GB SSD, 1×GPU | Worker (untainted) | **General ingestion pool** — where the floating CronJobs actually run | none (takes floating jobs) | Floating jobs reschedule to pi1/pi3; no pinned workload lost |
 
-### 1b. Target layout (decided 2026-11-15, **not applied yet**; §1 above is the live state)
+### 1b. Target layout (applied 2026-11-16; §1 above is the live state)
 
-| Node | Target role | What changes |
+| Node | Role | What changed |
 |---|---|---|
-| **k3s-cp** (VM on the N100 mini PC, home) | k3s control plane only | New. Tainted `CriticalAddonsOnly=true:NoExecute` (amd64: must never run marketdata pods) |
-| **pi2** | Worker, CPU jobs | Stops being the control plane; the pi2-fragility rules relax after the move |
-| **pi1, pi3** | Workers, CPU jobs + their pinned workloads | Take the floating jobs back from orin2 |
+| **k3s-cp** (N100 VM) | k3s control plane only | New N100 VM, tainted `CriticalAddonsOnly=true:NoExecute` (amd64: never runs marketdata pods). pi2's `state.db` + token + TLS restored onto it. |
+| **pi2** | Worker, CPU jobs | Stopped being the control plane; uncordoned; k3s-agent repointed to k3s-cp (K3S_CP_IP:6443) |
+| **pi1, pi3** | Workers, CPU jobs + pinned workloads | k3s-agent repointed to k3s-cp |
 | **4th Pi 3** (870 EVO boot) | Worker, CPU jobs | New; joins after the control-plane move |
 | **tx2** | TimescaleDB, `llm-gateway`, image builds | GPU jobs (`sentiment-scorer`, `headline-ner`) move to orin1 |
 | **orin1** | GPU only: market-data inference | Was reserved for voice |
@@ -39,7 +36,7 @@
 | **Vostros** (remote, not in k3s) | Off-site encrypted backups, site-down watcher, restore drills | New (AR-11, AR-12) |
 
 Both Orins get the soft taint `gpu=orin:PreferNoSchedule`: CPU jobs prefer the Pis but may overflow onto an
-Orin. Order and steps: `pending-tasks.md` (control-plane migration, Orins GPU-only, 4th Pi, AR-10/11/12) and
+Orin. Order and steps: `pending-tasks.md` (control-plane migration ✅, Orins GPU-only, 4th Pi, AR-10/11/12) and
 the workspace `hardware/ROADMAP.md` + `hardware/CONTROL-PLANE-MIGRATION.md`.
 
 ## 2. Per node
@@ -88,31 +85,18 @@ the workspace `hardware/ROADMAP.md` + `hardware/CONTROL-PLANE-MIGRATION.md`.
 - **Watch:** accumulates undervolt events; was NotReady during the 2026-10-10 wedge. Agent runs with
   `--disable-apiserver-lb` (direct to the control plane).
 
-### pi2 — control plane (fragile)
-- **Does:** k3s server — API on :6443, scheduler, controllers, datastore (kine/`state.db`), CoreDNS,
-  Traefik, metrics-server, local-path-provisioner.
-  **Control-plane backup exists** (not "none"): first copy 2026-10-18 via Python's `sqlite3` online-backup API
-  (pi2 has no `sqlite3` CLI), `PRAGMA integrity_check` ok, 2,169 kine rows, archive pulled to
-  `out/backups/k3s/` (gitignored, mode 600 — **holds the cluster join token**), sha256 verified both ends;
-  **recurring** since 2026-10-18 via `ops-tools/pull-k3s-backup.sh` (workstation cron 03:30 local, load gate
-  skips if pi2 load1 > 3, keeps 14), restore steps in ops manual §9.
-  ⚠ **The restore has never been rehearsed** — drill it on a spare SSD before relying on it (AR-10).
-- **Scheduling:** **cordoned (`SchedulingDisabled`)** — no workload pods run on it. The `node.kubernetes.io/unschedulable`
-  taint carries `timeAdded` **2026-10-10 06:11:25 UTC**, i.e. during the 2026-10-09→10 outage recovery (agents being
-  rejoined), so it was most likely set then to keep workloads off the 1 GB control plane. The *reason* is inferred from
-  timing, not recorded; confirm with the owner. Keep it cordoned: 1 GB RAM, and it has wedged under load twice.
+### pi2 — worker (after control-plane move)
+- **Does:** plain CPU worker for ingestion/jobs; no longer runs the k3s server. k3s-agent repointed to k3s-cp
+  (`K3S_URL=https://k3s-cp:6443` → LAN IP `K3S_CP_IP`), uncordoned after the move.
+  **Control-plane backup was taken from pi2 before the move** (pi2 `state.db` + token + TLS restored onto k3s-cp);
+  recurring `pull-k3s-backup.sh` now targets k3s-cp, not pi2 — retarget per `hardware/CONTROL-PLANE-MIGRATION.md` step 5.1.
+- **Scheduling:** uncordoned — workload pods may run on pi2 if its image is imported.
 - **Rules (AGENTS.md rule 2):** never restart more than one agent at a time; if load > 3 sustained, follow ops manual §8
-  cool-down first. This node's health gates everything else.
-- **Power:** the node that showed live undervolt + throttle (`0xd0005`) and wedged ~16 h on 2026-10-09→10. On its own supply since ~02:30 UTC 2026-10-12. Six+ reboots under the shared multiport block on 10-10 were closed with the power fix 2026-10-14. Power review PASS 2026-10-12 02:59→08:41 UTC (0 live hits, max 56 °C, max load 1.74, 0 `dmesg` undervoltage events). **Rebooted again ~2026-10-20 01:56 UTC, cause unknown, 0 undervolt events, no persistent journal trace.** Final 24 h power review PASS 2026-10-20 04:12 UTC (~46 h, 532–542 samples/node, all four nodes PASS).
-- **Heat:** flag `0x80000` (soft-temp since boot, no undervolt). Max 69.3 °C observed on 10-18 power review. **Owner removed pi2's case 2026-10-20 04:34 UTC; baseline right after: 51.5 °C, `0x0`, load 0.6.** Heat item still open for airflow/heatsink consideration on pi1/pi2/pi3.
-- **Host jobs:** node-stats logger — root cron added 2026-10-11 (crontab was empty; AR-12). Throttle flags `0xd0000` on
-  2026-10-11 (undervolt, throttle and soft-temp limit since boot, none live); 133 MB RAM available, 77 MB swap used.
-  **Persistent journald enabled on pi2 2026-10-20 (200 MB cap, ops manual §8) so future hangs leave a trace.**
-- **Live 2026-11-15:** up 10 d 5 h (rebooted 2026-11-05), load 0.50/0.56/0.59, `throttled=0x80000` (soft-temp flag only —
-  no undervolt), 905 MiB RAM with **751 MiB used / 153 MiB available**, `/` 233 GB. `America/Los_Angeles` TZ — **the
-  CronJob controller's timezone, which sets every node-local schedule** (see §3.1).
-- **Watch:** desktop session idling on the control plane (ADR 0011 finding); SSH auth can be slow under load —
-  `runcmd.py` uses 30 s timeouts for that reason (ops manual §12.8).
+  cool-down first. k3s-cp's health now gates everything else, not pi2.
+- **Power:** the node that showed live undervolt + throttle (`0xd0005`) and wedged ~16 h on 2026-10-09→10. On its own supply since ~02:30 UTC 2026-10-12. Power review PASS 2026-10-20 04:12 UTC. Heat flag `0x80000` (soft-temp since boot, no undervolt). Case removed 2026-10-20.
+- **Host jobs:** node-stats logger — root cron added 2026-10-11 (crontab was empty; AR-12). Persistent journald enabled on pi2 2026-10-20.
+- **Live 2026-11-16:** Ready worker against k3s-cp. `America/Los_Angeles` TZ — the CronJob controller's timezone
+  (see §3.1) now runs on k3s-cp.
 
 ### pi3 — Grafana + backups + ingestion worker
 - **Pinned:** `grafana` Deployment (tailnet-only; dashboards + the Telegram alert rules), CronJob `pg-backup`
@@ -132,6 +116,20 @@ the workspace `hardware/ROADMAP.md` + `hardware/CONTROL-PLANE-MIGRATION.md`.
   first scheduled 170 MB `pg-backup` write at 08:30 UTC (the trigger that coincided with its network drop on 10-11) (tracker §1).
 - **Live 2026-11-15:** up 28 d 13 h, load 0.37/0.42/0.43, 905 MiB RAM (464 MiB available), `throttled=0x0`,
   `/` at 9 % (20 G of 229 G).
+
+### k3s-cp — control plane (N100 VM)
+- **Does:** k3s server — API on :6443, scheduler, controllers, datastore (kine/`state.db`), CoreDNS.
+  Installed 2026-11-16 (k3s v1.36.4+k3s1, amd64) on the N100 mini PC; pi2's `state.db` + token + TLS restored onto it
+  so existing agents keep trusting the CA without rejoining. Tainted `CriticalAddonsOnly=true:NoExecute` — amd64 VM,
+  must never run marketdata pods.
+- **Scheduling:** tainted control-plane-only; no marketdata workloads schedule here.
+- **Rules:** k3s-cp's health gates everything else. Never restart more than one agent at a time; if load > 3 sustained,
+  follow ops manual §8 cool-down first.
+- **Backup:** `ops-tools/pull-k3s-backup.sh` now targets k3s-cp (retarget from pi2 per
+  `hardware/CONTROL-PLANE-MIGRATION.md` step 5.1). Workstation cron 03:30 local keeps 14 archives; pi3 keeps 7 as
+  fast-path restore landing zone.
+- **Live 2026-11-16:** Ready control-plane against k3s-cp. LAN IP `K3S_CP_IP` (agents reach it over LAN; no Tailscale
+  in the cluster path).
 
 ### tx2 — database, NLP, gateway, build host
 - **llm-gateway (2026-10-18):** the shared LLM gateway pod (namespace `llm`, ~650 MiB, its own `litellm` DB on the same TimescaleDB) — see `../llm-gateway`.
@@ -215,11 +213,10 @@ Two kinds of scheduled work exist: **Kubernetes CronJobs** (36, all in namespace
 (on the machines themselves, outside k3s). *Verified live 2026-11-15.*
 
 **Schedule timezone — read this before changing a cron expression.** All schedules except two are **node-local**, i.e. they
-are evaluated in the **control plane's timezone** (`pi2` = `America/Los_Angeles`). The observed offset on 2026-11-15 was
-**UTC−8 (PST)** — `0 23 * * *` fired at 07:00 UTC, `15 0 * * *` at 08:15 UTC. Because the controller follows
-`America/Los_Angeles`, the **UTC instant of every node-local job shifts by one hour across the DST boundary**
-(UTC−7 in summer, UTC−8 in winter) — a job scheduled "at 23:00 local" fires at 06:00 UTC in summer and 07:00 UTC in
-winter. **Never assume a node-local cron expression is UTC.** The only two jobs with an explicit `timeZone` are
+are evaluated in the **control plane's timezone** (`k3s-cp` = **UTC**). The observed offset is **UTC** — `0 23 * * *` fires
+at 23:00 UTC. Because the controller follows UTC, node-local jobs fire at a fixed UTC instant year-round (pi2 previously ran
+`America/Los_Angeles`, so every node-local job shifted an hour across the DST boundary — that shift is gone). **Never assume
+a node-local cron expression is UTC.** The only two jobs with an explicit `timeZone` are
 `telegram-digest` and `llm-narrative` (`Asia/Kolkata`, ADR 0009) — those two are DST-free and hour-stable.
 `status.lastScheduleTime` is always reported in **UTC**.
 
@@ -237,13 +234,13 @@ rule 6), so a floating job only works on a node that has imported its image.
 | **tx2** | `sentiment-scorer` `15 0 * * *`, `headline-ner` `45 0 * * *` | pinned (`hardware: gpu` + toleration) |
 | **pi3** | `pg-backup` `30 1 * * *` | pinned (`kubernetes.io/hostname: pi3`; dumps live on its SSD) |
 | **pi1** | `telegram-digest` `0 8 * * *` (IST), `telegram-alerts` `45 2 * * *` | pinned (`pi1`) |
-| **orin2** | the 31 floating jobs below | untainted worker holding the newest `local/*` images — since 2026-11-13 the scheduler sends floating work here |
-| **pi1 or pi3** | fallback for any floating job | valid landing zones (image must be imported) |
+| **k3s-cp** | none | tainted `CriticalAddonsOnly=true:NoExecute` — no workloads schedule here |
+| **orin2** | the 31 floating jobs below | untainted worker holding the newest `local/*` images |
+| **pi1 or pi3 or pi2** | fallback for any floating job | valid landing zones (image must be imported) |
 | **orin1** | none | tainted `gpu=orin` — reserved for the voice layer, which is not deployed |
-| **pi2** | none | cordoned control plane |
 | **pi0** | none | not a k3s node |
 
-Pinned jobs, last scheduled (UTC, 2026-11-15): sentiment-scorer 08:15 · headline-ner 08:45 · pg-backup 09:30
+Pinned jobs, last scheduled (UTC, 2026-11-16): sentiment-scorer 08:15 · headline-ner 08:45 · pg-backup 09:30
 (`BACKUP-OK`, dump `marketdata-2026-11-15.dump` 539 MiB) · telegram-digest 02:30 · telegram-alerts 10:45.
 
 **Floating jobs (31).** "Seen on" = the node of the retained pods. Every floating job's pods are on **orin2** as of
@@ -315,7 +312,7 @@ scheduled); fixed that day on all five (ADR 0011 amendment).
 ## 4. Dependencies and blast radius
 
 - **DB (tx2) down** → every fetcher, the screener chain, Grafana panels, the bot's data commands all fail; data is safe.
-- **Control plane (pi2) down** → no API, no scheduling, CoreDNS gone; running pods keep running but nothing recovers.
+- **Control plane (k3s-cp) down** → no API, no scheduling, CoreDNS gone; running pods keep running but nothing recovers.
 - **pi3 down** → no dashboards, no nightly dump, no restore drill.
 - **pi0 down** → LAN DNS gone *and* the out-of-cluster alert path is silent (this is why a second watcher host is an open question — AR-12).
 - **orin2 down** → the 31 floating CronJobs reschedule to pi1/pi3 — **only if those nodes hold the image**; otherwise
@@ -327,16 +324,16 @@ scheduled); fixed that day on all five (ADR 0011 amendment).
 - **Single image source of truth is now three nodes** (pi1, pi3, orin2). Every data/light image cycle must be imported on
   **all three**, or floating jobs start failing with `ErrImageNeverPull` on whichever node the scheduler picks.
 
-## 5. Current state (live check 2026-11-15)
+## 5. Current state (live check 2026-11-16)
 
-- **Nodes (2026-11-15):** 6 k3s nodes **Ready** — pi1, pi2 (cordoned), pi3, tx2, orin1, orin2; pi0 up but not a k3s node.
-  Versions: server pi2 v1.36.4+k3s1; agents pi1/pi3 v1.36.4, orin1/orin2 v1.37.2, tx2 pinned v1.35.3+k3s1 (cgroup v1).
-- **CronJobs: all 36 active, none suspended**, no failed or pending pods. **30 of the 31 jobs started in the last 26 h
-  completed `Succeeded` with 0 failures; `nse-fundamentals` (started 18:00 UTC) was still `Running` at the check** — it
-  is a long weekly filings job, not a stall.
+- **Nodes (2026-11-16):** k3s-cp (N100 VM) is the control plane, Ready, tainted `CriticalAddonsOnly=true:NoExecute`;
+  pi1, pi2, pi3 workers Ready against k3s-cp; tx2, orin1, orin2 agents still point at stopped pi2 awaiting their sudo
+  passwords to repoint `K3S_URL` → k3s-cp; pi0 up but not a k3s node.
+  Versions: server k3s-cp v1.36.4+k3s1; agents pi1/pi2/pi3 v1.36.4, orin1/orin2 v1.37.2, tx2 pinned v1.35.3+k3s1 (cgroup v1).
+- **CronJobs: all 36 active, none suspended**, no failed or pending pods.
 - **Data freshness:** `pipeline_heartbeat` — **16/16 feeds `fresh`** (fx, yields, fred_rates, fiidii_flows, intraday, rbi,
   news_staging, sentiment, nse_indices, stock_prices, stock_scores, stock_fundamentals, ta_indicators, yfinance_batch,
-  llm_narrative, llm_gateway). `pipeline-health` last ran 2026-11-15 09:45 UTC.
+  llm_narrative, llm_gateway).
 - **Running always-on pods:** `timescaledb-0` (tx2), `grafana` (pi3), `telegram-bot` (pi1), `marketview` (pi1),
   `llm-gateway` (tx2, ns `llm`).
 - **Backups:** `marketdata-2026-11-15.dump` (539 MiB) + `.sha256` sidecar on pi3's SSD; 28 dumps retained. The
@@ -344,8 +341,7 @@ scheduled); fixed that day on all five (ADR 0011 amendment).
 - **Host-level:** pi0 load 1.57 (Pi-hole serving), pi1 `throttled=0x0` load 0.73, pi2 `throttled=0x80000` (soft-temp flag
   only) load 0.50, pi3 `throttled=0x0` load 0.37. pi1/pi3 disk at 8 % / 9 %.
 - **Telegram bot** on `telegram-digest:v42` (ADR 0012); `marketview` on `marketview:v14`.
-- **Not re-verified 2026-11-15:** TX2 fixed config only. TX2 disk/load were checked later that day (eMMC 60%, SSD 16%,
-  load 0.2). The morning's "SSH auth failed" was the wrong SSH user (`ahytx2-desktop` instead of `ahytx2`), not a credential problem.
+- **Not re-verified 2026-11-16:** TX2 fixed config only; tx2/orin1/orin2 agent repoint (awaiting their sudo passwords).
 - **Not re-verified:** per-Pi thermal detail, pi1 24 h power acceptance, orin1/orin2 host state (no SSH alias).
 - **Prior event (context, 2026-10-18/20):** site-wide mains power loss 2026-10-18 ~05:55–06:20 UTC (all five machines
   rebooted); pi2 rebooted again 2026-10-20 ~01:56 UTC, cause unknown. Both recovered on their own.
