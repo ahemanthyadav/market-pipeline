@@ -179,21 +179,127 @@ Both wired into bot.py COMMANDS + MENU, router SAFE_AI_COMMANDS, and nicknames.
 
 ### 2026-11-15 open-source roadmap review (`market-pipeline-github-improvement-roadmap.md`)
 
-Verdicts are in the banner at the top of that doc. Taken forward:
-- [ ] 🔶 **DB health panels without Prometheus** (replaces the doc's postgres_exporter P0).
-  - Schema key: a NOLOGIN role in `pg_monitor`, or grant `pg_monitor` to `grafana_ro`; LOGIN/password out-of-band as usual.
-  - Grafana dashboard on `pg_stat_database` (connections, commits/rollbacks, temp bytes, deadlocks),
-    `pg_database_size` + largest hypertables/chunks, `pg_stat_user_tables` (dead tuples, last autovacuum), and TX2 disk free.
-  - Alerts: disk pressure, connection count.
-  - Bounded queries only; measure query cost on the TX2. ~1 session.
-- [ ] 🔶 **Duplicate-key + OHLC sanity rules in ML-1** (replaces the Soda pilot).
-  - Add to `ops-tools/ml1.py`: duplicate `(symbol, ts)` keys, `high >= max(open, close)`, `low <= min(open, close)`,
+Every recommendation in that doc, with its status. Verdicts and evidence: the review banner at the top of the doc.
+The ids **OS-n** are stable; cite them when picking one up. Legend as in the header:
+🔶 open · 🤔 owner decision · ⏸ deferred until a trigger · 🧊 declined (revisit trigger) · ✅ already covered.
+
+**Data quality (doc §3.1 Soda Core, §3.11 Great Expectations)**
+- [ ] 🔶 **OS-1: Duplicate-key + OHLC sanity rules in ML-1** (instead of Soda).
+  - Add to `ops-tools/ml1.py`: duplicate `(symbol, ts)`, `high >= max(open, close)`, `low <= min(open, close)`,
     `volume >= 0`, and expected-vs-received symbol coverage per universe.
-  - Thresholds must be source-aware; corporate-action days are excluded via `corporate_actions`.
-  - Writes into `app.data_anomalies` like the existing rules, with tests in `tests/test_ml1.py`. Small.
-- [ ] 🤔 **PITR (pgBackRest) decision**, after the Vostro off-site copy (AR-11) is running.
-- Point-in-time provenance (doc §3.8) applies as a review checklist: every fundamentals join keys on the filing date.
-  The open G-21 `distress_score` fix is listed under the branch review below.
+  - Source-aware thresholds; skip corporate-action days (`corporate_actions`).
+  - Results go into `app.data_anomalies`; tests in `tests/test_ml1.py`. Small.
+- [ ] 🔶 **OS-2: Grafana panel for data-quality history.** The doc wants validation outcomes retained and trended.
+  `app.data_anomalies` (kind, subject, ts, score) already stores them; add a panel showing anomalies per kind per day,
+  plus an alert on a spike. Small.
+- [ ] 🔶 **OS-3: Severity policy for anomalies** (doc: critical blocks only the affected dataset, warning alerts, info records).
+  Today ML-1 only records. Decide which kinds should stop the downstream screener chain for that universe and which
+  only alert. Design note first, then code. Medium.
+- ✅ Already covered:
+  - freshness on the exchange calendar (`pipeline_heartbeat` + `_common/sessions.py`);
+  - large unexplained jumps (ML-1 `bad_bar`, which skips recorded splits);
+  - row-count and feed drops (ML-1);
+  - second-source price check (`accuracy_check.py`, DQ-5);
+  - one place for known gaps (`data-gaps.md`).
+- 🧊 **Soda Core / Great Expectations as frameworks.** Heavy dependency sets for 1 GB arm64 nodes, duplicating the above.
+  Revisit if the rule count outgrows ML-1, or if a second consumer needs declarative checks.
+
+**Database observability (doc §3.2 postgres_exporter)**
+- [ ] 🔶 **OS-4: DB health panels without Prometheus** (instead of the exporter).
+  - Schema key: a role in `pg_monitor`, or `pg_monitor` granted to `grafana_ro`; LOGIN out-of-band as usual.
+  - Dashboard: `pg_stat_database` (connections, commits/rollbacks, temp bytes, deadlocks), `pg_database_size` +
+    largest hypertables/chunks, `pg_stat_user_tables` (dead tuples, last autovacuum), TX2 disk free.
+  - Alerts: disk pressure, connection count. Bounded queries; measure their cost on the TX2. ~1 session.
+- [ ] ⏸ **OS-5: `pg_stat_statements`** for slow-query visibility (doc §3.2 note). Needs `shared_preload_libraries`,
+  which means a StatefulSet `args:` change and a DB restart (cluster-mutation skill rule 7). Trigger: a slow-query
+  problem OS-4 can't explain.
+- 🧊 **Prometheus + postgres_exporter.** No Prometheus in the cluster; a TSDB on 1 GB nodes for what OS-4 does in SQL.
+  Revisit if Prometheus arrives for another reason (e.g. the SaaS stack).
+
+**Backup and recovery (doc §3.3 pgBackRest, §6 Phase 2)**
+- [ ] 🔶 **OS-6: Measured recovery drill.** Extend the existing `restore-drill-job.yaml` run (2026-10-17: 30 s, 0 errors):
+  - record RTO (restore wall-clock) and RPO (dump age) each run;
+  - verify the TimescaleDB extension version, hypertable count and chunk counts after restore;
+  - spot-check representative rows per key table;
+  - write the numbers into the backup runbook.
+  Small.
+- [ ] 🔶 **OS-7: TX2-loss restore rehearsal.** Restore the latest dump onto a non-TX2 host (a Vostro once AR-11 lands, or
+  the workstation's `timescale/timescaledb:2.30.1-pg16` container) as if the TX2 were gone, and time the full path:
+  fetch the dump, restore, point clients at it. Doc §3.3 scenario 2. Medium.
+- [ ] 🔶 **OS-8: Backup credential separation** (doc §5 security). `pg-backup`/`restore-drill` use the `postgres`
+  superuser. Consider a dedicated backup role (`pg_read_all_data`, PG14+) for the dump side, with restore staying
+  superuser. Needs a Secret, so the owner runs the secret step (tracker §1 pattern). Small.
+- [ ] 🤔 **OS-9: PITR (pgBackRest + WAL archiving) decision**, after the Vostro off-site copy (AR-11) runs.
+  - For: write-once tables (prediction snapshots, raw headlines, `bot_users`) can't be re-fetched.
+  - Against: WAL archiving adds I/O and config on the EOL TX2.
+- ✅ Already covered: nightly dump + sha256 (`pg-backup`); a workstation copy (`pull-backups.py`); an isolated restore
+  target (`restore-drill-job.yaml`); an independent off-site copy is decided (AR-11, Vostro + `restic`).
+
+**Analytical SQL (doc §3.4 dbt, §3.9 warehouse layers)**
+- 🧊 **dbt Core.** Schema keys + `v_*` contract views (ADR 0032) already own schema and lineage; dbt would be a second
+  owner of views. Revisit if analytical SQL outgrows the contract views, or if a second analyst joins.
+- 🧊 **Raw/staging/marts layering.** The doc itself says a new warehouse isn't required; the `app` schema plus the
+  contract views are the layering in use. Revisit with dbt.
+
+**Quantitative research (doc §3.5 VectorBT, §3.6 ML4T, §3.7 Zipline, §6 Phase 4)**
+- [ ] 🔶 **OS-10: Check EV-0's reports against the doc's §3.5 metric list.**
+  - EV-0 has IC, quintile spread, turnover, net-of-cost spread and Fama-MacBeth slope.
+  - Consider adding max drawdown, Sharpe/Sortino, a benchmark-relative line and an explicit held-out period to the
+    `out/ev0/` report.
+  - Research-only; the §5 acceptance test stays the gate. Small.
+- [ ] 🔶 **OS-11: Run the doc's §8 "Quantitative research" checklist against EV-0** (point-in-time membership,
+  corporate actions, signal timing, costs, benchmark, out-of-sample, retained config) and record the gaps in
+  `evidence-based-signals-roadmap.md`. Small.
+- ⏸ **VectorBT.** Duplicates EV-0's harness, and its suggested first strategies (RSI mean reversion, MA momentum) are
+  rated weakly backed in the evidence roadmap. Trigger: a portfolio-level backtest EV-0 can't express. Check
+  open-source maintenance status first.
+- ⏸ **ML4T Backtest / Zipline Reloaded.** Trigger: a signal passes EV-0 §5 and needs execution-aware simulation
+  (fills, next-bar timing, position limits). One engine only, never several.
+
+**Experiment tracking (doc §3.12 MLflow)**
+- ⏸ **MLflow.** `app.ml_runs` (ML-0) tracks experiments now. Trigger: experiments too many to compare from
+  `ml_runs` + `out/ev0/`. Workstation-hosted, never on the cluster.
+
+**Fundamentals provenance (doc §3.8 Financial-DataBase)**
+- [ ] 🔶 **OS-12: Point-in-time join rule** — every fundamentals join keys on `filed` (availability), never
+  `period_end`. First case: G-21 `distress_score` in `ev0.py` (also listed under the branch review). Then grep every
+  `financial_facts` consumer for `period_end` joins. Small.
+- [ ] 🔶 **OS-13: Amendment handling audit.** `financial_facts` has `filed`, `form` (10-K/A etc.), `accession` and
+  `observed_at`, so the fields exist. Verify that consumers pick first-filed values for point-in-time research and
+  latest-amended values for current display, consistently. Small.
+- ✅ Already covered: CIK mapping and EDGAR ingestion (`stock_fundamentals.py`); filing/period/accession fields;
+  first-filed values in EV-19/20.
+
+**Telemetry and orchestration (doc §3.10 OpenTelemetry, Dagster)**
+- [ ] 🔶 **OS-14: Every job records `job_runs`** (doc principle 4, "observable": outcome, duration, row counts).
+  Known gap: `fx-fetcher` writes no `job_runs` row (`WARN fx-fetcher job_runs bookkeeping failed: 'PGPASSWORD'`).
+  Audit all 36 CronJobs for a `job_runs` row in the last 7 days and fix the missing ones. Small.
+- 🧊 **OpenTelemetry Collector.** The doc agrees: add it only when cross-service tracing is needed. `job_runs` + logs suffice.
+- 🧊 **Dagster.** The doc's own "don't migrate the CronJobs". Revisit if inter-job dependencies outgrow schedule offsets.
+
+**Security and network (doc §5)**
+- [ ] 🔶 **OS-15: Verify NetworkPolicy enforcement.** `timescaledb-ingress-same-namespace` exists. Prove k3s actually
+  enforces it: a pod in another namespace must fail to connect to `timescaledb:5432`, and `llm`-namespace access must
+  be intended. Small, read-mostly.
+- ✅ Already covered:
+  - Tailscale-only access; the DB isn't public;
+  - separate roles: `pipeline_rw` DML-only, `grafana_ro`, `telegram_app`, with schema DDL as `postgres` via the
+    schema job (drift fixed 2026-11-15);
+  - secrets in k8s Secrets + `.secrets.env`.
+
+**Baseline (doc §6 Phase 0)**
+- ✅ Already covered:
+  - job state (`/health`, `job_runs`);
+  - schema version (`schema_migrations`);
+  - image tags (`workloads.py --check`) and tarball sha256s (`SHA256SUMS.all`);
+  - feature branches;
+  - rollback (deploy guide §5).
+- [ ] 🔶 **OS-16: Weekly size + disk baseline** to complement OS-4: DB size, top-10 tables and both TX2 disks,
+  appended to a small `app` table, so growth is a trend rather than a snapshot. Small.
+
+**Doc §9 "What not to do yet"** stands as written (no Dagster migration, no second warehouse, not both validators,
+not several backtest engines, no research on the cluster, keep the migration/contract process). Recorded here so a
+future session doesn't re-propose them.
 
 ### 2026-11-15 branch review (`feat/telegram-v4-market-views` vs `main`)
 
