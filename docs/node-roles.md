@@ -2,7 +2,7 @@
 
 > **Purpose:** one place that answers "what does each machine do, what breaks if it dies, and what must I
 > never do to it". Detail stays in the linked docs; this file is the index per node.
-> **Last verified: 2026-11-16** — live `kubectl`: k3s-cp (N100 VM) is the control plane (tainted `CriticalAddonsOnly=true:NoExecute`); pi1, pi2, pi3 workers Ready; tx2/orin1/orin2 agents still point at stopped pi2 (awaiting their sudo passwords to repoint `K3S_URL` → k3s-cp); **36 CronJobs, none suspended**.
+> **Last verified: 2026-11-16** — live `kubectl`: k3s-cp (N100 VM) is the control plane (tainted `CriticalAddonsOnly=true:NoExecute`); all 6 workers (pi1, pi2, pi3, tx2, orin1, orin2) Ready against k3s-cp; **36 CronJobs, none suspended**; `pipeline_heartbeat` 16/16 feeds `fresh`.
 > **Not re-verified 2026-11-15:** TX2 fixed config (TX2 disk WAS checked later that day: eMMC 60%, SSD 16%; the earlier "SSH auth failed" was a wrong SSH user — §5),
 > per-Pi thermal detail, pi1 24 h power acceptance.
 > The 2026-10-20 pi2 findings below still stand (reboot ~01:56 UTC, cause unknown, no journal trace; case removed
@@ -153,9 +153,7 @@ the workspace `hardware/ROADMAP.md` + `hardware/CONTROL-PLANE-MIGRATION.md`.
   allocatable capacity** — the NVIDIA device plugin runs only on orin1/orin2. TX2's GPU is reached through the GPU
   RuntimeClass path (GPU smoke test), not via device-plugin resource requests. Do not write a manifest that requests
   the NVIDIA GPU resource with `nodeSelector: hardware=gpu` — it will never schedule.
-- **2026-11-15:** SSH works as **`runcmd.py tx2 ahytx2`**. An earlier "authentication failed" came from passing the hostname
-  `ahytx2-desktop` as the user. Disk checked: eMMC 60%, SSD 16%, up 28 days, load 0.2. The fixed-config re-verification
-  (ops manual §2) is still to do.
+- **Live 2026-11-16:** Ready worker against k3s-cp (`K3S_URL` repointed from pi2 to k3s-cp). Disk checked: eMMC 60%, SSD 16%, load 0.2. The fixed-config re-verification (ops manual §2) is still to do.
 
 ### orin1 — STT/TTS voice inference (reserved, not yet running)
 
@@ -163,12 +161,13 @@ the workspace `hardware/ROADMAP.md` + `hardware/CONTROL-PLANE-MIGRATION.md`.
   exposed inside the cluster only via ClusterIP Services (`stt-service.market-data.svc.cluster.local:8000`,
   `tts-service...:8001`).
 - **Labels/taints (live):** `hardware=orin-cpu`, `tier=saas`, 1× GPU allocatable, taint **`gpu=orin:NoSchedule`**.
-- **Status 2026-11-15: the voice layer is NOT deployed.** `stt-service`/`tts-service` have no Deployment in the
+- **Status 2026-11-16: the voice layer is NOT deployed.** `stt-service`/`tts-service` have no Deployment in the
   cluster, so orin1 currently runs **nothing but kube-system pods** (the NVIDIA device plugin + the Traefik service LB).
-- **Live 2026-11-15:** k3s-agent active, Ready, v1.37.2+k3s1, up 10 d 12 h, load 0.02, 854 MiB peak (k3s agent),
-  GPU present but idle — no CUDA processes, no GPU memory in use. Running a desktop session (Firefox, GNOME shell,
-  Xorg) in addition to k3s — the node doubles as a GUI workstation. **Passwordless SSH now works from the admin
-  workstation via `ssh orin1`.** Joined the tailnet 2026-11-05; Tailscale IP reachable.
+  k3s-agent repointed from pi2 to k3s-cp and Ready against k3s-cp.
+- **Live 2026-11-16:** Ready worker against k3s-cp (K3S_URL repointed from pi2 to k3s-cp), v1.37.2+k3s1, up 10 d 12 h,
+  load 0.02, 854 MiB peak (k3s agent), GPU present but idle — no CUDA processes, no GPU memory in use. Running a desktop
+  session (Firefox, GNOME shell, Xorg) in addition to k3s — the node doubles as a GUI workstation. **Passwordless SSH now
+  works from the admin workstation via `ssh orin1`.** Joined the tailnet 2026-11-05; Tailscale IP reachable.
 - **⚠ Selector/label mismatch — the manifests would not schedule.** `manifests/voice/stt-service-deployment.yaml` and
   `manifests/voice/tts-service-deployment.yaml` select `nodeSelector: {hardware: orin}` and tolerate
   `hardware=orin:NoSchedule`, but **both live Orin nodes are labelled `hardware=orin-cpu`** and the taint key is
@@ -200,9 +199,9 @@ the workspace `hardware/ROADMAP.md` + `hardware/CONTROL-PLANE-MIGRATION.md`.
   orin2 leaves floating jobs able to fall back to the Pis but orin2 itself would start failing with `ErrImageNeverPull`
   (`imagePullPolicy: Never`, no registry — AGENTS.md rule 6).
 - **Capacity:** 6 CPU / 7.6 GB RAM / 476 GB SSD — the most headroom of any worker, which is why it wins floating jobs.
-- **Live 2026-11-15:** k3s-agent active, Ready, v1.37.2+k3s1, up 10 d 3 h, load 0.06, 3.3 GiB peak (k3s agent),
-  GPU present but idle — no CUDA processes, no GPU memory in use. **Passwordless SSH now works from the admin
-  workstation via `ssh orin2`.** Joined the tailnet 2026-11-05; Tailscale IP reachable.
+- **Live 2026-11-16:** Ready worker against k3s-cp (`K3S_URL` repointed from pi2 to k3s-cp), v1.37.2+k3s1, up 10 d 3 h,
+  load 0.06, 3.3 GiB peak (k3s agent), GPU present but idle — no CUDA processes, no GPU memory in use. **Passwordless SSH
+  now works from the admin workstation via `ssh orin2`.** Joined the tailnet 2026-11-05; Tailscale IP reachable.
 - **Not yet covered by ops tooling:** `ORIN1_IP`/`ORIN2_IP` aliases now exist in `.hosts.env` (added 2026-11-15),
   but no `_creds.py` host password slot yet, so `ops-tools/runcmd.py` still cannot reach orin1/orin2 — no
   node-stats logger host cron, no `vcgencmd`/throttle check, no image-import helper via that tool.
@@ -328,8 +327,8 @@ scheduled); fixed that day on all five (ADR 0011 amendment).
 ## 5. Current state (live check 2026-11-16)
 
 - **Nodes (2026-11-16):** k3s-cp (N100 VM) is the control plane, Ready, tainted `CriticalAddonsOnly=true:NoExecute`;
-  pi1, pi2, pi3 workers Ready against k3s-cp; tx2, orin1, orin2 agents still point at stopped pi2 awaiting their sudo
-  passwords to repoint `K3S_URL` → k3s-cp; pi0 up but not a k3s node.
+  all 6 workers (pi1, pi2, pi3, tx2, orin1, orin2) Ready against k3s-cp (`K3S_URL` repointed from pi2 to k3s-cp);
+  pi0 up but not a k3s node.
   Versions: server k3s-cp v1.36.4+k3s1; agents pi1/pi2/pi3 v1.36.4, orin1/orin2 v1.37.2, tx2 pinned v1.35.3+k3s1 (cgroup v1).
 - **CronJobs: all 36 active, none suspended**, no failed or pending pods.
 - **Data freshness:** `pipeline_heartbeat` — **16/16 feeds `fresh`** (fx, yields, fred_rates, fiidii_flows, intraday, rbi,
@@ -342,7 +341,8 @@ scheduled); fixed that day on all five (ADR 0011 amendment).
 - **Host-level:** pi0 load 1.57 (Pi-hole serving), pi1 `throttled=0x0` load 0.73, pi2 `throttled=0x80000` (soft-temp flag
   only) load 0.50, pi3 `throttled=0x0` load 0.37. pi1/pi3 disk at 8 % / 9 %.
 - **Telegram bot** on `telegram-digest:v42` (ADR 0012); `marketview` on `marketview:v14`.
-- **Not re-verified 2026-11-16:** TX2 fixed config only; tx2/orin1/orin2 agent repoint (awaiting their sudo passwords).
+- **Not re-verified 2026-11-16:** TX2 fixed config only (ops manual §2 re-verification still to do). All agent
+  repoints (pi1, pi2, pi3, tx2, orin1, orin2 → k3s-cp) completed and verified Ready.
 - **Not re-verified:** per-Pi thermal detail, pi1 24 h power acceptance, orin1/orin2 host state (no SSH alias).
 - **Prior event (context, 2026-10-18/20):** site-wide mains power loss 2026-10-18 ~05:55–06:20 UTC (all five machines
   rebooted); pi2 rebooted again 2026-10-20 ~01:56 UTC, cause unknown. Both recovered on their own.
