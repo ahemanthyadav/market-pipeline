@@ -203,6 +203,37 @@ NIFTY500 is unchanged (still today's constituents).
    harness. No change made — per §5 and ADR 0018 nothing enters or leaves the composite
    from a report alone.
 
+## 5c. EV-19 / EV-20 — point-in-time fundamentals, first run 2026-11-12 (`out/ev0/report-ev19-20-2026-11-12.md`)
+
+`ops-tools/ev0.py export-pit` + `run-pit` (tests: `tests/test_ev0.py` `PointInTimeFacts`). Same
+`evaluate()`/`verdict()` as the price signals. Facts are used only from the day after their
+**first** filing (restatements dropped); EPS and share counts are split-adjusted to today's basis
+via `corporate_actions`; Q4 and YTD-only cash-flow quarters are derived as YTD − prior YTD.
+EDGAR history starts with XBRL (filed ≥ 2009-04) → ~195 US months; NSE results from 2005.
+Event date = `filed` (10-Q/10-K or NSE results date, usually after the press release);
+`earnings_calendar` only holds forward dates (from 2026-10-27) so it cannot date past events.
+
+| signal | NIFTY 500 (biased) IC (NW t) · net/yr · FM t | S&P 500 (point-in-time) IC (NW t) · net/yr · FM t | §5 verdict |
+|---|---|---|---|
+| **SUE (EV-19)**, held 91 days | 0.028 (2.7) · +0.9 % · 1.3 | 0.007 (1.0) · −1.6 % · 2.1 | FAIL — closest is NIFTY (both halves +, net > 0, but t < 3 and FM t 1.3) |
+| **Value sleeve (EV-20)** | 0.013 (1.2) · +6.0 % · 2.7 (E/P only) | 0.004 (0.4) · −1.8 % · −0.1 | FAIL |
+| **Quality sleeve (EV-20)** | 0.014 (0.6) · −7.1 % (97 months, partial sleeve) | 0.006 (0.7) · −0.9 % · 0.6 | FAIL |
+| components (S&P 500) | — | E/P 0.004 (0.5) · B/P −0.011 (−0.9) · EBIT/EV 0.005 (0.6) · **FCF yield 0.017 (1.8) · +2.8 %** · ROE 0.012 (1.2) · op margin 0.003 (0.3) · −D/E −0.003 (−0.3) | all FAIL |
+
+**Reading, not decisions:**
+1. **Nothing passes §5**; per §5 and ADR 0018 the composite is unchanged. No component reaches
+   |t| > 2 on the honest SP500 sample; the best US component is FCF yield (t 1.8, net +2.8 %/yr),
+   which is also the most consistent across SP400/SP600 (t 1.7–2.1).
+2. The composite's value and quality sleeves — tested for the first time — carry **no measurable
+   edge on the S&P 500 since 2009** at monthly horizon. SP400/SP600 (today's constituents, biased)
+   show op margin and quality *negative* (t −2.0…−2.4), the same survivorship pattern 5a saw for
+   low-vol.
+3. PEAD on the filing date is weak in the US (expected: large caps, post-publication decay, and
+   the 10-Q lags the announcement). The NIFTY result (t 2.7) is the only one near the bar and rests
+   on a survivorship-biased universe and ~117 names/month — worth a re-run once EV-1 India exists.
+4. India sleeves are partial (no balance sheet or share count in the NSE results feed; PBT
+   coverage thin before 2019) — the India quality result is not a test of the screener's sleeve.
+
 ## 6. Deliberately not adding
 
 - Chart patterns, MACD or Bollinger-band rules as predictors — no robust evidence.

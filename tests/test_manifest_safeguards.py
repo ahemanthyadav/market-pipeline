@@ -48,5 +48,43 @@ class Safeguards(unittest.TestCase):
                                          f"{name}: {env['name']} must come from a Secret")
 
 
+class SchemaReapplySafety(unittest.TestCase):
+    """schema-job re-applies EVERY key on EVERY run (2026-11-15 review: key 22 broke
+    re-runs after key 25 widened its views; key 23 granted to a role no key created)."""
+
+    @classmethod
+    def setUpClass(cls):
+        import re
+        cls.re = re
+        cm = yaml.safe_load(open(ROOT / "manifests" / "timescaledb" / "schema-configmap.yaml"))
+        cls.keys = dict(sorted(cm["data"].items()))
+        cls.job = (ROOT / "manifests" / "timescaledb" / "schema-job.yaml").read_text()
+
+    def test_each_view_has_one_unguarded_definition(self):
+        # A second CREATE OR REPLACE with fewer columns fails "cannot drop columns
+        # from view" on re-run; earlier keys must bootstrap behind to_regclass().
+        owners = {}
+        for key, sql in self.keys.items():
+            for view in self.re.findall(r"CREATE\s+OR\s+REPLACE\s+VIEW\s+([\w.]+)", sql, self.re.I):
+                owners.setdefault(view, set()).add(key)
+        multi = {v: sorted(k) for v, k in owners.items() if len(k) > 1}
+        self.assertEqual(multi, {})
+
+    def test_granted_roles_are_created_in_an_earlier_or_same_key(self):
+        created = {}
+        for key, sql in self.keys.items():
+            for role in self.re.findall(r"CREATE\s+ROLE\s+(\w+)", sql, self.re.I):
+                created.setdefault(role, key)
+        for key, sql in self.keys.items():
+            for grantees in self.re.findall(r"\bGRANT\b[^;]*?\bTO\s+([\w,\s]+?);", sql, self.re.I | self.re.S):
+                for role in (r.strip() for r in grantees.split(",")):
+                    with self.subTest(key=key, role=role):
+                        self.assertIn(role, created, f"{key} grants to {role}, which no key creates")
+                        self.assertLessEqual(created[role], key)
+
+    def test_a_failed_key_fails_the_job(self):
+        self.assertRegex(self.job, r'-f "\$f" \\\s*\n\s*\|\| \{ echo "SCHEMA-FAIL \$f"; exit 1; \}')
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

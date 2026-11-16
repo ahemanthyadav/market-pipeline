@@ -361,6 +361,27 @@ class BotFlowTest(unittest.TestCase):
         self.assertEqual(self.replies(STRANGER), [])
         self.assertEqual(self.db.writes, [])
 
+    def test_member_cannot_reach_admin_commands_via_reroute(self):
+        # Regression (2026-11-15 review): a usage-error re-route used to call the
+        # target handler without the owner check, so a member could add users.
+        self.say(OWNER, f"/adduser {ALICE} Alice")
+        self.out.clear()
+        writes_before = list(self.db.writes)
+        self.say(ALICE, f"/multibagger /adduser {STRANGER} Mallory")
+        self.say(ALICE, f"/top /rmuser {ALICE}")
+        self.say(ALICE, "/top /users")
+        self.assertNotIn(STRANGER, self.db.members)
+        self.assertIn(ALICE, self.db.members)
+        self.assertEqual(self.db.writes, writes_before)
+        for reply in self.replies(ALICE):
+            self.assertNotIn(OWNER, reply)          # /users would list the owner's chat id
+
+    def test_run_command_enforces_owner_on_every_admin_command(self):
+        self.say(OWNER, f"/adduser {ALICE} Alice")
+        for cmd in bot.ADMIN:
+            self.assertEqual(bot.run_command(cmd, f"/{cmd} {STRANGER} X", ALICE), bot.OWNER_ONLY)
+        self.assertNotIn(STRANGER, self.db.members)
+
     def test_empty_event_from_a_group_does_not_notify(self):
         self.say(GROUP, "")                      # e.g. the bot being added to a group
         self.assertEqual(self.out, [])

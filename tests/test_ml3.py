@@ -66,44 +66,89 @@ class EWMATests(unittest.TestCase):
         self.assertAlmostEqual(fc_h5.forecast.iloc[0], fc_h1.forecast.iloc[0] * np.sqrt(5))
 
 
-class GARCHTests(unittest.TestCase):
-    def test_garch_forecast_shape(self):
-        n = 200
-        rets = pd.DataFrame({
-            "symbol": ["AAA"] * n,
-            "ts": pd.date_range("2026-01-01", periods=n, freq="D"),
-            "ret": np.random.default_rng(4).normal(0, 0.02, n),
-        })
-        fc = ml3c.garch_forecast(rets)
-        self.assertEqual(len(fc), 1)
-        self.assertIn(fc.model.iloc[0], ("garch", "ewma"))
-        self.assertGreater(fc.forecast.iloc[0], 0)
-
-    def test_garch_fallback_small_sample(self):
-        n = 30  # below 50 threshold
-        rets = pd.DataFrame({
-            "symbol": ["AAA"] * n,
-            "ts": pd.date_range("2026-01-01", periods=n, freq="D"),
-            "ret": np.random.default_rng(5).normal(0, 0.02, n),
-        })
-        fc = ml3c.garch_forecast(rets)
-        self.assertEqual(len(fc), 1)
-        self.assertIn(fc.model.iloc[0], ("garch", "ewma"))
-        self.assertGreater(fc.forecast.iloc[0], 0)
+try:
+    import scipy  # noqa: F401
+    HAVE_SCIPY = True
+except ImportError:
+    HAVE_SCIPY = False
 
 
-class GJRGARCHTests(unittest.TestCase):
-    def test_gjr_garch_forecast_shape(self):
-        n = 200
-        rets = pd.DataFrame({
-            "symbol": ["AAA"] * n,
-            "ts": pd.date_range("2026-01-01", periods=n, freq="D"),
-            "ret": np.random.default_rng(6).normal(0, 0.02, n),
-        })
-        fc = ml3c.gjr_garch_forecast(rets)
-        self.assertEqual(len(fc), 1)
-        self.assertIn(fc.model.iloc[0], ("gjr_garch", "garch", "ewma"))
+def _simulate_gjr(n, omega, alpha, gamma, beta, seed):
+    rng = np.random.default_rng(seed)
+    r = np.empty(n)
+    var = omega / (1 - alpha - 0.5 * gamma - beta)
+    for t in range(n):
+        r[t] = rng.standard_normal() * np.sqrt(var)
+        var = omega + (alpha + gamma * (r[t] < 0)) * r[t] ** 2 + beta * var
+    return r
+
+
+def _frame(r, sym="AAA"):
+    return pd.DataFrame({"symbol": [sym] * len(r),
+                         "ts": pd.date_range("2025-01-01", periods=len(r), freq="D", tz="UTC"),
+                         "ret": r})
+
+
+class GarchRecursion(unittest.TestCase):
+    """Pure pieces — run with or without scipy."""
+
+    def test_cond_var_matches_hand_loop(self):
+        r = np.array([0.01, -0.02, 0.005, -0.01, 0.03])
+        om, a, g, b = 1e-6, 0.05, 0.10, 0.90
+        v = [np.var(r)]
+        for x in r:
+            v.append(om + (a + g * (x < 0)) * x * x + b * v[-1])
+        np.testing.assert_allclose(ml3c.cond_var(r, om, a, g, b), v, rtol=1e-12)
+
+    def test_negative_return_raises_gjr_forecast_only(self):
+        up, down = np.array([0.0, 0.02]), np.array([0.0, -0.02])
+        self.assertEqual(ml3c.cond_var(up, 1e-6, .05, 0, .9)[-1], ml3c.cond_var(down, 1e-6, .05, 0, .9)[-1])
+        self.assertGreater(ml3c.cond_var(down, 1e-6, .05, .1, .9)[-1], ml3c.cond_var(up, 1e-6, .05, .1, .9)[-1])
+
+    def test_horizon_vol(self):
+        self.assertAlmostEqual(ml3c.horizon_vol(4e-4, 1e-6, 0.95, 1), 0.02)
+        # mean reversion: from ABOVE the long-run variance the h-day vol < sqrt(h) * 1-day vol
+        self.assertLess(ml3c.horizon_vol(4e-4, 1e-6, 0.95, 5), 0.02 * np.sqrt(5))
+        self.assertAlmostEqual(ml3c.horizon_vol(4e-4, 1e-6, 1.0, 4), 0.04)
+
+    def test_no_scipy_emits_no_mislabelled_rows(self):
+        saved = {k: sys.modules.get(k) for k in ("scipy", "scipy.optimize")}
+        sys.modules["scipy"] = None
+        sys.modules["scipy.optimize"] = None
+        try:
+            fc = ml3c.garch_forecast(_frame(np.random.default_rng(1).normal(0, .01, 200)))
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    sys.modules.pop(k, None)
+                else:
+                    sys.modules[k] = v
+        self.assertEqual(len(fc), 0)
+        self.assertEqual(fc.attrs["skipped"], 1)
+
+
+@unittest.skipUnless(HAVE_SCIPY, "scipy not installed (runs in the marketdata-data image)")
+class GarchFit(unittest.TestCase):
+    def test_garch_labels_and_recovers_persistence(self):
+        r = _simulate_gjr(1500, 2e-6, 0.08, 0.0, 0.90, seed=7)
+        fc = ml3c.garch_forecast(_frame(r))
+        self.assertEqual(list(fc.model), ["garch"])      # never "ewma"
+        om, a, g, b = ml3c.fit_garch(r)
+        self.assertEqual(g, 0.0)
+        self.assertAlmostEqual(a + b, 0.98, delta=0.05)
         self.assertGreater(fc.forecast.iloc[0], 0)
+
+    def test_gjr_detects_leverage(self):
+        r = _simulate_gjr(2000, 2e-6, 0.02, 0.15, 0.88, seed=11)
+        om, a, g, b = ml3c.fit_garch(r, gjr=True)
+        self.assertGreater(g, a)                         # asymmetry recovered
+        fc = ml3c.gjr_garch_forecast(_frame(r))
+        self.assertEqual(list(fc.model), ["gjr_garch"])
+
+    def test_short_history_skipped_not_relabelled(self):
+        fc = ml3c.garch_forecast(_frame(np.random.default_rng(5).normal(0, .02, 30)))
+        self.assertEqual(len(fc), 0)
+        self.assertEqual(fc.attrs["skipped"], 1)
 
 
 class RunnerTests(unittest.TestCase):

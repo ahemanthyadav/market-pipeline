@@ -6,7 +6,7 @@
 > roles and this contract; sibling repos consume under these rules
 > (ADR 0027 precedent, ADR 0032 decision — deliberately NOT a separate repo:
 > schema keys ship in the same commit as the writer that fills them).
-> Last verified: 2026-10-27.
+> Last verified: 2026-11-15 (role matrix checked live; schema re-apply tested twice on a scratch DB).
 
 ## 1. The interface: `v_*` views, not base tables
 
@@ -38,6 +38,16 @@ marketview's screener/sectors/markets/multibagger/strategy queries.
 - The job records every applied key in **`schema_migrations`** (filename, md5,
   first/last applied) and WARNs when an old key's md5 changed after first
   application — editing history is a smell; add a new key instead.
+- **Every key is re-applied on every run**, so an older key must never undo
+  a later one. If a later key widens a view, the earlier definition is guarded
+  to bootstrap-only (`IF to_regclass(...) IS NULL`) — a new key cannot help,
+  because the earlier key fails before it runs. A role must be created in a
+  key at or before the first key that GRANTs to it. Both are enforced by
+  `tests/test_manifest_safeguards.py` (`SchemaReapplySafety`). The one
+  sanctioned history edit so far: 2026-11-15, keys 10 (+`pipeline_rw`) and 22
+  (view guards) — expect the md5 WARN for those two once.
+- A failed key fails the Job (`SCHEMA-FAIL <file>`); before 2026-11-15 the
+  loop carried on and printed `SCHEMA-OK` over a half-applied key.
 - **New app-state tables go in the `app` schema** (created in key 22, USAGE
   granted to the reader/app roles, default SELECT in place). Existing tables
   are grandfathered in `public` — do not migrate them for cosmetics.
@@ -46,16 +56,21 @@ marketview's screener/sectors/markets/multibagger/strategy queries.
 
 | Role | May | Used by |
 |---|---|---|
-| `postgres` | everything (superuser) | pipeline writers — **until AR-8 lands** (below) |
+| `postgres` | everything (superuser) | schema-job, pg-backup, restore-drill, the StatefulSet |
 | `grafana_ro` | SELECT everywhere (default privileges) | Grafana, marketview |
 | `telegram_app` | SELECT + writes ONLY on `watchlist`, `bot_users` | Telegram bot |
 | `litellm` | its own gateway state | llm-gateway |
-| `pipeline_rw` *(pending)* | read/write data tables, no DDL/roles | all 36 CronJobs after AR-8 |
+| `pipeline_rw` | SELECT/INSERT/UPDATE/DELETE on data tables + sequences, **no DDL/roles** | all pipeline CronJobs (AR-8, live since 2026-10-30) |
 
-**AR-8 is the one open gap** and is owner-run by design (the agent permission
-system refuses secret-store writes): the exact `kubectl create secret` +
-`CREATE ROLE pipeline_rw` commands sit in `pending-tasks.md` §1. After running
-them, flipping the manifests' PGUSER is a single prepared commit.
+All roles are created NOLOGIN in schema key 10; LOGIN + password are set
+out-of-band from their Secrets (`pipeline-db-rw` for `pipeline_rw`).
+
+**Known drift (found 2026-11-15, remediation pending owner approval):** live,
+`pipeline_rw` OWNS `stock_valuations`, `stock_scientific_metrics` and
+`sector_metrics` and has CREATE on `public` — leftovers of `valuation.py`
+running DDL at runtime (removed in code 2026-11-15, takes effect with the next
+`marketdata-data` image). Remediation SQL and order: `pending-tasks.md`
+(2026-11-15 review section).
 
 ## 4. Invariants every consumer may rely on
 

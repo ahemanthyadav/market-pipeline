@@ -461,6 +461,12 @@ data:
       IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'telegram_app') THEN
         CREATE ROLE telegram_app NOLOGIN;
       END IF;
+      -- AR-8 writer role (created by hand 2026-10-30; tracked here 2026-11-15 so a
+      -- fresh/DR database can apply key 23, whose GRANTs name it). LOGIN + password
+      -- come out-of-band from Secret pipeline-db-rw, like the readers above.
+      IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'pipeline_rw') THEN
+        CREATE ROLE pipeline_rw NOLOGIN;
+      END IF;
     END $$;
     GRANT CONNECT ON DATABASE postgres TO grafana_ro, telegram_app;
     GRANT USAGE ON SCHEMA public TO grafana_ro, telegram_app;
@@ -471,6 +477,15 @@ data:
     ALTER ROLE grafana_ro SET default_transaction_read_only = on;
     -- The bot's only writes (bot.py /watch, users.py /adduser /rmuser).
     GRANT INSERT, UPDATE, DELETE ON watchlist, bot_users TO telegram_app;
+    -- Pipeline writers: DML on every data table, never DDL (database-contract §3).
+    GRANT CONNECT ON DATABASE postgres TO pipeline_rw;
+    GRANT USAGE ON SCHEMA public TO pipeline_rw;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO pipeline_rw;
+    GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO pipeline_rw;
+    ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+      GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO pipeline_rw;
+    ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+      GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO pipeline_rw;
   11-news-constraints.sql: |
     -- 2026-10-18 (roadmap §3.4): the last two tables without a DB-level dedup guard.
     -- Keys mirror the writers exactly: news-fetcher skips (headline, source, UTC day);
@@ -794,36 +809,56 @@ data:
 
     -- methods_above_close lives HERE so the bot, the UI and the reports can
     -- never disagree about the agreement count (the ADR 0030 five-place pain).
-    CREATE OR REPLACE VIEW v_valuations_recent AS
-      SELECT symbol, universe, ts, close, graham, peer_multiple, fcf_yield,
-             dcf, ddm, epv, residual_income, peg_lynch, damodaran_fcff,
-             graham_growth, fair_value, upside_pct, methods, discount_rate,
-             growth_used,
-             (coalesce((graham          > close)::int, 0) +
-              coalesce((peer_multiple   > close)::int, 0) +
-              coalesce((fcf_yield       > close)::int, 0) +
-              coalesce((dcf             > close)::int, 0) +
-              coalesce((ddm             > close)::int, 0) +
-              coalesce((epv             > close)::int, 0) +
-              coalesce((residual_income > close)::int, 0) +
-              coalesce((peg_lynch       > close)::int, 0) +
-              coalesce((damodaran_fcff  > close)::int, 0) +
-              coalesce((graham_growth   > close)::int, 0)) AS methods_above_close
-      FROM stock_valuations WHERE ts >= now() - interval '4 days';
-
-    CREATE OR REPLACE VIEW v_latest_valuations AS
-      SELECT DISTINCT ON (symbol) * FROM v_valuations_recent
-      ORDER BY symbol, ts DESC;
-
-    CREATE OR REPLACE VIEW v_sector_latest AS
-      SELECT m.universe, m.sector, m.ts, m.members, m.median_pe, m.median_pb,
-             m.median_ev_ebitda, m.median_roe, m.median_op_margin,
-             m.avg_ret_6m, m.avg_ret_12m, m.median_upside_pct,
-             st.style, st.cyclical, st.note
-      FROM (SELECT DISTINCT ON (universe, sector) * FROM sector_metrics
-            WHERE ts >= now() - interval '7 days'
-            ORDER BY universe, sector, ts DESC) m
-      LEFT JOIN sector_styles st ON st.sector = m.sector;
+    --
+    -- 2026-11-15: key 25 re-defines these three views with MORE columns, and
+    -- the schema-job re-applies every key on every run. An unguarded CREATE OR
+    -- REPLACE here (fewer columns) fails "cannot drop columns from view" on
+    -- every re-run after key 25. So key 22 only BOOTSTRAPS them on a fresh DB;
+    -- key 25 owns their current shape (tests/test_manifest_safeguards.py
+    -- enforces one unguarded definition per view).
+    DO $bootstrap$
+    BEGIN
+      IF to_regclass('public.v_valuations_recent') IS NULL THEN
+        EXECUTE $v$
+        CREATE VIEW v_valuations_recent AS
+          SELECT symbol, universe, ts, close, graham, peer_multiple, fcf_yield,
+                 dcf, ddm, epv, residual_income, peg_lynch, damodaran_fcff,
+                 graham_growth, fair_value, upside_pct, methods, discount_rate,
+                 growth_used,
+                 (coalesce((graham          > close)::int, 0) +
+                  coalesce((peer_multiple   > close)::int, 0) +
+                  coalesce((fcf_yield       > close)::int, 0) +
+                  coalesce((dcf             > close)::int, 0) +
+                  coalesce((ddm             > close)::int, 0) +
+                  coalesce((epv             > close)::int, 0) +
+                  coalesce((residual_income > close)::int, 0) +
+                  coalesce((peg_lynch       > close)::int, 0) +
+                  coalesce((damodaran_fcff  > close)::int, 0) +
+                  coalesce((graham_growth   > close)::int, 0)) AS methods_above_close
+          FROM stock_valuations WHERE ts >= now() - interval '4 days'
+        $v$;
+      END IF;
+      IF to_regclass('public.v_latest_valuations') IS NULL THEN
+        EXECUTE $v$
+        CREATE VIEW v_latest_valuations AS
+          SELECT DISTINCT ON (symbol) * FROM v_valuations_recent
+          ORDER BY symbol, ts DESC
+        $v$;
+      END IF;
+      IF to_regclass('public.v_sector_latest') IS NULL THEN
+        EXECUTE $v$
+        CREATE VIEW v_sector_latest AS
+          SELECT m.universe, m.sector, m.ts, m.members, m.median_pe, m.median_pb,
+                 m.median_ev_ebitda, m.median_roe, m.median_op_margin,
+                 m.avg_ret_6m, m.avg_ret_12m, m.median_upside_pct,
+                 st.style, st.cyclical, st.note
+          FROM (SELECT DISTINCT ON (universe, sector) * FROM sector_metrics
+                WHERE ts >= now() - interval '7 days'
+                ORDER BY universe, sector, ts DESC) m
+          LEFT JOIN sector_styles st ON st.sector = m.sector
+        $v$;
+      END IF;
+    END $bootstrap$;
 
     CREATE OR REPLACE VIEW v_upcoming_earnings AS
       SELECT e.symbol, max(c.name) AS name, max(c.universe) AS universe,

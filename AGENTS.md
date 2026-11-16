@@ -1,7 +1,8 @@
 # Market Data Pipeline — Agent Guide
 
-k3s homelab market-data pipeline: 5-node Pi/Jetson cluster ingesting daily market
-data into TimescaleDB, with Grafana dashboards and a Telegram bot/digest.
+k3s homelab market-data pipeline: 6-node Pi/Jetson k3s cluster (pi1, pi2 control plane, pi3, TX2, orin1, orin2)
+plus one non-cluster host (pi0 = LAN DNS) ingesting daily market data into TimescaleDB, with Grafana dashboards
+and a Telegram bot/digest. Per-node roles: `docs/node-roles.md`.
 Git repo on `main` (origin GitHub) — conventional commits; never commit credentials or IPs.
 `docs/` is the record of truth; `docs/pending-tasks.md` is the single task tracker.
 

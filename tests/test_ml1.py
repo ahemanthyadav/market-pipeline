@@ -113,8 +113,8 @@ class RowCountDrops(unittest.TestCase):
 
     def test_sudden_drop_detected(self):
         counts = pd.DataFrame({
-            "d": pd.date_range("2025-01-01", periods=21, freq="D"),
-            "cnt": [1000] * 20 + [300],  # 300 < 70% of 1000 median
+            "d": pd.date_range("2025-01-01", periods=22, freq="D"),
+            "cnt": [1000] * 20 + [300, 1000],  # 300 < 70% of 1000 median; newest day is skipped
         })
         anom = ml1.detect_row_count_drops(counts)
         self.assertEqual(len(anom), 1)
@@ -152,6 +152,42 @@ class ScraperDrops(unittest.TestCase):
         self.assertEqual(len(anom), 1)
         self.assertEqual(anom[0]["kind"], "scraper_drop")
         self.assertEqual(anom[0]["subject"], "fading")
+
+
+class RuleFixes20261112(unittest.TestCase):
+    """False positives found in the first live run (2026-11-12)."""
+
+    def test_market_holiday_not_a_drop(self):
+        days = pd.date_range("2026-10-01", periods=25, freq="D")
+        us = pd.DataFrame({"d": days, "cnt": 1500, "market": "US"})
+        nse = pd.DataFrame({"d": days.delete(20), "cnt": 745, "market": "NSE"})  # NSE closed one day
+        self.assertEqual(ml1.detect_row_count_drops(pd.concat([us, nse])), [])
+
+    def test_partial_market_day_flagged_per_market(self):
+        days = pd.date_range("2026-10-01", periods=25, freq="D")
+        cnt = [745] * 25
+        cnt[20] = 200
+        df = pd.concat([pd.DataFrame({"d": days, "cnt": 1500, "market": "US"}),
+                        pd.DataFrame({"d": days, "cnt": cnt, "market": "NSE"})])
+        anom = ml1.detect_row_count_drops(df)
+        self.assertEqual([a["subject"] for a in anom], ["stock_prices:NSE"])
+
+    def test_weekly_feed_respects_its_max_age(self):
+        now = pd.Timestamp("2026-11-12", tz="UTC")
+        hb = pd.DataFrame({"feed": ["stock_fundamentals", "daily_feed"],
+                           "last_data_ts": [now - pd.Timedelta(days=4)] * 2,
+                           "max_age_hours": [192, 30]})
+        anom = ml1.detect_scraper_drops(hb, now=now)
+        self.assertEqual([a["subject"] for a in anom], ["daily_feed"])
+
+    def test_recorded_split_not_a_jump(self):
+        df = pd.DataFrame({"symbol": "X", "ts": pd.date_range("2026-09-01", periods=3, freq="D"),
+                           "open": [100.0, 50.0, 51.0], "high": [101.0, 51.0, 52.0],
+                           "low": [99.0, 49.0, 50.0], "close": [100.0, 50.0, 51.0],
+                           "adj_close": [50.0, 50.0, 51.0]})   # 2:1 split recorded
+        self.assertEqual(ml1.detect_bad_bars(df), [])
+        unrecorded = df.assign(adj_close=df["close"])
+        self.assertEqual(len(ml1.detect_bad_bars(unrecorded)), 1)
 
 
 if __name__ == "__main__":

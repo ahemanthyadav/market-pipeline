@@ -4,7 +4,35 @@
 > the linked docs — this file is the index + status. Maintained per AGENTS.md docs
 > discipline: mark items ✅ with a date (and where the completion is recorded) when
 > done; prune ✅ lines into the relevant doc's history at housekeeping time.
-> **Last reviewed: 2026-11-08** — recovery session: restored `marketdata-data:v1` + `marketdata-light:v1` to pi1/pi3 containerd
+> **Last reviewed: 2026-11-15** (live cluster check + doc refresh): **6 k3s nodes** (pi1, pi2 cordoned, pi3, tx2,
+> orin1, orin2) + pi0 (non-cluster DNS) — all Ready; **36 CronJobs, none suspended**; 30 of the 31 jobs started in the
+> last 26 h `Succeeded` (0 failures; `nse-fundamentals` still `Running` at the check — long weekly job);
+> `pipeline_heartbeat` **16/16 feeds fresh**; pi3 dump `marketdata-2026-11-15.dump` (539 MiB) present.
+> **orin2 now runs all 31 floating CronJobs** (image obligation is now pi1 + pi3 + orin2). **New items opened:
+> TX2 SSH credential stale (blocks §6), Orin nodes unmonitored (no nodewatch/host-cron/SSH alias), workstation clock
+> skew.** **Node-local schedules are America/Los_Angeles — UTC−7 summer / UTC−8 winter**, so every node-local job's
+> UTC instant shifts by an hour at the DST boundary (only `telegram-digest` + `llm-narrative` are explicit IST).
+> **Voice manifests are blocked**: they select `hardware: orin` but the Orin nodes are labelled `hardware=orin-cpu`
+> with taint key `gpu=orin` — see the Orin project row.
+> **Last full review: 2026-11-13** (owner: "fix all the problems found … also fix followups"): **orin2 in service**
+> (data v7 + light v1 imported, uncordoned, fx + factors canaries ran ON orin2). **Corporate-actions backfill COMPLETE**
+> (cursor cleared, 1,140 symbols, 245 adj rows) → universe expansion ✅. **`marketdata-data:v7`**: price writers never store
+> a mid-session bar (`_common/sessions.py`; the node-local PT schedules caught NSE + APAC mid-session and the index
+> fetchers kept only the newest bar, so ^HSI/000001.SS/^STI closes were intraday values, ^NSEI lost 11-04/05/12) — index
+> history since 10-01 re-fetched (30/30 APAC closes now = Yahoo final); **`v8`: NSE holiday phantom bars** (Yahoo zero-volume
+> carry-forwards — 15,820 rows on 124 closed days 1996–2026, backed up to `out/cleanup/` then deleted; the writer now skips and
+> DELETEs them); ML-1 false positives fixed (per-market row
+> counts, adj_close returns, per-feed cadence, owns its window); ML-3 upserts; NSE `DUMMY*` rows filtered.
+> **`marketview:v14`** (calibration link hidden until it exists). Unfixable-at-source items documented (manual §4).
+> Earlier **2026-11-12** (owner: "implement all that can be done"): Schema 25 + the 15-method engine were already
+> live (34 catalog rows, today's valuations/scientific metrics written) — tracker caught up. **`marketdata-data:v6` live on all 21
+> data CronJobs** (v4→v5→v6 same day): ML-1/ML-3 CronJobs had NEVER succeeded (`python -m ml1_anomalies` — module not in the
+> image; both were workstation PSQL_CMD tools) → new `manifests/ml/pgcompat.py` runs them in-cluster via psycopg; ML-3's GARCH/
+> GJR-GARCH had silently fallen back to EWMA (no scipy) and been dropped as duplicates → scipy 1.18.1 pinned, variance-targeted
+> fit (11 min / 2,242 symbols on pi3), canaries: ML-1 15 anomalies, ML-3 2,232 GARCH + GJR rows. DG-20 cash capture (data only).
+> **`marketview:v13` live** (sectors lens medians, calibration table, 34-row method catalog; 9 routes canaried). EV-19/EV-20
+> tested — all FAIL §5. Corporate-actions backfill found STALLED since 10-31 at JYOTICNC.NS → resumed. orin2 import ⛔ (sudo
+> password ≠ the Pi one). Earlier **2026-11-08** — recovery session: restored `marketdata-data:v1` + `marketdata-light:v1` to pi1/pi3 containerd
 > stores (all fetchers had `ErrImageNeverPull` since the 10-31 TX2 prune; `pipeline_heartbeat` frozen at 2026-11-04), forced
 > backfill of every active fetcher, data current through Fri 2026-11-06 (markets closed weekend). Built and deployed
 > `marketdata-data:v2` and `telegram-digest:v40` to pi1/pi3. Orin2 cordoned pending image import; orin1 tainted (STT/TTS only).
@@ -129,35 +157,122 @@ Both wired into bot.py COMMANDS + MENU, router SAFE_AI_COMMANDS, and nicknames.
 | EV-10…14 → EV-17/18 composite v2 | 2+ sessions | data gates CLEARED 2026-10-26 (EV-1 US + EV-9 live); next = EV-0 §5 re-run on point-in-time membership, then per-universe rules = owner |
 | ~~G-20 factor returns~~ | ✅ done 2026-10-26 (`factors-fetcher:v1` live, terms verified; EV-0 §5 test-4 extension rides the next scoring change) | done |
 | G-21 extra signals | ✅ Amihud/max_daily_ret/idio_vol + industry_momentum added to `ev0.py` + EV-0 §5 tested ✅; net payout yield, distress score need fundamentals/sector data | each must pass EV-0 §5 |
-| **Orin Nano STT/TTS voice node** | ~2–3 sessions | Add Orin Nano as k3s worker (taint `hardware=orin`), build `stt-service`/`tts-service` images on TX2, deploy via §6 cycle, wire `bot.py` to voice messages (docs: `docs/orin-nano-stt-tts-runbook.md`) |
+| **Orin Nano STT/TTS voice node** | 🔶 **BLOCKER (found 2026-11-15): the voice manifests select `hardware: orin` and tolerate `hardware=orin:NoSchedule`, but both live Orin nodes are labelled `hardware=orin-cpu` and the taint key is `gpu=orin` — applying `manifests/voice/*.yaml` as written leaves the pods `Pending` forever. Fix the selector/taint (or relabel the nodes) FIRST.** Then build `stt-service`/`tts-service` images on TX2, deploy via §6 cycle, wire `bot.py` to voice messages (docs: `docs/orin-nano-stt-tts-runbook.md`) | ~2–3 sessions | Label/taint reconciliation (owner choice of which side moves) |
 | ~~Auto/FMCG + MIDCAP150 fetcher~~ | ✅ done 2026-10-26 (`nse-fetcher:v7`, series live 2015→today) | done |
 | ~~ML-0 experiment infra~~ | ✅ done 2026-11-04 — `ops-tools/ml0.py` (walk-forward splitter, leakage test, trial budget, `ml_runs` tracking via `app.ml_runs`); tested end-to-end with ret_12m across 5 universes | ~1 session |
-| ~~ML-1 anomaly v1~~ | ✅ done 2026-11-04 — `ops-tools/ml1.py` (bad_bar, feed_drop, row_count_drop, scraper_drop rules; writes to `app.data_anomalies` idempotently; `tests/test_ml1.py` 11 tests all pass) | ~1 session |
-| ~~ML-3 vol / ML-5 peers / ML-4 regime~~ | ✅ ML-3 done 2026-11-04 (`ops-tools/ml3.py` EWMA/GARCH/GJR-GARCH → `app.vol_forecasts`; `tests/test_ml3.py` 8 tests) | ✅ ML-5 done 2026-11-04 (`ops-tools/ml5.py` correlation clusters → `app.peer_clusters`; `tests/test_ml5.py` 4 tests) | ML-4 descriptive-only until EV-0 shows value |
+| ~~ML-1 anomaly v1~~ | ✅ **actually live 2026-11-12** (the 11-04 CronJob ran `python -m ml1_anomalies` — that library module, `manifests/ml/ml1_anomalies.py`, was never copied into the image and has no entry point — failed every night; 2026-11-13 rule fixes: per-market row counts, adj_close returns, per-feed silence threshold, DELETE+upsert of its window; now `ml1.py run` on `marketdata-data:v6` via `pgcompat`, canary 15 anomalies) — `ops-tools/ml1.py` (bad_bar, feed_drop, row_count_drop, scraper_drop rules; writes to `app.data_anomalies` idempotently; `tests/test_ml1.py` 11 tests all pass) | ~1 session |
+| ~~ML-3 vol / ML-5 peers / ML-4 regime~~ | ✅ ML-3 **actually live 2026-11-12** (CronJob never ran before; GARCH/GJR silently fell back to EWMA without scipy — fixed: scipy pinned, variance-targeted MLE, fallback rows skipped not relabelled; canary 2,232 GARCH + GJR rows, 11 min on pi3. 2026-11-13: writer now upserts (`DO UPDATE`), shipped in v7) (`ops-tools/ml3.py` EWMA/GARCH/GJR-GARCH → `app.vol_forecasts`; `tests/test_ml3.py` 8 tests) | ✅ ML-5 done 2026-11-04 (`ops-tools/ml5.py` correlation clusters → `app.peer_clusters`; `tests/test_ml5.py` 4 tests) | ML-4 descriptive-only until EV-0 shows value |
 | ~~ML-7c story summaries~~ | ✅ done 2026-11-04 (`ops-tools/ml7c.py` LLM summaries → `app.llm_outputs` kind=story_summary; `tests/test_ml7c.py` 3 tests) | needs gateway to run live |
 | ML-6 GBM ranker | gated | hard gate: EV-0 + EV-1 + composite v2 pass §5 |
 | v2+ architecture (§4) / icebox (§6) | multi-session | deliberately later / deliberately never |
+| **Mini PC control plane migration (Option 4)** | Replace pi2 as k3s control plane (API, scheduler, etcd-kine, CoreDNS, Traefik). Back up pi2 `state.db` + certs first (a one-off copy exists from 2026-10-18 and the recurring pull script is live — **but the restore has never been rehearsed**); repoint pi1/pi3/tx2/orin1/orin2 agents one at a time; retire or cordon pi2. | multi-session | Owner hardware purchase decision (B9/AR-10); calm cluster window; pi2 load < 2 |
+| **tx2 workload separation (AR-10)** | Separate TimescaleDB host from GPU/NLP/build host. Option: move `timescaledb-0` to mini PC; tx2 keeps `sentiment-scorer`, `headline-ner`, `llm-gateway`, image build host. TX2 fixed config untouched (AGENTS.md rule 3). | multi-session | Owner hardware decision; ops manual §2 re-verification after any tx2 change |
+| **Rust incremental rewrite** | Rewrite CPU-heavy jobs in Rust to save RAM on 1 GB workers: `ta-compute`, `stock-screener`, `ML-3` (GARCH MLE). Keep I/O-bound fetchers (yfinance, fx, news) in Python. Each Rust job = own small image built on TX2, imported via §6 cycle; no registry (ADR 0004). | multi-session | Test parity via `tests/run-all.sh`; measure RAM/runtime before expanding |
+| **pi2 post-transfer role** | After control plane moves to mini PC: retire pi2 from k3s (stop k3s-server, `kubectl delete node pi2`) or keep as bare host running only `node-stats-log.sh` cron (AR-12 telemetry). No worker pods. | small session | Control plane migration complete first |
+| **Second watcher host (A29 / AR-12)** | pi0 is the only out-of-cluster alert path. Add a second host (mini PC or other) running `nodewatch.sh` + `node-stats-log.sh` so alerts fire if pi0 or the site loses power. Normally-closed relay if it ever drives power control. | small session | Decide host + relay wiring; pi0 supply must be fixed first |
 
 ---
 
 ## 1. Immediate (next checkpoint: tomorrow's `/health`)
 
-- [ ] 🔶 **Roll out ADR 0033 & Schema 25 (`25-valuation-and-metrics-catalog.sql`) to the cluster (§6 cycle):**
+### 2026-11-15 branch review (`feat/telegram-v4-market-views` vs `main`)
+
+Three-area code review plus live read-only checks. Gates were green before it started. Six findings fixed in code,
+each with a regression test that fails on the old code. **Deploy is still pending.**
+
+- [x] ✅ **R-1 Bot admin bypass:** the usage-error re-route and the unknown-command router called handlers without
+  the owner check, so `/multibagger /adduser <id> X` let any member add users (`/top /users` leaked chat ids).
+  - Fix: every path goes through `bot.run_command()`, which enforces `ADMIN`.
+  - Tests: `test_multiuser.py` `test_member_cannot_reach_admin_commands_via_reroute`, `test_run_command_enforces_owner_on_every_admin_command`.
+- [x] ✅ **R-2 Schema re-run broken:** key 22 re-defined three views that key 25 widened, so every re-run after key 25
+  would fail "cannot drop columns from view".
+  - Fix: key 22 now only creates those views when they don't exist yet (`to_regclass` guard).
+  - Verified on a scratch `timescaledb:2.30.1-pg16` container: fresh DB ×2, and old→new→new (the live upgrade path) — all clean, views keep 31 columns.
+- [x] ✅ **R-3 k3s backup copy to pi3** (commit `4952137`): it targeted the pod-mounted `/var/lib/market-data/backups`
+  hostPath and never landed.
+  - Now `~/k3s-cp-backups/` (700/600, sha256 re-checked on pi3). First copy verified live 2026-11-15. Details: backup runbook.
+- [x] ✅ **R-4 Fresh/DR schema build failed:** key 23 granted to `pipeline_rw`, but no key created it, and the job
+  printed `SCHEMA-OK` anyway.
+  - Fix: key 10 creates `pipeline_rw` NOLOGIN with the AR-8 DML grants; `schema-job.yaml` now exits on `SCHEMA-FAIL`.
+  - Also: `valuation.py` no longer runs DDL at runtime (`upsert_catalog()` only). Key 25 already creates everything it
+    added, and a DML-only `pipeline_rw` fails `ALTER TABLE` ("must be owner"), which was verified on the scratch DB.
+  - Test: `test_manifest_safeguards.py` `SchemaReapplySafety` (static, CI-safe).
+- [x] ✅ **R-5 Fact-check gate loosened:** the tolerance went from ±0.01 to ±0.1 on 2026-11-08, so "1.30%" passed for a 1.21% fact.
+  - Fix: a number now passes only if it equals the fact rounded or truncated to the decimals actually written (percent form included).
+  - Test: `test_narrative.py` `test_tolerance_is_the_written_precision_not_a_flat_window`.
+- [x] ✅ **R-6 `/sp500`, `/index` P/E always "–":** the query used `DISTINCT ON (symbol)`, which dropped the P/E row.
+  - Fix: `DISTINCT ON (symbol, metric)`.
+  - Test: `test_stocks.py` `test_distinct_on_keeps_latest_pe_and_pb_per_symbol` (the fake applies the query's own key).
+- [ ] 🔶 **Deploy R-1/R-5/R-6 and the R-2/R-4 schema changes.** Blocked by the stale TX2 credential below (§6 needs TX2).
+  1. `telegram-digest` v42→v43 (bot.py, stocks.py, factcheck.py); also `ops-tools/apply-llm.sh` (ships factcheck.py).
+  2. `marketdata-data` v8→v9 (valuation.py, no runtime DDL).
+  3. Apply the ConfigMap and run the schema job under a new name (`schema-review-1115`). Expect a one-time md5 WARN for keys 10 and 22.
+- [ ] 🤔 **Ownership drift — needs owner approval (non-SELECT SQL), run only AFTER `marketdata-data:v9` is live.**
+  - Live state: `pipeline_rw` owns `stock_valuations`, `stock_scientific_metrics`, `sector_metrics` and has CREATE on `public`.
+  - Cause: Schema 25 was first applied by `valuation.py` running as `pipeline_rw` (rollout step 1 below).
+  - Fix, as `postgres`:
+    `ALTER TABLE stock_valuations OWNER TO postgres; ALTER TABLE stock_scientific_metrics OWNER TO postgres;
+    ALTER TABLE sector_metrics OWNER TO postgres; REVOKE CREATE ON SCHEMA public FROM pipeline_rw;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON stock_valuations, stock_scientific_metrics, sector_metrics TO pipeline_rw;`
+  - Then trigger one `stock-valuation` run and check `job_runs`.
+- [ ] 🔶 **Review findings not yet fixed** (reported by reviewers, not independently re-verified; verify each before fixing):
+  - Data:
+    - `predictions.py` stores an absolute `adj_close` base, so splits book fake returns and outcomes are write-once.
+    - `ev0.py` G-21 `distress_score` joins financials on `period_end`, not `filed` (look-ahead).
+    - `ev0.py` `industry_momentum` compounds (2+r), and NaN blanks the sector.
+    - `stock_prices.py` never phantom-checks the oldest bar in the window (seed `prev_close` from the DB).
+    - `ml1.py:284` deletes 100 days but rewrites 90.
+    - `ml3_volatility.py` EWMA is one day stale.
+    - `valuation.py` `easton_mpeg` uses g instead of r on the dps term.
+    - `universe_refresh.py` errors in the SEC CIK map fail the SP400/600 refresh.
+  - Bot:
+    - `router.py:364` `format_route` doesn't escape args.
+    - `valuation_text` crashes on NULL `upside_pct`.
+    - The facts fallback makes one 20 s gateway call per word on the poll loop.
+    - Nickname rows aren't checked against `universe_constituents`.
+    - The AI route to `watch` can write the watchlist.
+    - `/sectors` exceeds PHONE_WIDTH.
+    - `/scorecard` d1/d10 direction is unlabelled.
+    - `/methods` is truncated at 4096 characters.
+  - Ops:
+    - Voice services have no Dockerfiles, no auth, and a likely wrong piper import.
+    - `images/ml` torch/FinBERT are unpinned.
+    - `images/*/Dockerfile` comments name `-v1` tarballs and pi2 imports.
+    - `opencode.jsonc` runs an unpinned `mcp-telegram-bot` with the prod token.
+    - `ml7b` 600 s deadline vs 40×2×180 s.
+    - Floating CronJobs rely only on pi2's cordon.
+
+- [ ] ⏸ **Roll out ADR 0033 & Schema 25 (`25-valuation-and-metrics-catalog.sql`) to the cluster (§6 cycle):** steps 1–4 ✅ (verified 2026-11-12: `valuation_methods` 34 rows, `stock_scientific_metrics` + `calibration_metrics` + `v_*` views present, sector_metrics lens columns live, 2,239 valuations for 11-12); **only step 5 remains, time-blocked** (first `prediction_outcomes` resolve ~2026-11-26; needs ≥6 resolved cross-sections).
   Code and hermetic unit tests are committed across `marketdata` and `marketview`:
-  1. **Apply TimescaleDB Schema 25:** `kubectl apply -f manifests/timescaledb/schema-configmap.yaml` and run the schema job (or trigger one `stock-valuation` job, as `valuation.ensure_schema_and_catalog()` idempotently creates `valuation_methods`, `stock_scientific_metrics`, `calibration_metrics`, additive columns on `stock_valuations` and `sector_metrics`, contract views `v_valuation_methods`, `v_latest_scientific_metrics`, `v_latest_calibration`, and grants `SELECT` to `grafana_ro` and `telegram_app`).
-  2. **Update `stock-screener` scripts/image:** Apply the updated `stock-screener` ConfigMap (`valuation.py` 15-method engine + 34-row catalog + `scientific_row()`, `stock_metrics.py` `adj_close` total-return series + `ret_12_1` + `near_high`, `stock_fundamentals.py` `COGS_TAGS` fallback for `gross_profit`, `stock_report.py` dual-lens report) and run a canary `stock-valuation` job.
+  1. ✅ (applied via `valuation.ensure_schema_and_catalog()` with the v3 image, 2026-11-09) **Apply TimescaleDB Schema 25:** `kubectl apply -f manifests/timescaledb/schema-configmap.yaml` and run the schema job (or trigger one `stock-valuation` job, as `valuation.ensure_schema_and_catalog()` idempotently creates `valuation_methods`, `stock_scientific_metrics`, `calibration_metrics`, additive columns on `stock_valuations` and `sector_metrics`, contract views `v_valuation_methods`, `v_latest_scientific_metrics`, `v_latest_calibration`, and grants `SELECT` to `grafana_ro` and `telegram_app`).
+  2. ✅ (`marketdata-data:v3` 2026-11-09, now v6) **Update `stock-screener` scripts/image:** Apply the updated `stock-screener` ConfigMap (`valuation.py` 15-method engine + 34-row catalog + `scientific_row()`, `stock_metrics.py` `adj_close` total-return series + `ret_12_1` + `near_high`, `stock_fundamentals.py` `COGS_TAGS` fallback for `gross_profit`, `stock_report.py` dual-lens report) and run a canary `stock-valuation` job.
   3. ✅ **Build & roll out `local/telegram-digest:v40`:** Build on TX2, archive tarball to `/mnt/tx2-ssd/image-tarballs/telegram-digest-v40.tar.gz`, import on `pi1`, and apply `manifests/telegram/deployment.yaml` + `manifests/telegram/cronjob.yaml`. Fixes `/valuation` `UndefinedColumn` on `ev_ebitda_peer` — degrades gracefully until Schema 25 is applied. Canary `DIGEST-DONE rc=0`.
-  4. **Build & roll out `local/marketview:v13`:** Bump `deploy/deployment.yaml` to `local/marketview:v13`, build on TX2, import on `pi1`, roll out, and canary `/stock/AAPL`, `/multibagger`, and `/strategies`.
-  5. **Run continuous calibration loop (`ops-tools/classifier_loop.py`):** Run `python3 ops-tools/classifier_loop.py run --horizon 91` from the workstation once `prediction_outcomes` has ≥6 resolved cross-sections to populate `__calibration__` in `stock_reports` and structured rows in `calibration_metrics`.
-- [ ] 🔶 **MarketView UI surface extensions for Schema 25 tables (follow-up):**
+  4. ✅ 2026-11-12 (`marketview:v13` live on pi1, md5-verified vs marketview `2bc56de`; `/`, `/stock/AAPL`, `/multibagger`, `/strategies`, `/sectors`, `/scorecard`, `/screener?universe=SP600` all 200; bad symbol 404) **Build & roll out `local/marketview:v13`:** Bump `deploy/deployment.yaml` to `local/marketview:v13`, build on TX2, import on `pi1`, roll out, and canary `/stock/AAPL`, `/multibagger`, and `/strategies`.
+  5. ⏸ (time-blocked, see above) **Run continuous calibration loop (`ops-tools/classifier_loop.py`):** Run `python3 ops-tools/classifier_loop.py run --horizon 91` from the workstation once `prediction_outcomes` has ≥6 resolved cross-sections to populate `__calibration__` in `stock_reports` and structured rows in `calibration_metrics`.
+- [x] ✅ 2026-11-13 **Price writers stored mid-session bars as closes (found by ML-1 + a Yahoo cross-check)** — fixed in
+  `marketdata-data:v7` (`manifests/_common/sessions.py`, manual §3 correction, F20 amended). Index history 2026-10-01→ re-fetched;
+  today's transitional partial rows (written by v6 before the roll) deleted once (743 NSE stock + 13 index rows). `v8` (live
+  2026-11-13): the writer also DELETEs a stored row it now skips, and drops zero-volume carry-forward bars (`phantom_bar()`);
+  both index fetchers WARN when a ticker has no closed bars (a transient Yahoo miss was silent). Canary: 20 symbols, 85 rows,
+  0 open-session rows, 0 phantoms.
+- [x] ✅ 2026-11-13 **NSE holiday phantom bars** (found via ML-1 `row_count_drop` on 09-14/10-02): 15,820 zero-volume
+  carry-forward rows on 124 NSE-closed days (1996–2026; none on US closed days) — fake 0 % returns in vol/momentum/EV-0.
+  Exact rows saved to `out/cleanup/nse-holiday-phantom-bars-2026-11-13.csv` (gitignored; restore = `\copy … from`), then deleted
+  in 5-year transactions (count matched). Prevention ships in `marketdata-data:v8`. Watch item: the next `stock-prices` run should log
+  no 11-13-style NSE partials, and `^NSEI` should gain a bar every NSE trading day.
+- [x] ✅ 2026-11-13 **marketview v14** — `/scorecard` links `/reports/__calibration__` only once calibration rows exist (was a 404).
+- [ ] 🤔 **INDIAGLYCO.NS (2026-09-02) / HEGAM.NS (2026-09-07) unadjusted demerger-like drops** — Yahoo records no action; adj_close
+  is discontinuous for those two names (manual §4). Needs a corporate-action source with demerger ratios (e.g. NSE CA feed) — owner call
+  whether it is worth wiring in for 2 names.
+- [x] ✅ 2026-11-12 **MarketView UI surface extensions for Schema 25 tables** — all three shipped in `marketview:v13` (marketview `2bc56de`: `/sectors` reads `v_sector_latest` + 4 lens columns with derivation footnotes; `/scorecard` calibration table from `v_latest_calibration`, empty state until ~11-26; method catalog drawer on `/strategies`). Note: the scorecard's `/reports/__calibration__` link 404s until the first calibration run writes that report.
   `/stock/{symbol}`, `/multibagger`, `/strategies`, and `/reports/__calibration__` already render the dual-lens models; three optional UI enhancements remain:
   1. **`/sectors` (`sectors.html` + `SQLS["sectors"]` in `marketview/app/db.py`):** Expose the 4 new `sector_metrics` columns (`median_practitioner_upside_pct`, `median_academic_upside_pct`, `median_gpa`, `median_f_score`) alongside `median_upside_pct`.
   2. **`/scorecard` (`scorecard.html`):** Render a structured calibration table directly from `v_latest_calibration` (`calibration_metrics`: Factor Rank ICs, Archetype Cohort Excess Returns, Multibagger Gate Marginal Value GMV, and Shrinkage-Proposed Factor Weights) in addition to the `/reports/__calibration__` markdown link.
   3. **34-Row Method & Metric Reference Drawer (`v_valuation_methods`):** Render the full 34-row `valuation_methods` catalog (15 valuations, 8 scientific diagnostics, 5 factor pillars, 2 composites, 2 archetype taxonomies, 2 multibagger screens with formulas and peer-reviewed sources) on `/strategies` or `/scorecard`.
-- [ ] 🔶 **Open Data & Accounting Enhancements (`DG-20`, `EV-19`, `EV-20`):**
-  1. **Cash & Short-Term Investments (`cash_and_equivalents`, `DG-20`):** Add `CashAndCashEquivalentsAtCarryingValue` / `CashCashEquivalentsAndShortTermInvestments` to `EDGAR_MAP` in `stock_fundamentals.py` and `nse_fundamentals.py` if exact `net_debt = total_debt - cash` is desired for `ev_ebitda_peer`, `damodaran_fcff`, `epv`, and `owner_earnings` (currently uses gross `total_debt` without cash credit by design per ADR 0026 / ADR 0030).
-  2. **Post-Earnings-Announcement Drift (`EV-19` PEAD / SUE):** Compute standardized quarterly EPS surprise (`SUE = (EPS_q - EPS_{q-4}) / sigma`) on the filing date using `earnings_calendar` (Schema 19) + quarterly `financial_facts` (`duration_days BETWEEN 75 AND 105`), and test against `ev0.py` §5 acceptance rules.
-  3. **Point-in-Time Fundamental Panel Backtest (`EV-20`):** Reconstruct historical Value and Quality factor sleeves at each month-end from first-filed `financial_facts` in `ops-tools/ev0.py` to test fundamental sleeves with the same Newey-West / Fama-MacBeth rigor as price signals.
+- [ ] 🤔 **Open Data & Accounting Enhancements (`DG-20`, `EV-19`, `EV-20`):** EV-19/EV-20 ✅ tested (FAIL); DG-20 data half ✅; **remaining = owner decision** on the net-debt bridge (below).
+  1. ✅ data half 2026-11-12: `cash_and_equivalents` added to `EDGAR_MAP` + `YF_MAP` in `stock_fundamentals.py` (`marketdata-data:v6`; fills on the Saturday `stock-fundamentals` run). NSE results filings carry no balance sheet, so India cash comes from the yfinance leg only. 🤔 **Owner:** switching `epv`/`damodaran_fcff`/`ev_ebitda_peer`/`owner_earnings` to net debt reverses ADR 0026/0030's deliberate no-cash-credit stance — needs an ADR amendment, not done. **Cash & Short-Term Investments (`cash_and_equivalents`, `DG-20`):** Add `CashAndCashEquivalentsAtCarryingValue` / `CashCashEquivalentsAndShortTermInvestments` to `EDGAR_MAP` in `stock_fundamentals.py` and `nse_fundamentals.py` if exact `net_debt = total_debt - cash` is desired for `ev_ebitda_peer`, `damodaran_fcff`, `epv`, and `owner_earnings` (currently uses gross `total_debt` without cash credit by design per ADR 0026 / ADR 0030).
+  2. **Post-Earnings-Announcement Drift (`EV-19` PEAD / SUE):** Compute standardized quarterly EPS surprise (`SUE = (EPS_q - EPS_{q-4}) / sigma`) on the filing date using `earnings_calendar` (Schema 19) + quarterly `financial_facts` (`duration_days BETWEEN 75 AND 105`), and test against `ev0.py` §5 acceptance rules. ✅ **Tested 2026-11-12** (`ev0.py export-pit`/`run-pit`, roadmap §5c): **FAIL §5** — SP500 IC 0.007 (t 1.0), NIFTY500 0.028 (t 2.7, biased universe); event date = `filed` (earnings_calendar has no history). Re-run NIFTY after EV-1 India.
+  3. **Point-in-Time Fundamental Panel Backtest (`EV-20`):** Reconstruct historical Value and Quality factor sleeves at each month-end from first-filed `financial_facts` in `ops-tools/ev0.py` to test fundamental sleeves with the same Newey-West / Fama-MacBeth rigor as price signals. ✅ **Tested 2026-11-12** (roadmap §5c): **FAIL §5** — SP500 value IC 0.004 (t 0.4), quality 0.006 (t 0.7); best component FCF yield t 1.8. India sleeves partial (NSE feed has no balance sheet). Composite unchanged.
 - [ ] 🔑 **OWNER-RUN: tailnet exposure of marketview + Grafana** (feature wave #3, ADR 0028 §6 — the
   agent permission system refuses to widen network exposure, by design). pi1 is on the tailnet.
   From the workstation (resolves the ClusterIPs, then configures serve on pi1 over ssh):
@@ -172,19 +287,56 @@ Both wired into bot.py COMMANDS + MENU, router SAFE_AI_COMMANDS, and nicknames.
   If `serve` asks for HTTPS certs, enable MagicDNS + HTTPS in the Tailscale admin console first.
   ClusterIPs survive pod restarts but not Service recreation — re-run the block if a svc is ever
   recreated (`tailscale serve status` shows the config; `tailscale serve reset` clears it).
-- [ ] 🔶 **Complete orin2 image import**: orin2 joined 2026-11-06 with zero local/* images; cordoned pending import.
-  orin2 joined 2026-11-06 with zero local/* images; cordoned pending import. Find SSH username (check `.hosts.env`), then:
-  1. ssh-keyscan orin2 >> .ssh_known_hosts (repo copy)
-  2. python3 ops-tools/getfile.py tx2 <user> /home/<user>/marketdata-data-v1.tar.gz /tmp/marketdata-data-v1.tar.gz
-  3. python3 ops-tools/putfile.py orin2 <user> /tmp/marketdata-data-v1.tar.gz /home/<user>/marketdata-data-v1.tar.gz
-  4. python3 ops-tools/runcmd.py orin2 <user> "echo @@PW@@ | sudo -S /usr/local/bin/k3s ctr -n k8s.io images import /home/<user>/marketdata-data-v1.tar.gz"
-  5. Optionally import marketdata-light-v1.tar.gz too.
-  6. kubectl uncordon orin2 — verify a one-off job lands on orin2 and Completes.
-  Skip orin1 (tainted gpu=orin:NoSchedule, STT/TTS voice only — no market-data images).
+- [x] ✅ 2026-11-13 **orin2 in service** — owner supplied its sudo password (kept out of every file; `runcmd.py` via the
+  `SSH_PASS` override). Imported `marketdata-data:v7` + `marketdata-light:v1` (the only images unpinned jobs use;
+  label `hardware=orin-cpu` keeps the `hardware=gpu` jobs off it), uncordoned, and canaried `fx-fetcher` + `factors-fetcher`
+  pinned to orin2 (10/10 pairs; FACTORS-OK 7,681 rows). **Every future data/light image cycle must import on orin2 too**
+  (its host key is pinned in `.ssh_known_hosts`; no `.hosts.env` alias and no `_creds.py` password slot yet — add an
+  `ORIN2_IP` alias + host-aware password like TX2's when convenient). orin1 stays STT/TTS-only (tainted).
+  **2026-11-15 update:** orin2 now runs **all 31 floating CronJobs** (the scheduler prefers it — 6 CPU / 7.6 GB
+  headroom, untainted, newest images); it also holds `marketdata-data:v8`. **The image obligation is now three nodes:
+  pi1 + pi3 + orin2** — a cycle that misses one produces `ErrImageNeverPull` on whichever node the scheduler picks.
+  **Orin2 holds NO market data and is not a SPOF:** no PVC or hostPath mount on either Orin node; all images exist on
+  pi1/pi3 as fallback; jobs write only to TimescaleDB on tx2. The real gap is *observability* — orin2 isn't pinged by
+  nodewatch, has no node-stats logger, no SSH alias.
 
-- [ ] 🔄 2026-10-27 **Universe expansion IN FLIGHT (ADR 0029): S&P 1500 + Nifty Total Market = 2,251
+- [ ] 🔴 **TX2 SSH credential is stale (found 2026-11-15).** `python3 ops-tools/runcmd.py tx2 ahytx2-desktop '...'`
+  returns `CONNECT FAIL … Authentication failed.` from this workstation. The TX2 itself is **healthy**
+  (`timescaledb-0` Running, `llm-gateway` Running, `sentiment-scorer`/`headline-ner` Succeeded, 16/16 heartbeat feeds
+  fresh) — this is purely a credential gap, but it **blocks the §6 image cycle** (build → tarball → import → apply)
+  and makes the TX2 disk/eMMC check (§7) unverifiable. Fix `TX2_PASS` in `.secrets.env` (never in a tracked file)
+  and re-verify: `df -h / /mnt/tx2-ssd`, the §2 fixed-config facts, and one `runcmd.py tx2` round-trip.
+  **TX2 disk verified 2026-11-15 from inside `timescaledb-0`** (hostPath mount): eMMC `/dev/mmcblk0p1` at **60 %**
+  (15.5 G used of 27.4 G — up from 54% at the 2026-10-10 move, alert threshold 85%); SSD `/dev/sda4` pgdata at
+  **16 %** (23 G used of 157 G).
+
+- [ ] 🟠 **Orin nodes are unmonitored (found 2026-11-15).** orin1/orin2 (joined 2026-11-05) are missing from three
+  places: (a) `nodewatch.sh` on pi0 still pings only `pi0..pi3` + `tx2` — verified by reading
+  `/usr/local/bin/nodewatch.sh`; (b) neither node runs the AR-12 `node-stats-log.sh` host cron, so they contribute no
+  telemetry to `stats.csv`; (c) there is no `ORIN1_IP`/`ORIN2_IP` alias in `.hosts.env` and no `_creds.py` password
+  slot, so `ops-tools/runcmd.py` cannot reach them (no `vcgencmd`/throttle check, no image-import helper via that tool).
+  Direct `ssh orin1` / `ssh orin2` now works passwordless from the admin workstation (Tailscale IPs reachable),
+  but `ops-tools` host-aware commands still need `.hosts.env` + `_creds.py` entries.
+  Consequence: a failure of the node that runs **every floating CronJob** is invisible to the out-of-cluster watcher.
+
+- [ ] 🟡 **Admin-workstation clock skew (observed 2026-11-15).** The workstation clock was ~10 h 50 m behind UTC at the
+  start of the session and self-corrected mid-session (NTP sync). While skewed, `kubectl get` relative columns
+  ("LAST SCHEDULE 94m") and any freshness maths computed against the workstation clock are **wrong by that offset**.
+  Always compute freshness against the **cluster/DB** clock (`kubectl` timestamps, `pipeline_heartbeat.last_check`),
+  never against the local workstation clock. Worth a `timedatectl show -p NTPSynchronized` sanity check at the start
+  of a health run.
+
+- [ ] 🟡 **Pre-commit guard false-positives on the LLM provider name (found 2026-11-15).** `LLM_PROVIDER` in the
+  gitignored `.secrets.env` is a **vendor identifier, not a credential**, but the guard treats every non-`WEAK_KEYS`
+  entry as a strong secret — so **any newly added line containing that literal is blocked**, even in documentation
+  ("the NVIDIA device plugin", the GPU resource key, the GPU RuntimeClass). The 2026-11-15 doc refresh had to reword
+  around it. Fix options: move `LLM_PROVIDER` next to `PI_PASS`/`TX2_PASS` in `WEAK_KEYS` (match only in credential
+  context), or give the guard an explicit "non-secret identifier" list. The guard was **not** weakened in the doc pass
+  — this needs an owner decision.
+
+- [x] ✅ 2026-11-13 (corporate-actions pass COMPLETE: `ACTIONS-BACKFILL-OK ok=1140 warn=0 … adj_rows=245`, `job_state` cursor NULL — every adj_close now CA-verified) **Universe expansion (ADR 0029): S&P 1500 + Nifty Total Market = 2,251
   names** (`screener:v25`, `yfinance-fetcher:v6` with ^SP400/^SP600/NIFTY_MICROCAP250.NS benchmarks,
-  `telegram-digest:v27` universe aliases, `marketview:v5` benchmark map). Fill-in sequence: (1) ✅ universe-refresh → 2,251 active; (2) 🔄 corporate-actions backfill RUNNING (cursor at ABFRL.NS, all 2,248 symbols); (3) ✅ prices backfill COMPLETE 2026-10-28: 1,276/1,289 symbols, 7.2M rows, 5.56M adj_closes, 0 anomalies — ⚠ those adj_closes were computed while (2) was still running; the original ordering invariant (CA before adj_close, so it computes right) means a symbol's adj_close is only trustworthy once (2)'s cursor has passed it (the backfill runs `recompute_adj_close()` per symbol), and the full set only when (2) ends with `cursor cleared`; (4) 🔄 stock-fundamentals backfill RUNNING (cursor at AARTIPHARM.NS, all 2,251 symbols — started early 2026-10-29 ahead of the 10-31 Saturday cadence); (5) ⏳ daily chain (metrics → scores → valuations → reports → predictions) covers new universes once fundamentals land. Mark ✅ when `/screener?universe=SP600` shows ranked rows with valuations. ⚠ Deferred into the NEXT screener/marketview image cycles: microcap benchmark → ^CRSLDX in predictions.BENCH + marketview BENCHMARK. Full-market (~8–11k) deliberately NOT planned.
+  `telegram-digest:v27` universe aliases, `marketview:v5` benchmark map). Fill-in sequence: (1) ✅ universe-refresh → 2,251 active; (2) 🔄 corporate-actions backfill RUNNING (cursor at ABFRL.NS, all 2,248 symbols); (3) ✅ prices backfill COMPLETE 2026-10-28: 1,276/1,289 symbols, 7.2M rows, 5.56M adj_closes, 0 anomalies — ⚠ those adj_closes were computed while (2) was still running; the original ordering invariant (CA before adj_close, so it computes right) means a symbol's adj_close is only trustworthy once (2)'s cursor has passed it (the backfill runs `recompute_adj_close()` per symbol), and the full set only when (2) ends with `cursor cleared`; (4) 🔄 stock-fundamentals backfill RUNNING (cursor at AARTIPHARM.NS, all 2,251 symbols — started early 2026-10-29 ahead of the 10-31 Saturday cadence); (5) ⏳ daily chain (metrics → scores → valuations → reports → predictions) covers new universes once fundamentals land. Mark ✅ when `/screener?universe=SP600` shows ranked rows with valuations. **2026-11-12: that criterion is MET** (scored/valued vs active members: SP500 503/501 of 503, SP400 399/394 of 400, SP600 594/580 of 603, NIFTY500 495/486 of 496, MICROCAP250 248/239 of 249) — but **(2) had STALLED**: `job_state.corporate_actions_backfill` frozen at JYOTICNC.NS since 2026-10-31 (the Job died in the 11-04→11-08 image outage). Resumed 2026-11-12 ~18:50 UTC on `marketdata-data:v6` (1,140 symbols left, 4 h deadline — re-apply the single Job doc from `backfills.yaml` if it times out; it resumes from the cursor). Close this item when its log prints `cursor cleared`; until then adj_close for symbols after JYOTICNC.NS is not yet CA-verified. ⚠ Deferred into the NEXT screener/marketview image cycles: microcap benchmark → ^CRSLDX in predictions.BENCH + marketview BENCHMARK. Full-market (~8–11k) deliberately NOT planned.
 
   **2026-11-08 addition:** forced backfill of all active fetchers ran after image recovery (prices/funds/TA/screener/report/valuation all Completed on pi3); NSE-fundamentals and stock-fundamentals backfills skipped due to NSE rate-limiting and 2251-symbol duration — both will complete on their regular schedules. Data current through Fri 2026-11-06.
 - [x] ✅ 2026-10-27 **Feature wave 1–8 deployed (ADR 0028):** prediction scorecard (schema 18,
@@ -625,6 +777,12 @@ Full evidence and rationale: `architecture-review-2026-10-10.md`. Order = its §
     `851c663e…` identical on both ends, removed from pi2 `/tmp`. ✅ **Recurring since 2026-10-18:** `ops-tools/pull-k3s-backup.sh` (adds
     `server/tls` + `server/cred` so a rebuilt pi2 keeps the cluster CA; load gate: skips if pi2 load1 > 3; keeps 14), workstation cron 03:30 local;
     restore steps in ops manual §9. 🔶 **Restore never rehearsed** — drill it on a spare SSD before relying on it. Cron needs the workstation on at 03:30.
+    - ✅ **2026-11-15 in-cluster fast-path copy added:** `pull-k3s-backup.sh` now also pushes each archive to pi3 at
+      `~/k3s-cp-backups/k3s-cp-backup-<date>.tar.gz` (mode 600, keeps 7), so a restore can start from the cluster without waiting
+      on the workstation. Workstation copy remains the primary off-cluster DR copy.
+      ✅ **2026-11-15 fixed (review):** the first target was under the pod-mounted `/var/lib/market-data/backups` hostPath
+      (secrets readable from `pg-backup`/`restore-drill`) and never landed (root-owned dir, error hidden). Now the pi3 user's
+      `~/k3s-cp-backups/` (700/600, sha256 re-verified on pi3); first copy landed and verified 2026-11-15.
   - Off-site copy: **needs an owner decision** — no cloud tool or remote is configured on the workstation (no rclone/restic/aws/b2). Pick a
     destination + encryption (e.g. `restic` to B2/S3, or rclone crypt); dumps hold `bot_users` chat ids and the k3s archive holds the join token.
 - [ ] 🔶 **AR-11 (Phase 0)** fix `pg-backup` — **applied + canary-validated 2026-10-11 ~23:40 UTC (not by this session — applied

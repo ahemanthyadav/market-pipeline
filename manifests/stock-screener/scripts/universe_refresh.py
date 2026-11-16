@@ -102,6 +102,10 @@ def nse_universe(universe, url, limit):
         sym = (r.get("Symbol") or "").strip()
         if not sym or (r.get("Series") or "").strip() != "EQ":
             continue
+        if sym.upper().startswith("DUMMY"):
+            # NSE parks a placeholder row in index files after a demerger (DUMMYHEG,
+            # DUMMYINXGN seen 2026-11): not a listed company, never has Yahoo data.
+            continue
         rows.append((universe, f"{sym}.NS", (r.get("Company Name") or sym).strip(),
                      (r.get("Industry") or "").strip() or None,
                      (r.get("ISIN Code") or "").strip() or None,

@@ -102,6 +102,20 @@ class FullYearOnly(unittest.TestCase):
         self.assertEqual([v for _ts, v in out["MSFT"]], [3.0, 2.0, 1.0])
 
 
+class Dg20CashCapture(unittest.TestCase):
+    """DG-20 (2026-11-12): cash is captured on both legs as a balance-sheet instant."""
+
+    def test_cash_mapped_on_both_legs_as_instant(self):
+        self.assertIn("cash_and_equivalents", sf.EDGAR_MAP)
+        self.assertIn("cash_and_equivalents", sf.YF_MAP)
+        self.assertNotIn("cash_and_equivalents", sf.FLOW)
+        self.assertNotIn("cash_and_equivalents", sf.EXCLUDE_LATEST)
+
+    def test_existing_tags_untouched(self):
+        # append-only map: adding cash must not reorder the debt tags
+        self.assertEqual(sf.EDGAR_MAP["total_debt"], ["LongTermDebtNoncurrent", "LongTermDebt"])
+
+
 class Ev9Extension(unittest.TestCase):
     """EV-9 full extension (2026-10-26): new statement lines flow end to end."""
 

@@ -59,6 +59,10 @@ EDGAR_MAP = {
     "shares_outstanding": ["CommonStockSharesOutstanding",         # instant count first,
                            "WeightedAverageNumberOfDilutedSharesOutstanding"],  # per-period fallback
     "dividends_paid": ["PaymentsOfDividendsCommonStock", "PaymentsOfDividends"],
+    # DG-20 2026-11-12: captured for a future net-debt bridge. Valuation still nets GROSS
+    # total_debt with no cash credit (ADR 0026/0030) until the owner decides otherwise.
+    "cash_and_equivalents": ["CashCashEquivalentsAndShortTermInvestments",     # instant
+                             "CashAndCashEquivalentsAtCarryingValue"],
 }
 # DG-11 / DF-08: Fallback COGS tags to derive gross_profit = total_revenue - cogs when
 # a filer omits the explicit GrossProfit XBRL tag.
@@ -90,6 +94,11 @@ YF_MAP = {
     "ocf": ["Operating Cash Flow", "OperatingCashFlow",
             "Total Cash From Operating Activities",
             "CashFlowFromContinuingOperatingActivities"],
+    # DG-20 (see EDGAR_MAP): balance-sheet cash; the India names get it from this leg only
+    # (NSE results filings carry no balance sheet).
+    "cash_and_equivalents": ["Cash Cash Equivalents And Short Term Investments",
+                             "CashCashEquivalentsAndShortTermInvestments",
+                             "Cash And Cash Equivalents", "CashAndCashEquivalents"],
 }
 INFO_RATIOS = {
     "pe": "trailingPE", "pb": "priceToBook", "ev_ebitda": "enterpriseToEbitda",

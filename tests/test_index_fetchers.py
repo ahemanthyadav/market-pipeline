@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "manifests/_common"))  # sessions.py
 FETCHERS = {
     "yfinance": ROOT / "manifests/ingestion/yfinance/yfinance-fetcher.py",
     "nse": ROOT / "manifests/ingestion/nse/nse-indices.py",

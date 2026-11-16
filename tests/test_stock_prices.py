@@ -26,6 +26,7 @@ sys.modules["psycopg"].OperationalError = type("OperationalError", (Exception,),
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "manifests" / "stock-screener" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
+sys.path.insert(0, str(SCRIPTS.parent.parent / "_common"))  # sessions.py
 import stock_prices as sp  # noqa: E402
 
 UTC = dt.timezone.utc
@@ -96,6 +97,50 @@ class TradeTs(unittest.TestCase):
         self.assertEqual(stamps, {dt.datetime(2026, 9, 7, tzinfo=UTC), dt.datetime(2026, 9, 8, tzinfo=UTC)})
         deletes = [p for q, p in conn.log if q.startswith("DELETE FROM stock_prices")]
         self.assertEqual(len(deletes), 2)  # idempotent DELETE+INSERT per (symbol, ts)
+
+
+class OpenSession(unittest.TestCase):
+    """2026-11-12: stock-prices fires 13:00 IST — today's NSE bar must not be stored."""
+
+    def test_mid_session_nse_bar_skipped_us_kept(self):
+        import sessions
+        real = sp.session_open
+        now = dt.datetime(2026, 11, 13, 7, 30, tzinfo=UTC)
+        sp.session_open = lambda sym, d: sessions.session_open(sym, d, now)
+        try:
+            conn = FakeConn()
+            df = bars(["2026-11-12", "2026-11-13"], tz="Asia/Kolkata")
+            self.assertEqual(sp.write_symbol(conn, "TCS.NS", df, "j"), 1)
+            stamps = {p[1] for q, p in conn.log if q.startswith("INSERT INTO stock_prices")}
+            self.assertEqual(stamps, {dt.datetime(2026, 11, 12, tzinfo=UTC)})
+            conn = FakeConn()
+            df = bars(["2026-11-11", "2026-11-12"], tz="America/New_York")
+            self.assertEqual(sp.write_symbol(conn, "AAPL", df, "j"), 2)
+        finally:
+            sp.session_open = real
+
+
+class PhantomBars(unittest.TestCase):
+    """2026-11-13: zero-volume carry-forward bars on NSE holidays are not stored."""
+
+    def test_rule(self):
+        self.assertTrue(sp.phantom_bar(0, 100.0, 100.0))
+        self.assertFalse(sp.phantom_bar(0, 101.0, 100.0))      # price moved: keep (old close-only data)
+        self.assertFalse(sp.phantom_bar(None, 100.0, 100.0))   # unknown volume is not zero
+        self.assertFalse(sp.phantom_bar(float("nan"), 100.0, 100.0))
+        self.assertFalse(sp.phantom_bar(0, 100.0, None))       # first bar of the window
+        self.assertFalse(sp.phantom_bar(500, 100.0, 100.0))
+
+    def test_holiday_bar_deleted_not_inserted(self):
+        conn = FakeConn()
+        df = bars(["2026-10-01", "2026-10-02", "2026-10-03"], tz="Asia/Kolkata")
+        df["Close"] = [448.4, 448.4, 452.0]
+        df["Volume"] = [1000, 0, 900]
+        self.assertEqual(sp.write_symbol(conn, "AADHARHFC.NS", df, "j"), 2)
+        ins = {p[1].day for q, p in conn.log if q.startswith("INSERT INTO stock_prices")}
+        dels = {p[1].day for q, p in conn.log if q.startswith("DELETE FROM stock_prices")}
+        self.assertEqual(ins, {1, 3})
+        self.assertIn(2, dels)   # a stored phantom is cleaned by the rewrite
 
 
 class SplitEvents(unittest.TestCase):

@@ -15,6 +15,8 @@ import pandas as pd
 import psycopg
 import yfinance as yf
 
+from sessions import closed_bars  # manifests/_common/sessions.py, copied into the image
+
 TICKERS = [
     # US
     "^GSPC", "^IXIC", "^DJI", "^RUT", "^VIX",
@@ -35,12 +37,11 @@ TICKERS = [
 
 
 def fetch_latest() -> dict:
-    """Return {ticker: (ts, open, high, low, close, volume)} for the latest valid row."""
+    """Return {ticker: [(ts, open, high, low, close, volume), ...]} — every closed bar in the window."""
     # Backfills set BACKFILL=1 plus FETCH_PERIOD (5y, max, ...) or FETCH_START
     # (YYYY-MM-DD, wins over the period) to bound how far back they reach.
     start = os.environ.get("FETCH_START")
     span = {"start": start} if start else {"period": os.environ.get("FETCH_PERIOD", "5d")}
-    backfill = os.environ.get("BACKFILL", "0") == "1"
     data = yf.download(
         " ".join(TICKERS),
         **span,
@@ -58,7 +59,10 @@ def fetch_latest() -> dict:
             if df.empty:
                 print(f"WARN no data for {ticker}", flush=True)
                 continue
-            frame = df if backfill else df.iloc[[-1]]
+            # Daily mode rewrites the WHOLE fetch window (was: newest bar only — a missed
+            # or mid-session day was then never corrected); open sessions are dropped
+            # below so a partial bar is never stored as a close (sessions.py, 2026-11-12).
+            frame = df
             out = []
             for ts, bar in frame.iterrows():
                 ts = ts.to_pydatetime()
@@ -76,7 +80,13 @@ def fetch_latest() -> dict:
                     num("Close"),
                     None if pd.isna(vol) else int(vol),
                 ))
-            rows[ticker] = out
+            kept = closed_bars(ticker, out)   # backfills too: never store an open session
+            if len(kept) < len(out):
+                print(f"{ticker}: skipped {len(out) - len(kept)} open-session bar(s)", flush=True)
+            if kept:
+                rows[ticker] = kept
+            else:
+                print(f"WARN {ticker}: no closed bars in the window", flush=True)
         except Exception as exc:  # noqa: BLE001 - per-ticker failure must not kill the batch
             print(f"WARN {ticker} failed: {exc}", flush=True)
     return rows

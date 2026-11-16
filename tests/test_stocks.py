@@ -446,6 +446,35 @@ class IndexQuantTest(unittest.TestCase):
         self.assertEqual(n_pe, 1)
         self.assertEqual(n_pb, 0)
 
+    def test_distinct_on_keeps_latest_pe_and_pb_per_symbol(self):
+        # Regression (2026-11-15 review): DISTINCT ON (symbol) kept only the "pb"
+        # row per symbol, so every index card showed "P/E (median) –". This fake
+        # applies the query's own DISTINCT ON key, like Postgres would.
+        import re
+        hist = [  # (symbol, metric, ts, value) — newest ts must win per key
+            ("AAPL", "pb", 2, 40.0), ("AAPL", "pe", 1, 25.0), ("AAPL", "pe", 2, 30.0),
+            ("MSFT", "pb", 2, 10.0), ("MSFT", "pe", 2, 35.0),
+        ]
+
+        def q(sql, args=()):
+            if "universe_constituents" in sql:
+                return [("AAPL",), ("MSFT",)]
+            if "market_cap" in sql:
+                return []
+            keys = [k.strip() for k in re.search(r"DISTINCT ON \(([^)]*)\)", sql).group(1).split(",")]
+            seen, out = set(), []
+            for sym, metric, ts, val in sorted(hist, key=lambda r: (r[0], r[1], -r[2])):
+                k = tuple({"symbol": sym, "metric": metric}[c] for c in keys)
+                if k not in seen:
+                    seen.add(k)
+                    out.append((sym, metric, val))
+            return out
+
+        pe, pb, _, n_pe, n_pb = stocks.index_quant(q, "SP500")
+        self.assertEqual((n_pe, n_pb), (2, 2))
+        self.assertEqual(pe, 32.5)               # median of latest P/Es 30 and 35
+        self.assertEqual(pb, 25.0)
+
     def test_no_members_returns_none(self):
         db = FakeDB([("universe_constituents", [])])
         self.assertIsNone(stocks.index_quant(db, "SP600"))

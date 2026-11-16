@@ -146,5 +146,31 @@ class UniverseExpansionTest(unittest.TestCase):
             self.assertIn(m, valuation.FALLBACK_10Y)
 
 
+class NseUniverseDummyFilter(unittest.TestCase):
+    """2026-11-12: NSE index files carry DUMMY placeholder rows after demergers."""
+
+    def test_dummy_rows_skipped(self):
+        import universe_refresh as ur
+        csv_text = ("Company Name,Industry,Symbol,Series,ISIN Code\n"
+                    "HEG Ltd.,Capital Goods,HEG,EQ,INE545A01024\n"
+                    "Dummy HEG,Capital Goods,DUMMYHEG,EQ,DUMMY0000001\n"
+                    "Infra Co,Construction,INXGN,BE,INE000000001\n")
+
+        class Resp:
+            text = csv_text
+            headers = {"content-type": "text/csv"}
+
+            def raise_for_status(self):
+                pass
+
+        real = ur.requests.get
+        ur.requests.get = lambda *a, **k: Resp()
+        try:
+            rows = ur.nse_universe("NIFTY500", "http://x", None)
+        finally:
+            ur.requests.get = real
+        self.assertEqual([r[1] for r in rows], ["HEG.NS"])
+
+
 if __name__ == "__main__":
     unittest.main()

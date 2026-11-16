@@ -43,6 +43,8 @@ import pandas as pd
 import psycopg
 import yfinance as yf
 
+from sessions import session_open  # manifests/_common/sessions.py, copied into the image
+
 
 def trade_ts(ts):
     """00:00 UTC on the bar's trade date (ADR 0013), whatever tz the index carries."""
@@ -191,9 +193,18 @@ def get_symbols(cur, limit=None):
     return syms[:limit] if limit else syms
 
 
+def phantom_bar(volume, close, prev_close):
+    """Pure. A zero-volume bar that repeats the previous close is a carry-forward
+    placeholder (Yahoo, NSE holidays), not a session. Missing volume is NOT zero."""
+    if volume is None or pd.isna(volume) or prev_close is None or close is None:
+        return False
+    return float(volume) == 0 and close == prev_close
+
+
 def write_symbol(conn, symbol, df, job):
     """Atomic per-symbol write + job_state cursor. Returns rows written."""
     written = 0
+    prev_close = None
     with conn.transaction():
         with conn.cursor() as cur:
             for ts, bar in df.iterrows():
@@ -206,8 +217,19 @@ def write_symbol(conn, symbol, df, job):
 
                 vol = bar.get("Volume")
                 bar_ts = trade_ts(ts)
+                close = num("Close")
                 cur.execute("DELETE FROM stock_prices WHERE symbol=%s AND ts=%s",
                             (symbol, bar_ts))
+                if session_open(symbol, bar_ts.date()):
+                    # 23:30 PT = 13:00 IST: today's NSE bar is mid-session; the next run
+                    # (5-day window) writes it final. Never store a partial close — and
+                    # the DELETE above clears one stored by an earlier run (2026-11-13).
+                    continue
+                if phantom_bar(vol, close, prev_close):
+                    # Yahoo emits zero-volume carry-forward bars on NSE holidays (15,820 rows
+                    # on 124 closed days, 1996-2026): no trade, no information, fake 0 % return.
+                    continue
+                prev_close = close
                 # adj_close starts equal to close: correct for the newest bars (no later
                 # dividend exists yet). recompute_adj_close() runs after any write that
                 # can change older factors (full history, or a dividend in the window).
@@ -215,7 +237,7 @@ def write_symbol(conn, symbol, df, job):
                 cur.execute("INSERT INTO stock_prices (symbol, ts, open, high, low, "
                             "close, adj_close, volume) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
                             (symbol, bar_ts, num("Open"), num("High"),
-                             num("Low"), num("Close"), num("Close"),
+                             num("Low"), close, close,
                              None if vol is None or pd.isna(vol) else int(vol)))
                 written += 1
             cur.execute("INSERT INTO job_state (job_name, last_key, updated_at) "

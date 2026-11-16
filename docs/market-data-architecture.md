@@ -30,7 +30,7 @@ Yahoo Finance · NSE API · FRED · RSS feeds · NSE FII/DII · RBI rates widget
 SEC EDGAR + Wikipedia/NSE archives (screener layer)
 │ daily pulls from Pi workers (keyless except FRED); hourly fast-movers
 ▼
-k3s CronJobs, namespace market-data — schedules fire NODE-LOCAL PDT (ADR 0002)
+k3s CronJobs, namespace market-data — schedules fire NODE-LOCAL (America/Los_Angeles) (ADR 0002)
 RBI 07:00 → NSE 11:15 → FII/DII 14:00 → yfinance 22:30 → fx 23:00 →
 yields 23:15 → rates 23:20 → news 23:45 (stage) → sentiment 00:15 (TX2) →
 TA 00:30 → headline-ner 00:45 (TX2) → backup 01:30 → health 01:45 →
@@ -141,7 +141,7 @@ flowchart TB
 
 ```mermaid
 flowchart TB
-    subgraph IN["Ingestion CronJobs — schedules fire node-local PDT (ADR 0002)"]
+    subgraph IN["Ingestion CronJobs — schedules fire node-local (America/Los_Angeles) (ADR 0002)"]
         direction LR
         RBIJ["rbi-fetcher<br/>07:00 daily"]
         NSEJ["nse-fetcher<br/>11:15 daily"]
@@ -219,15 +219,17 @@ whole DB via `pg_dump`.*
 
 ## 2. Infrastructure
 
-### 2.1 Nodes (all k3s Ready, verified 2026-10-03)
+### 2.1 Nodes (all k3s Ready, verified 2026-11-15)
 
 | Node | Hardware | LAN IP | Tailscale IP | k3s | Role |
 |---|---|---|---|---|---|
-| pi0 | Pi 1 B+, 512 MB | <pi0-ip> | — (not on tailnet) | — | Pi-hole v6.4.3 + unbound (DNS) |
-| pi1 | Pi 3 B, 1 GB, 233 GB SSD | <pi1-ip> | <pi1-tailnet-ip> | agent v1.36.4 | Worker — ingestion pool |
-| pi2 | Pi 3 B+, 1 GB | <pi2-ip> | <pi2-tailnet-ip> | server v1.36.4+k3s1 | **Control-plane — fragile, see §9** |
+| pi0 | Pi 1 B+, 512 MB | <pi0-ip> | — (not on tailnet) | — | Pi-hole v6.4.3 + unbound (DNS) — not a k8s node |
+| pi1 | Pi 3 B, 1 GB, 233 GB SSD | <pi1-ip> | <pi1-tailnet-ip> | agent v1.36.4 | Worker — Telegram bot + marketview (pinned) |
+| pi2 | Pi 3 B+, 1 GB | <pi2-ip> | <pi2-tailnet-ip> | server v1.36.4+k3s1 | **Control-plane — fragile + cordoned, see §9** |
 | pi3 | Pi 3 B, 1 GB | <pi3-ip> | <pi3-tailnet-ip> | agent v1.36.4 | Worker — Grafana + pg-backup pinned here |
-| ahytx2-desktop | Jetson TX2, 7.7 GB RAM | <tx2-ip> (DHCP, router-reserved) | <tx2-tailnet-ip> | agent pinned v1.35.3+k3s1 | GPU/tainted worker + DB host |
+| ahytx2-desktop | Jetson TX2, 7.7 GB RAM | <tx2-ip> (DHCP, router-reserved) | <tx2-tailnet-ip> | agent pinned v1.35.3+k3s1 | GPU/tainted worker + DB host + LLM gateway + image build host |
+| orin1 | Jetson Orin Nano, 8 GB, 1× GPU | <orin1-ip> | — | agent v1.37.2 | Worker — tainted `gpu=orin`, reserved for the STT/TTS voice layer (**not deployed**) |
+| orin2 | Jetson Orin Nano, 8 GB, 1× GPU | <orin2-ip> | — | agent v1.37.2 | Worker — untainted; **where the floating CronJobs run** (since 2026-11-13) |
 
 - Network `<lan-cidr>`, gateway `<gateway-ip>`; LAN DNS = pi0. Admin from `<admin-host>`
   (<admin-tailnet-ip>) via `~/.kube/pi-cluster.yaml`.
@@ -607,53 +609,56 @@ layer (JOINs on ticker/symbol), not in DDL.*
 - Pod spec conventions: `imagePullPolicy: Never`, `PGHOST/PGUSER/PGPASSWORD/PGDATABASE`
   env (password via `secretKeyRef`), `restartPolicy: OnFailure`, `backoffLimit` 1–2,
   requests ~256 Mi/100m, limits ~512 Mi/500m, tiny job-history limits.
-- No node pinning (scheduler balances pi1/pi2/pi3; pi2 kept light by policy).
+- No node pinning (scheduler balances the workers — pi1, pi3, orin2; pi2 kept light by policy).
 - Idempotency rule (§1.1): DELETE+INSERT own `(key, ts)` rows — safe re-runs.
 - Validate changes with `kubectl create job --from=cronjob/<name>` + log check + DB row check.
 
-### 5.2 Schedule (node-local PDT — ADR 0002; telegram-digest is explicit IST)
+### 5.2 Schedule (node-local — ADR 0002; telegram-digest + llm-narrative are explicit IST)
 
 | CronJob | Schedule | Image | Writes to |
 |---|---|---|---|
-| nse-fetcher | 15 11 * * * | local/marketdata-data:v3 | index_prices (11 Indian indices: 9 Yahoo + ^CNXAUTO/^CNXFMCG NSE-direct since 2026-10-26) |
+| nse-fetcher | 15 11 * * * | local/marketdata-data:v8 | index_prices (11 Indian indices: 9 Yahoo + ^CNXAUTO/^CNXFMCG NSE-direct since 2026-10-26) |
 | fiidii-fetcher | 0 14 * * * | local/marketdata-light:v1 | capital_flows (FII/DII net) |
 | factors-fetcher | 0 11 2 * * | local/marketdata-light:v1 | factor_returns (US Ken French 5F+MOM, IN IIM-A four-factor — G-20; first mdjob/job_runs adopter) |
-| membership-history | 30 11 2 * * | local/marketdata-data:v3 | index_membership (EV-1, ADR 0025: point-in-time S&P 500 intervals from Wikipedia; full idempotent rebuild) |
-| stock-valuation | 10 2 * * * | local/marketdata-data:v3 | stock_valuations + sector_metrics (ADR 0026: 10-method intrinsic panel per symbol + daily sector aggregates; descriptive only) |
-| prediction-tracker | 40 2 * * * | local/marketdata-data:v3 | prediction_snapshots + prediction_outcomes (schema 18: write-once daily claims, resolved at 30/91/182d vs adjusted returns, benchmark-relative) |
+| membership-history | 30 11 2 * * | local/marketdata-data:v8 | index_membership (EV-1, ADR 0025: point-in-time S&P 500 intervals from Wikipedia; full idempotent rebuild) |
+| stock-valuation | 10 2 * * * | local/marketdata-data:v8 | stock_valuations + sector_metrics (ADR 0026: 10-method intrinsic panel per symbol + daily sector aggregates; descriptive only) |
+| prediction-tracker | 40 2 * * * | local/marketdata-data:v8 | prediction_snapshots + prediction_outcomes (schema 18: write-once daily claims, resolved at 30/91/182d vs adjusted returns, benchmark-relative) |
 | ml7b-per-symbol | 45 2 * * 6 | local/marketdata-light:v1 | ML-7b per-symbol narration for shortlist (~40 names), content-hash cached; writes llm_narratives kind=per_symbol |
-| earnings-calendar | 0 12 * * 0 | local/marketdata-data:v3 | earnings_calendar (schema 19: weekly yfinance refresh of upcoming earnings dates, all active constituents) |
-| accuracy-check | 30 12 * * 0 | local/marketdata-data:v3 | stock_reports `__accuracy__` (DQ-5: valuation internals recomputed in SQL, sector medians, membership drift, Stooq second-source price sample) |
+| earnings-calendar | 0 12 * * 0 | local/marketdata-data:v8 | earnings_calendar (schema 19: weekly yfinance refresh of upcoming earnings dates, all active constituents) |
+| accuracy-check | 30 12 * * 0 | local/marketdata-data:v8 | stock_reports `__accuracy__` (DQ-5: valuation internals recomputed in SQL, sector medians, membership drift, Stooq second-source price sample) |
 | research-watcher | 0 13 * * 1 | local/marketdata-light:v1 | research_items (ADR 0031: weekly paper collector — JF/JFE peer-reviewed feeds + NBER + arXiv; venue-tier + keyword scoring; append-only, never edits the curated Strategy Lab tiers) |
-| yfinance-fetcher | 30 22 * * * | local/marketdata-data:v3 | index_prices (29 tickers) |
-| fx-fetcher | 0 23 * * * | local/marketdata-data:v3 | fx_rates (10 pairs) |
-| yields-fetcher | 15 23 * * * | local/marketdata-data:v3 | bond_yields (^TNX/^FVX/^TYX/^IRX) |
-| rates-fetcher | 20 23 * * * | local/marketdata-data:v3 | interest_rates DFF + bond_yields DGS2/10/30 |
+| yfinance-fetcher | 30 22 * * * | local/marketdata-data:v8 | index_prices (29 tickers) |
+| fx-fetcher | 0 23 * * * | local/marketdata-data:v8 | fx_rates (10 pairs) |
+| yields-fetcher | 15 23 * * * | local/marketdata-data:v8 | bond_yields (^TNX/^FVX/^TYX/^IRX) |
+| rates-fetcher | 20 23 * * * | local/marketdata-data:v8 | interest_rates DFF + bond_yields DGS2/10/30 |
 | news-fetcher | 45 23 * * * | local/marketdata-light:v1 | raw_headlines (RSS staging) |
 | sentiment-scorer | 15 0 * * * | local/marketdata-ml:v1 (TX2 only) | news_sentiment |
-| ta-compute | 30 0 * * * | local/marketdata-data:v3 | technical_indicators |
+| ta-compute | 30 0 * * * | local/marketdata-data:v8 | technical_indicators |
 | headline-ner | 45 0 * * * | local/marketdata-light:v1 (TX2 only) | headline_entities + headline_events (ADR 0010) |
 | rbi-fetcher | 0 7 * * * | local/marketdata-light:v1 | interest_rates (IN_* policy rates) + bond_yields (IN_GS_*) |
-| telegram-digest | 0 8 * * * (Asia/Kolkata) | local/telegram-digest:v41 (pinned pi1) | Telegram digest (read-only) |
-| telegram-alerts | 45 2 * * * (node-local) | local/telegram-digest:v41, `args: alerts.py` (pinned pi1) | Telegram change alerts (read-only; silent when nothing changed) |
+| telegram-digest | 0 8 * * * (Asia/Kolkata) | local/telegram-digest:v42 (pinned pi1) | Telegram digest (read-only) |
+| telegram-alerts | 45 2 * * * (node-local) | local/telegram-digest:v42, `args: alerts.py` (pinned pi1) | Telegram change alerts (read-only; silent when nothing changed) |
 | llm-narrative | 40 7 * * * (Asia/Kolkata) | local/marketdata-light:v1 | llm_narratives — ML-7a AI market note via the shared llm-gateway (ADR 0022); digest shows it only if every number checks out |
 | news-embed | 0 1 * * * | local/marketdata-light:v1 | headline_embeddings — ML-2: embeds new headlines via the gateway `embed` capability, groups near-duplicates into stories (ADR 0024) |
-| ml1-anomalies | 0 2 * * * | local/marketdata-data:v3 | data_anomalies — ML-1: return/volume spikes, zero-volume bars, feed row-count + freshness drops |
-| ml3-volatility | 0 3 * * * | local/marketdata-data:v3 | vol_forecasts — ML-3: EWMA + GARCH(1,1) + GJR-GARCH volatility forecasts |
+| ml1-anomalies | 0 2 * * * | local/marketdata-data:v8 | data_anomalies — ML-1: return/volume spikes, zero-volume bars, feed row-count + freshness drops |
+| ml3-volatility | 0 3 * * * | local/marketdata-data:v8 | vol_forecasts — ML-3: EWMA + GARCH(1,1) + GJR-GARCH volatility forecasts |
 | pg-backup | 30 1 * * * | timescale/timescaledb:2.30.1-pg16 (pi3) | pi3 SSD dumps |
 | pipeline-health | 45 1 * * * | local/marketdata-light:v1 | pipeline_heartbeat (14 feeds incl. rbi; stock prices/scores 96 h since v5) |
-| intraday-fetcher | 10 * * * * | local/marketdata-data:v3 | fx_rates (hourly FX) + intraday_prices (GC/SI/CL/DXY) |
-| universe-refresh | 0 9 * * 0 | local/marketdata-data:v3 | universe_constituents + ticker_names (998) |
-| stock-prices | 30 23 * * * | local/marketdata-data:v3 | stock_prices (5d window) |
-| stock-fundamentals | 0 6 * * 6 | local/marketdata-data:v3 | stock_fundamentals (EDGAR US + yfinance NSE) |
-| stock-metrics | 0 2 * * * | local/marketdata-data:v3 | stock_metrics_daily |
-| stock-screener | 15 2 * * * | local/marketdata-data:v3 | stock_scores + screening_runs |
-| stock-report | 30 2 * * * | local/marketdata-data:v3 | stock_reports (top-25/universe + digest) |
-| nse-fundamentals | 0 10 * * 0 | local/marketdata-data:v3 | financial_facts `nse_cons`/`nse_sa` — India results filings (G-6, ADR 0021); **suspended until the first backfill completes** |
+| intraday-fetcher | 10 * * * * | local/marketdata-data:v8 | fx_rates (hourly FX) + intraday_prices (GC/SI/CL/DXY) |
+| universe-refresh | 0 9 * * 0 | local/marketdata-data:v8 | universe_constituents + ticker_names (998) |
+| stock-prices | 30 23 * * * | local/marketdata-data:v8 | stock_prices (5d window) |
+| stock-fundamentals | 0 6 * * 6 | local/marketdata-data:v8 | stock_fundamentals (EDGAR US + yfinance NSE) |
+| stock-metrics | 0 2 * * * | local/marketdata-data:v8 | stock_metrics_daily |
+| stock-screener | 15 2 * * * | local/marketdata-data:v8 | stock_scores + screening_runs |
+| stock-report | 30 2 * * * | local/marketdata-data:v8 | stock_reports (top-25/universe + digest) |
+| nse-fundamentals | 0 10 * * 0 | local/marketdata-data:v8 | financial_facts `nse_cons`/`nse_sa` — India results filings (G-6, ADR 0021); **unsuspended since the backfill completed (verified 2026-11-15)** |
 | fdi-watch | 0 9 1 * * | local/marketdata-light:v1 | logs only → manual INSERT |
 
-**Schedules are node-local PDT, not UTC** (verified 2026-10-04 — the "02:00-02:30"
-screener chain fired at 09:00-09:30 UTC). Functionally fine; see ops manual §3.
+**Schedules are node-local, not UTC** (verified 2026-10-04 — the "02:00-02:30"
+screener chain fired at 09:00-09:30 UTC). The controller follows `America/Los_Angeles`
+on pi2, so the offset is **UTC−7 in summer / UTC−8 in winter** — every node-local
+job's UTC instant shifts by an hour at the DST boundary. Functionally fine; see
+ops manual §3.
 
 One-shot Jobs (kept as manifests, run on demand): `backfill-yfinance-1y`, `backfill-nse-1y`
 (history seeding), `timescaledb-schema`, `timescaledb-write-test`.
@@ -719,8 +724,8 @@ One-shot Jobs (kept as manifests, run on demand): `backfill-yfinance-1y`, `backf
 
 ### 5.8 Telegram layer (2026-10-09, ADR 0009)
 
-- **Digest:** CronJob `telegram-digest`, 08:00 IST — the only job with an explicit
-  `timeZone` (schedules otherwise fire node-local PDT, ADR 0002). Read-only
+- **Digest:** CronJob `telegram-digest`, 08:00 IST — explicit `timeZone`
+  (schedules otherwise fire node-local, America/Los_Angeles, ADR 0002). Read-only
   SELECTs (market snapshot + screener digest), `sendMessage` only.
 - **Two-way listener:** Deployment `telegram-bot` (1×, pinned pi1, same image,
   `args: bot.py`) — the ONLY `getUpdates` consumer (Telegram 409s a second
@@ -766,7 +771,7 @@ sequenceDiagram
     participant UP as upstream feed
     participant DB as TimescaleDB (TX2)
 
-    CRON->>POD: schedule fires — node-local PDT (ADR 0002)
+    CRON->>POD: schedule fires — node-local (America/Los_Angeles) (ADR 0002)
     POD->>UP: pull this window's rows (yfinance / FRED / RSS / NSE / RBI scrape)
     UP-->>POD: quotes / headlines / flows
     POD->>DB: reads with conn.autocommit = True
@@ -1010,7 +1015,7 @@ tracked separately in §12.
 
 ## 11. File & repo structure
 
-### 11.1 Repo on the admin box — `~/Documents/piCluster/projects/marketdata/`
+### 11.1 Repo on the admin box — `~/Documents/passion_projects/projects/marketdata/`
 
 Reorganized 2026-10-03; run all `manifests/…` / `ops-tools/…` commands from this root.
 

@@ -661,21 +661,16 @@ def scientific_row(symbol, today, d, hist, size_pct=0.5):
             prac_arch, acad_arch, prac_comp, acad_comp, mb_prac, mb_acad, mb_lens)
 
 
-def ensure_schema_and_catalog(cur):
-    """Ensure key 25 tables/columns exist and upsert `VALUATION_CATALOG` into `valuation_methods`."""
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS valuation_methods (
-          method_key    TEXT PRIMARY KEY,
-          method_name   TEXT NOT NULL,
-          category      TEXT NOT NULL DEFAULT 'valuation',
-          lens          TEXT NOT NULL,
-          sub_school    TEXT NOT NULL,
-          source_ref    TEXT NOT NULL,
-          formula       TEXT NOT NULL,
-          target_table  TEXT NOT NULL DEFAULT 'stock_valuations',
-          display_order SMALLINT NOT NULL DEFAULT 0
-        )
-    """)
+def upsert_catalog(cur):
+    """Upsert `VALUATION_CATALOG` into `valuation_methods` (DML only).
+
+    The tables and columns themselves come from schema key 25
+    (`25-valuation-and-metrics-catalog.sql`, applied by schema-job as postgres).
+    2026-11-15: this used to repeat that DDL at runtime (CREATE TABLE / ALTER
+    TABLE ... ADD COLUMN IF NOT EXISTS), which only worked because pipeline_rw
+    had drifted into owning the tables; the documented contract is "no DDL"
+    (docs/database-contract.md §3), and ALTER TABLE needs ownership even when
+    the column already exists."""
     cur.executemany("""
         INSERT INTO valuation_methods (
           method_key, method_name, category, lens, sub_school,
@@ -691,57 +686,6 @@ def ensure_schema_and_catalog(cur):
           target_table  = EXCLUDED.target_table,
           display_order = EXCLUDED.display_order
     """, VALUATION_CATALOG)
-    for col, ctype in (
-        ("ev_ebitda_peer", "DOUBLE PRECISION"),
-        ("owner_earnings", "DOUBLE PRECISION"),
-        ("easton_mpeg", "DOUBLE PRECISION"),
-        ("intangible_ri", "DOUBLE PRECISION"),
-        ("total_payout_ddm", "DOUBLE PRECISION"),
-        ("practitioner_fair_value", "DOUBLE PRECISION"),
-        ("practitioner_methods", "INT"),
-        ("academic_fair_value", "DOUBLE PRECISION"),
-        ("academic_methods", "INT"),
-        ("all_fair_value", "DOUBLE PRECISION"),
-        ("all_methods", "INT"),
-    ):
-        cur.execute(f"ALTER TABLE stock_valuations ADD COLUMN IF NOT EXISTS {col} {ctype}")
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS stock_scientific_metrics (
-          symbol                 TEXT NOT NULL,
-          ts                     TIMESTAMPTZ NOT NULL,
-          universe               TEXT NOT NULL,
-          sector                 TEXT,
-          gpa                    DOUBLE PRECISION,
-          operating_accruals     DOUBLE PRECISION,
-          asset_growth_cma       DOUBLE PRECISION,
-          net_share_issuance     DOUBLE PRECISION,
-          piotroski_f_score      SMALLINT,
-          piotroski_f_tested     SMALLINT,
-          altman_z2              DOUBLE PRECISION,
-          altman_zone            TEXT,
-          practitioner_archetype TEXT,
-          academic_archetype     TEXT,
-          practitioner_composite DOUBLE PRECISION,
-          academic_composite     DOUBLE PRECISION,
-          mb_practitioner_score  DOUBLE PRECISION,
-          mb_academic_score      DOUBLE PRECISION,
-          mb_lens                TEXT,
-          PRIMARY KEY (symbol, ts)
-        )
-    """)
-    for col, ctype in (
-        ("mb_practitioner_score", "DOUBLE PRECISION"),
-        ("mb_academic_score", "DOUBLE PRECISION"),
-        ("mb_lens", "TEXT"),
-    ):
-        cur.execute(f"ALTER TABLE stock_scientific_metrics ADD COLUMN IF NOT EXISTS {col} {ctype}")
-    for col, ctype in (
-        ("median_practitioner_upside_pct", "DOUBLE PRECISION"),
-        ("median_academic_upside_pct", "DOUBLE PRECISION"),
-        ("median_gpa", "DOUBLE PRECISION"),
-        ("median_f_score", "DOUBLE PRECISION"),
-    ):
-        cur.execute(f"ALTER TABLE sector_metrics ADD COLUMN IF NOT EXISTS {col} {ctype}")
 
 
 def main() -> int:
@@ -816,7 +760,7 @@ def main() -> int:
                 ))
             with conn.transaction():
                 with conn.cursor() as cur:
-                    ensure_schema_and_catalog(cur)
+                    upsert_catalog(cur)
                     cur.execute("DELETE FROM stock_valuations WHERE ts = %s", (today,))
                     cur.executemany(
                         "INSERT INTO stock_valuations (symbol, ts, universe, close, "
