@@ -223,30 +223,20 @@ each with a regression test that fails on the old code. **Deploy is still pendin
 - [x] ✅ **R-6 `/sp500`, `/index` P/E always "–":** the query used `DISTINCT ON (symbol)`, which dropped the P/E row.
   - Fix: `DISTINCT ON (symbol, metric)`.
   - Test: `test_stocks.py` `test_distinct_on_keeps_latest_pe_and_pb_per_symbol` (the fake applies the query's own key).
-- [ ] 🔄 **Deploy R-1..R-6 — IN PROGRESS 2026-11-15 ~19:30 PST.**
-  - ✅ Tags bumped and committed (`63dcec2`). Built on TX2 from COPY-list contexts; **all 38 in-image file md5s = repo**.
-    Archived `telegram-digest-v43` / `marketdata-data-v9` in `/mnt/tx2-ssd/image-tarballs/` (`SHA256SUMS.all` regenerated).
-  - ✅ Imported: pi1 (`telegram-digest:v43` + `marketdata-data:v9`), pi3 (`marketdata-data:v9`).
-  - ✅ **telegram v43 LIVE:** digest + alerts CronJobs, bot rolled on pi1 ("listening as @Marketfredbot … + 3 member(s)").
-    Functional check left to the owner: `/sp500` should now show a P/E median.
-  - ✅ `apply-llm.sh`: the ConfigMap `factcheck.py` md5 = repo.
-  - ✅ **Schema LIVE:** Job `schema-review-1115`, SCHEMA-OK. md5 WARN only for keys 10 and 22 (expected). Views keep 31/31/19 columns.
-    `pipeline_rw` has INSERT on `valuation_methods`/`job_runs` and USAGE on all 3 public sequences.
-  - ⏸ **Waiting: orin2 import of `marketdata-data:v9`** (orin2 sudo needs the owner's password).
-    The tarball is staged at `orin2:/home/orin2/marketdata-data-v9.tar.gz` (sha256 `4a296c2a…` = archive). Owner runs, in their own terminal:
-    `ssh -t orin2 'sudo /usr/local/bin/k3s ctr -n k8s.io images import /home/orin2/marketdata-data-v9.tar.gz && rm /home/orin2/marketdata-data-v9.tar.gz'`
-  - 🔲 Then apply every manifest that references `marketdata-data:v9` (live CronJobs still on v8 until then).
-    **Do NOT apply them before orin2 has v9:** the floating jobs schedule onto orin2 and would hit `ErrImageNeverPull`.
-    Canary `stock-valuation` (VALUATION OK marker + today's `stock_valuations` rows) and `fx-fetcher`.
-  - 🔲 Then the ownership fix below, then one more `stock-valuation` canary.
-- [ ] 🤔 **Ownership drift — needs owner approval (non-SELECT SQL), run only AFTER `marketdata-data:v9` is live.**
-  - Live state: `pipeline_rw` owns `stock_valuations`, `stock_scientific_metrics`, `sector_metrics` and has CREATE on `public`.
-  - Cause: Schema 25 was first applied by `valuation.py` running as `pipeline_rw` (rollout step 1 below).
-  - Fix, as `postgres`:
-    `ALTER TABLE stock_valuations OWNER TO postgres; ALTER TABLE stock_scientific_metrics OWNER TO postgres;
-    ALTER TABLE sector_metrics OWNER TO postgres; REVOKE CREATE ON SCHEMA public FROM pipeline_rw;
-    GRANT SELECT, INSERT, UPDATE, DELETE ON stock_valuations, stock_scientific_metrics, sector_metrics TO pipeline_rw;`
-  - Then trigger one `stock-valuation` run and check `job_runs`.
+- [x] ✅ **Deployed R-1..R-6, 2026-11-15 19:15–19:40 PST.**
+  - Built on TX2 from COPY-list contexts; **all 38 in-image file md5s = repo**. Archived `telegram-digest-v43` /
+    `marketdata-data-v9` (`SHA256SUMS.all` regenerated).
+  - Imported: pi1 (both), pi3 + orin2 (data v9; orin2 by owner-run sudo).
+  - **telegram v43 live:** bot rolled on pi1, digest + alerts on v43. Owner check: `/sp500` P/E median.
+  - `apply-llm.sh`: the ConfigMap `factcheck.py` md5 = repo.
+  - **Schema** Job `schema-review-1115`: SCHEMA-OK. md5 WARN only for keys 10 and 22 (expected). Views keep 31/31/19 columns.
+  - **All 21 data CronJobs on v9** (live jsonpath; the 14 one-shot backfill Jobs in the same files were deliberately not applied).
+  - Canaries on orin2: `stock-valuation` VALUATION-OK 2,236 symbols (`job_runs` ok); `fx-fetcher` 10/10 pairs written.
+- [x] ✅ **Ownership drift fixed 2026-11-15 ~19:37 PST (owner-approved).** In one transaction, as postgres:
+  - `stock_valuations`, `stock_scientific_metrics` and `sector_metrics` (and their chunks) are now owned by `postgres`.
+  - `REVOKE CREATE ON SCHEMA public FROM pipeline_rw`; explicit DML grants re-issued.
+  - Verified: no public table is owned by `pipeline_rw`; grafana_ro/telegram_app SELECT intact.
+  - Re-canary `stock-valuation` as DML-only `pipeline_rw`: VALUATION-OK, still 2,236 rows (idempotent).
 - [ ] 🔶 **Review findings not yet fixed** (reported by reviewers, not independently re-verified; verify each before fixing):
   - Data:
     - `predictions.py` stores an absolute `adj_close` base, so splits book fake returns and outcomes are write-once.

@@ -57,7 +57,9 @@ from the gitignored `.secrets.env` only inside commands that consume it.
    source after the §8 prune incident — never skip it).
 6. **Distribute only where the workload can schedule**: pinned images
    (telegram, marketview → pi1) go to that node only; TX2-tainted images skip
-   distribution; unpinned CronJobs go to pi1/pi2/pi3. `getfile.py` →
+   distribution; unpinned CronJobs go to **pi1, pi3 and orin2** (since 2026-11-13 orin2 runs most of them; its sudo
+   needs the owner's password, so stage the tarball with `scp` (key auth) and ask the owner to import).
+   pi2 is cordoned: skip it. `getfile.py` →
    `putfile.py` → `k3s ctr -n k8s.io images import`. pi1/pi3 imports block
    1–2 min (fine); **pi2 imports run detached or they wedge the session**.
    Verify with `ctr images ls | grep <tag>` before applying anything.
@@ -73,6 +75,10 @@ kubectl -n market-data get cronjob <name> -o jsonpath='{.spec.jobTemplate.spec.t
 
 - **A sed'd yaml is not a deploy** — jsonpath the live object before believing
   anything.
+- **Files can mix CronJobs and one-shot backfill Jobs** (`*/backfill-job.yaml`,
+  `history/jobs.yaml`, `stock-screener/backfills.yaml`). After an image bump, apply
+  only the `kind: CronJob` documents; applying a backfill Job launches it. The
+  2026-11-15 v9 rollout extracted only the CronJob documents that use the data image (twenty-one) with a small yaml filter.
 - CronJobs: `kubectl create job <name>-validate --from=cronjob/<name>`,
   poll-capture the logs (failed pods vanish in ~1 min), check the script's
   OK-marker, then **trust the database, not the exit code** (row counts /

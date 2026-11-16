@@ -65,12 +65,11 @@ marketview's screener/sectors/markets/multibagger/strategy queries.
 All roles are created NOLOGIN in schema key 10; LOGIN + password are set
 out-of-band from their Secrets (`pipeline-db-rw` for `pipeline_rw`).
 
-**Known drift (found 2026-11-15, remediation pending owner approval):** live,
-`pipeline_rw` OWNS `stock_valuations`, `stock_scientific_metrics` and
-`sector_metrics` and has CREATE on `public` — leftovers of `valuation.py`
-running DDL at runtime (removed in code 2026-11-15, takes effect with the next
-`marketdata-data` image). Remediation SQL and order: `pending-tasks.md`
-(2026-11-15 review section).
+**Drift fixed 2026-11-15:** `pipeline_rw` had come to own `stock_valuations`,
+`stock_scientific_metrics` and `sector_metrics` and to hold CREATE on `public`,
+leftovers of `valuation.py` running DDL at runtime. That DDL was removed in
+`marketdata-data:v9`. Ownership was moved back to `postgres` and CREATE was
+revoked; the DML grants were kept. Valuation was re-verified working as DML-only.
 
 ## 4. Invariants every consumer may rely on
 
