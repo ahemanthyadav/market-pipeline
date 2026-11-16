@@ -46,10 +46,11 @@ the workspace `hardware/ROADMAP.md` + `hardware/CONTROL-PLANE-MIGRATION.md`.
   `--accept-dns=false --accept-routes=false` so it never rewrites its own resolver).
 - **Host jobs (root cron, every 5 min):**
   - `/usr/local/bin/node-stats-log.sh` → `/var/log/node-stats/stats.csv` (ADR 0011). Fixed 2026-10-11 — the crontab was empty.
-  - `/usr/local/bin/nodewatch.sh` → pings the cluster hosts + TCP-probes the k3s API, Telegram message only on state change
-    (6 h reminder). Deployed 2026-10-11; uses its own dedicated bot; secrets in `/etc/nodewatch.secrets` (mode 600).
-    It is the only alert path that does not live inside the cluster it watches. **As of 2026-11-15 the watch list still
-    covers the original five hosts — orin1/orin2 were added 2026-11-05 and are not being pinged.** Tracker §1.
+  - `/usr/local/bin/nodewatch.sh` → pings the cluster hosts (pi0..pi3, tx2, k3s-cp) + TCP-probes the k3s API at
+    `k3s-cp:6443`, Telegram message only on state change (6 h reminder). Deployed 2026-10-11; updated 2026-11-16 to
+    probe k3s-cp after the control-plane move; uses its own dedicated bot; secrets in `/etc/nodewatch.secrets` (mode 600).
+    It is the only alert path that does not live inside the cluster it watches. **orin1/orin2 (joined 2026-11-05) are not
+    being pinged yet.** Tracker §1.
 - **Not responsible for:** anything in k3s. It does not run an agent.
 - **Watch:** 512 MB RAM — keep it lean (no extra daemons). Past throttle flags `0x50000` seen before 2026-10-11;
   `0x0` since the reboot; 0 undervoltage events in `dmesg` at 08:41 UTC 2026-10-12 (up ~6 h). Power: on its own supply since ~02:30 UTC 2026-10-12 (was the shared multiport charger; tracker §1).

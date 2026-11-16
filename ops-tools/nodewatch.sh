@@ -11,7 +11,7 @@
 #
 # Config (read, never printed):
 #   hosts   : NODEWATCH_HOSTS_FILE (default: repo .hosts.env, else /etc/nodewatch.hosts)
-#             keys PI0_IP PI1_IP PI2_IP PI3_IP TX2_IP  (API port is checked on PI2_IP:6443)
+#             keys PI0_IP PI1_IP PI2_IP PI3_IP TX2_IP K3S_CP_IP  (API port is checked on K3S_CP_IP:6443)
 #   Telegram: NODEWATCH_SECRETS_FILE (default: repo local credentials file, else
 #             /etc/nodewatch.secrets, chmod 600) keys TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID
 #             — without them it only prints (same as --dry-run).
@@ -34,15 +34,16 @@ DRY=0; [ "${1:-}" = "--dry-run" ] && DRY=1
 
 get() { grep -m1 "^$2=" "$1" 2>/dev/null | cut -d= -f2- | tr -d "'\""; }   # get <file> <key>
 declare -A IP=( [pi0]="$(get "$HOSTS" PI0_IP)" [pi1]="$(get "$HOSTS" PI1_IP)" [pi2]="$(get "$HOSTS" PI2_IP)" \
-                [pi3]="$(get "$HOSTS" PI3_IP)" [tx2]="$(get "$HOSTS" TX2_IP)" )
-for n in pi0 pi1 pi2 pi3 tx2; do [ -n "${IP[$n]}" ] || { echo "nodewatch: no address for $n in hosts file" >&2; exit 2; }; done
+                [pi3]="$(get "$HOSTS" PI3_IP)" [tx2]="$(get "$HOSTS" TX2_IP)" \
+                [k3s-cp]="$(get "$HOSTS" K3S_CP_IP)" )
+for n in pi0 pi1 pi2 pi3 tx2 k3s-cp; do [ -n "${IP[$n]}" ] || { echo "nodewatch: no address for $n in hosts file" >&2; exit 2; }; done
 
 is_down_test() { [[ " ${NODEWATCH_TEST_DOWN:-} " == *" $1 "* ]]; }
 down=()
-for n in pi0 pi1 pi2 pi3 tx2; do
+for n in pi0 pi1 pi2 pi3 tx2 k3s-cp; do
   if is_down_test "$n" || { [ "${NODEWATCH_TEST_ONLY:-0}" != 1 ] && ! ping -c2 -W2 "${IP[$n]}" >/dev/null 2>&1; }; then down+=("$n"); fi
 done
-if is_down_test api || { [ "${NODEWATCH_TEST_ONLY:-0}" != 1 ] && ! timeout 4 bash -c "</dev/tcp/${IP[pi2]}/6443" 2>/dev/null; }; then down+=("k3s-api"); fi
+if is_down_test api || { [ "${NODEWATCH_TEST_ONLY:-0}" != 1 ] && ! timeout 4 bash -c "</dev/tcp/${IP[k3s-cp]}/6443" 2>/dev/null; }; then down+=("k3s-api"); fi
 
 now="$(date +%s)"; cur="${down[*]:-}"; prev="$(cat "$STATE/last" 2>/dev/null || true)"; lastsent="$(cat "$STATE/sent" 2>/dev/null || echo 0)"
 msg=""
