@@ -19,7 +19,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: backfill
-          image: local/marketdata-data:v8
+          image: local/marketdata-data:v9
           imagePullPolicy: Never
           command: ["python", "/scripts/fx-backfill.py"]
           env:

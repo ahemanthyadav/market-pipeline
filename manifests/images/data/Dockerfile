@@ -4,9 +4,10 @@
 # The screener already proved this pattern (one image, 12+ CronJobs via `command:`).
 #
 # Build natively on the TX2 (no registry, imagePullPolicy: Never):
-#   docker build -t local/marketdata-data:v8 .
-#   docker save local/marketdata-data:v8 | gzip > marketdata-data-v1.tar.gz
-#   k3s ctr -n k8s.io images import marketdata-data-v1.tar.gz  # on pi1/pi3 (+ pi2 detached)
+#   docker build -t local/marketdata-data:vN .     # N = the tag in the CronJob manifests
+#   docker save local/marketdata-data:vN | gzip > marketdata-data-vN.tar.gz
+#   k3s ctr -n k8s.io images import marketdata-data-vN.tar.gz  # on every node that runs floating jobs:
+#                                                              # pi1, pi3, orin2 (pi2 is cordoned)
 #
 # CronJobs using this image pass their script via `command:`:
 #   command: ["python", "fx-fetcher.py"]
