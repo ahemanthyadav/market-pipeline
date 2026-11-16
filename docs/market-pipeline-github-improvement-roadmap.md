@@ -1,5 +1,26 @@
 # Market Pipeline: Recommended Open-Source Improvements
 
+> **Review 2026-11-15: this is an external proposal, not an agreed plan.** It was written without
+> seeing the repo, so several P0/P1 items duplicate existing tooling or assume infrastructure that
+> doesn't exist. The document below is kept unedited. Verdicts after checking it against the repo:
+>
+> | Item | Verdict | Reason |
+> |---|---|---|
+> | Postgres Exporter (P0) | **Change approach** | There is **no Prometheus** in the cluster; Grafana has Postgres data sources only. Instead: a monitoring role with `pg_monitor` and Grafana panels on `pg_stat_*` / `pg_database_size`. Same visibility, no new service. Tracked in `pending-tasks.md`. |
+> | Soda Core (P0) | **Not now** | Mostly covered by ML-1 (`ops-tools/ml1.py`: bad bars, feed/row-count drops, scraper silence), `pipeline_heartbeat` freshness, `job_runs`, `accuracy_check.py` (DQ-5) and `data-gaps.md`. The real gap is duplicate-key and OHLC sanity rules, which will be added to ML-1 (tracked). Too heavy a dependency set for 1 GB arm64 nodes. |
+> | pgBackRest / PITR (P0) | **Partly done; PITR optional** | Nightly `pg-backup` dump, workstation pull, a passing `restore-drill-job.yaml` (2026-10-17: 30 s, 0 errors), and an off-site copy decided (Vostro, `restic`; tracker AR-11). PITR needs WAL archiving on the EOL TX2. Decide after the off-site copy runs, weighing the write-once tables (prediction snapshots, headlines, `bot_users`). |
+> | dbt Core (P1) | **Skip** | Schema keys + `v_*` contract views (ADR 0032, `database-contract.md`) already own the schema and lineage. dbt would be a second owner of views. |
+> | VectorBT (P1) | **Duplicates EV-0** | `ops-tools/ev0.py` already has point-in-time membership (ADR 0025), corporate actions, walk-forward/leakage tests (`ml0.py`) and the §5 gate. Its proposed first strategies (RSI mean reversion, MA momentum) are ones `evidence-based-signals-roadmap.md` rates as weakly backed. Check the open-source VectorBT's maintenance status first. |
+> | MLflow (P1/P2) | **Not yet** | `app.ml_runs` tracks experiments (ML-0). |
+> | ML4T / Zipline (P2/P3) | Defer | Only if EV-0 needs execution-aware simulation. |
+> | Financial-DataBase provenance (§3.8) | **Adopt as a review checklist** | `financial_facts` already keeps filing dates and EV-19/20 use them correctly. The 2026-11-15 branch review found G-21 `distress_score` joining on `period_end` (look-ahead), exactly this bug class. |
+> | Warehouse layers, Dagster, OpenTelemetry, Great Expectations | Don't | Agrees with §9 "What not to do yet". |
+>
+> **Out of date:** §5's hardware table predates the 2026-11-15 target layout (`node-roles.md` §1b: Orins
+> GPU-only, `k3s-cp` on the N100, Vostros off-site). Research belongs on the 3090 workstation, but mount
+> the SN850 spare partition first (`/home` is 95% full). §6 Phase 2 "build an isolated restore target"
+> already exists.
+
 **Engineering assessment and integration roadmap**\
 **Prepared:** 15 November 2026\
 **Scope:** Recommendations for the existing

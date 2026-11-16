@@ -182,7 +182,7 @@ python3 ops-tools/runcmd.py pi3 pi3 'echo @@PW@@ | sudo -S pg_restore -h timesca
 |---|---|---|
 | Control-plane restore **never rehearsed** | Open | Drill on spare SSD/SSD before relying on it |
 | Off-site backup copy | Open | No rclone/restic/aws/b2 on workstation; pick destination + encryption (AR-11) |
-| TX2 SSH credential stale | Blocks §6 cycle + TX2 disk checks | Fix `TX2_PASS` in `.secrets.env`; re-verify `df -h / /mnt/tx2-ssd` |
+| ~~TX2 SSH credential stale~~ | None: false alarm 2026-11-15 (wrong SSH user) | Use `runcmd.py tx2 ahytx2` (user `ahytx2`, not the hostname `ahytx2-desktop`) |
 | Orin nodes unmonitored | Open | Not in nodewatch, no node-stats-log, no SSH alias (AR-12 pattern never applied) |
 | pi2 persistent journald | Open | pi2 has no persistent journal; reboots leave no trace (proposed, owner's call) |
 | Voice layer not deployed | Open | orin1 reserved but manifests won't schedule (label/taint mismatch) |

@@ -5,8 +5,8 @@
 > **Last fully healthy cluster check: 2026-11-15** — 6 k3s nodes Ready (pi2 cordoned), 36 CronJobs live and **none
 > suspended**, TimescaleDB/Grafana/Telegram-bot/marketview/llm-gateway all Running, `pipeline_heartbeat` 16/16 feeds
 > `fresh`, 30 of the 31 jobs started in the last 26 h `Succeeded` (0 failures; `nse-fundamentals` still `Running` at
-> the check — long weekly job). TX2 SSH auth failed from the admin workstation that day, so the TX2 fixed-config and
-> disk checks were not re-run — the TX2 workloads themselves are healthy.
+> the check — long weekly job). The TX2 fixed-config checks were not re-run. An apparent SSH auth failure that
+> day was a wrong user (`ahytx2-desktop` is the hostname; the user is `ahytx2`), and the disk was checked later (eMMC 60%, SSD 16%).
 > **Recovery performed 2026-11-08:** restored `marketdata-data:v1` and `marketdata-light:v1` to pi1/pi3 containerd stores
 > after all fetchers failed with `ErrImageNeverPull` and `pipeline_heartbeat` froze at 2026-11-04; forced backfill of every
 > active fetcher; data current through Friday 2026-11-06 (markets closed weekend). See §8 for the full runbook entries.

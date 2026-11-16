@@ -9,7 +9,7 @@
 > last 26 h `Succeeded` (0 failures; `nse-fundamentals` still `Running` at the check — long weekly job);
 > `pipeline_heartbeat` **16/16 feeds fresh**; pi3 dump `marketdata-2026-11-15.dump` (539 MiB) present.
 > **orin2 now runs all 31 floating CronJobs** (image obligation is now pi1 + pi3 + orin2). **New items opened:
-> TX2 SSH credential stale (blocks §6), Orin nodes unmonitored (no nodewatch/host-cron/SSH alias), workstation clock
+> ~~TX2 SSH credential stale~~ (false alarm: wrong SSH user, corrected below), Orin nodes unmonitored (no nodewatch/host-cron/SSH alias), workstation clock
 > skew.** **Node-local schedules are America/Los_Angeles — UTC−7 summer / UTC−8 winter**, so every node-local job's
 > UTC instant shifts by an hour at the DST boundary (only `telegram-digest` + `llm-narrative` are explicit IST).
 > **Voice manifests are blocked**: they select `hardware: orin` but the Orin nodes are labelled `hardware=orin-cpu`
@@ -177,6 +177,24 @@ Both wired into bot.py COMMANDS + MENU, router SAFE_AI_COMMANDS, and nicknames.
 
 ## 1. Immediate (next checkpoint: tomorrow's `/health`)
 
+### 2026-11-15 open-source roadmap review (`market-pipeline-github-improvement-roadmap.md`)
+
+Verdicts are in the banner at the top of that doc. Taken forward:
+- [ ] 🔶 **DB health panels without Prometheus** (replaces the doc's postgres_exporter P0).
+  - Schema key: a NOLOGIN role in `pg_monitor`, or grant `pg_monitor` to `grafana_ro`; LOGIN/password out-of-band as usual.
+  - Grafana dashboard on `pg_stat_database` (connections, commits/rollbacks, temp bytes, deadlocks),
+    `pg_database_size` + largest hypertables/chunks, `pg_stat_user_tables` (dead tuples, last autovacuum), and TX2 disk free.
+  - Alerts: disk pressure, connection count.
+  - Bounded queries only; measure query cost on the TX2. ~1 session.
+- [ ] 🔶 **Duplicate-key + OHLC sanity rules in ML-1** (replaces the Soda pilot).
+  - Add to `ops-tools/ml1.py`: duplicate `(symbol, ts)` keys, `high >= max(open, close)`, `low <= min(open, close)`,
+    `volume >= 0`, and expected-vs-received symbol coverage per universe.
+  - Thresholds must be source-aware; corporate-action days are excluded via `corporate_actions`.
+  - Writes into `app.data_anomalies` like the existing rules, with tests in `tests/test_ml1.py`. Small.
+- [ ] 🤔 **PITR (pgBackRest) decision**, after the Vostro off-site copy (AR-11) is running.
+- Point-in-time provenance (doc §3.8) applies as a review checklist: every fundamentals join keys on the filing date.
+  The open G-21 `distress_score` fix is listed under the branch review below.
+
 ### 2026-11-15 branch review (`feat/telegram-v4-market-views` vs `main`)
 
 Three-area code review plus live read-only checks. Gates were green before it started. Six findings fixed in code,
@@ -205,7 +223,7 @@ each with a regression test that fails on the old code. **Deploy is still pendin
 - [x] ✅ **R-6 `/sp500`, `/index` P/E always "–":** the query used `DISTINCT ON (symbol)`, which dropped the P/E row.
   - Fix: `DISTINCT ON (symbol, metric)`.
   - Test: `test_stocks.py` `test_distinct_on_keeps_latest_pe_and_pb_per_symbol` (the fake applies the query's own key).
-- [ ] 🔶 **Deploy R-1/R-5/R-6 and the R-2/R-4 schema changes.** Blocked by the stale TX2 credential below (§6 needs TX2).
+- [ ] 🔶 **Deploy R-1/R-5/R-6 and the R-2/R-4 schema changes.** **Not blocked:** the "stale TX2 credential" was a wrong SSH user (corrected below), and the §6 cycle can run.
   1. `telegram-digest` v42→v43 (bot.py, stocks.py, factcheck.py); also `ops-tools/apply-llm.sh` (ships factcheck.py).
   2. `marketdata-data` v8→v9 (valuation.py, no runtime DDL).
   3. Apply the ConfigMap and run the schema job under a new name (`schema-review-1115`). Expect a one-time md5 WARN for keys 10 and 22.
@@ -302,7 +320,7 @@ each with a regression test that fails on the old code. **Deploy is still pendin
   pi1/pi3 as fallback; jobs write only to TimescaleDB on tx2. The real gap is *observability* — orin2 isn't pinged by
   nodewatch, has no node-stats logger, no SSH alias.
 
-- [ ] 🔴 **TX2 SSH credential is stale (found 2026-11-15).** `python3 ops-tools/runcmd.py tx2 ahytx2-desktop '...'`
+- [x] ✅ ~~**TX2 SSH credential is stale (found 2026-11-15).**~~ **Corrected 2026-11-15 (later): not a credential problem.** The failing call used `ahytx2-desktop` (the TX2's hostname) as the SSH *user*; the user is `ahytx2`. `python3 ops-tools/runcmd.py tx2 ahytx2 …` works, and so does `sudo` with `TX2_PASS`. Live check: up 28 days, eMMC `/` 60%, SSD `/mnt/tx2-ssd` 16%, docker holds `local/*` through `marketdata-data:v8` / `telegram-digest:v42`. Still to do: the §2 fixed-config re-verification. Original (wrong) entry: `python3 ops-tools/runcmd.py tx2 ahytx2-desktop '...'`
   returns `CONNECT FAIL … Authentication failed.` from this workstation. The TX2 itself is **healthy**
   (`timescaledb-0` Running, `llm-gateway` Running, `sentiment-scorer`/`headline-ner` Succeeded, 16/16 heartbeat feeds
   fresh) — this is purely a credential gap, but it **blocks the §6 image cycle** (build → tarball → import → apply)

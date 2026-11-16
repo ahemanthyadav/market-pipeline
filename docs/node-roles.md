@@ -7,7 +7,7 @@
 > the check — long weekly job); `pipeline_heartbeat` 16/16 feeds `fresh`; pi3 backup `marketdata-2026-11-15.dump`
 > present with `.sha256` sidecar; per-host `uptime`/`free`/`vcgencmd` on pi0/pi1/pi2/pi3; image lists read from
 > containerd (`ctr -n k8s.io images ls`) on pi1/pi3 and from `node.status.images` on orin1/orin2.
-> **Not re-verified 2026-11-15:** TX2 fixed config and TX2 eMMC/disk (SSH auth failed from this workstation — §5),
+> **Not re-verified 2026-11-15:** TX2 fixed config (TX2 disk WAS checked later that day: eMMC 60%, SSD 16%; the earlier "SSH auth failed" was a wrong SSH user — §5),
 > per-Pi thermal detail, pi1 24 h power acceptance.
 > The 2026-10-20 pi2 findings below still stand (reboot ~01:56 UTC, cause unknown, no journal trace; case removed
 > 04:34 UTC, baseline 51.5 °C; persistent journald enabled on pi1+pi2).
@@ -154,9 +154,9 @@ the workspace `hardware/ROADMAP.md` + `hardware/CONTROL-PLANE-MIGRATION.md`.
   allocatable capacity** — the NVIDIA device plugin runs only on orin1/orin2. TX2's GPU is reached through the GPU
   RuntimeClass path (GPU smoke test), not via device-plugin resource requests. Do not write a manifest that requests
   the NVIDIA GPU resource with `nodeSelector: hardware=gpu` — it will never schedule.
-- **2026-11-15:** SSH from the admin workstation **failed authentication** (`runcmd.py tx2`), so TX2 disk/eMMC %, load and
-  the fixed-config checks were NOT re-verified today. The DB itself is healthy (`timescaledb-0` Running, 16/16 heartbeat
-  feeds fresh) — this is a credential gap, not a TX2 outage. Tracker §1.
+- **2026-11-15:** SSH works as **`runcmd.py tx2 ahytx2`**. An earlier "authentication failed" came from passing the hostname
+  `ahytx2-desktop` as the user. Disk checked: eMMC 60%, SSD 16%, up 28 days, load 0.2. The fixed-config re-verification
+  (ops manual §2) is still to do.
 
 ### orin1 — STT/TTS voice inference (reserved, not yet running)
 
@@ -344,9 +344,8 @@ scheduled); fixed that day on all five (ADR 0011 amendment).
 - **Host-level:** pi0 load 1.57 (Pi-hole serving), pi1 `throttled=0x0` load 0.73, pi2 `throttled=0x80000` (soft-temp flag
   only) load 0.50, pi3 `throttled=0x0` load 0.37. pi1/pi3 disk at 8 % / 9 %.
 - **Telegram bot** on `telegram-digest:v42` (ADR 0012); `marketview` on `marketview:v14`.
-- **Not re-verified 2026-11-15:** TX2 fixed config, TX2 eMMC/disk %, TX2 load — **SSH auth from this workstation
-  failed** (`runcmd.py tx2` → "Authentication failed"). The TX2 workloads themselves are healthy (`timescaledb-0` Running,
-  `llm-gateway` Running, `sentiment-scorer`/`headline-ner` succeeded) — this is a credential gap, not an outage. Tracker §1.
+- **Not re-verified 2026-11-15:** TX2 fixed config only. TX2 disk/load were checked later that day (eMMC 60%, SSD 16%,
+  load 0.2). The morning's "SSH auth failed" was the wrong SSH user (`ahytx2-desktop` instead of `ahytx2`), not a credential problem.
 - **Not re-verified:** per-Pi thermal detail, pi1 24 h power acceptance, orin1/orin2 host state (no SSH alias).
 - **Prior event (context, 2026-10-18/20):** site-wide mains power loss 2026-10-18 ~05:55–06:20 UTC (all five machines
   rebooted); pi2 rebooted again 2026-10-20 ~01:56 UTC, cause unknown. Both recovered on their own.
