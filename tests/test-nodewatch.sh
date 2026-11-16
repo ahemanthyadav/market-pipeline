@@ -9,7 +9,7 @@ export NODEWATCH_SECRETS_FILE=/dev/null          # force "no Telegram credential
 # (Before 2026-10-12 this test pinged the live nodes, so it passed only while the cluster was up and
 # failed outright in CI, where there is no .hosts.env.)
 export NODEWATCH_HOSTS_FILE="$NODEWATCH_STATE_DIR/hosts.fake"
-printf '%s=node-%s\n' PI0_IP a PI1_IP b PI2_IP c PI3_IP d TX2_IP e > "$NODEWATCH_HOSTS_FILE"
+printf '%s=node-%s\n' PI0_IP a PI1_IP b PI2_IP c PI3_IP d TX2_IP e K3S_CP_IP f > "$NODEWATCH_HOSTS_FILE"
 export NODEWATCH_TEST_ONLY=1
 trap 'rm -rf "$NODEWATCH_STATE_DIR"' EXIT
 pass=0; fail=0

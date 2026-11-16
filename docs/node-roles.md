@@ -2,7 +2,7 @@
 
 > **Purpose:** one place that answers "what does each machine do, what breaks if it dies, and what must I
 > never do to it". Detail stays in the linked docs; this file is the index per node.
-> **Last verified: 2026-11-16** — live `kubectl`: k3s-cp (N100 VM) is the control plane (tainted `CriticalAddonsOnly=true:NoExecute`); all 6 workers (pi1, pi2, pi3, tx2, orin1, orin2) Ready against k3s-cp; **36 CronJobs, none suspended**; `pipeline_heartbeat` 16/16 feeds `fresh`.
+> **Last verified: 2026-11-16** — live `kubectl`: k3s-cp (N100, bare metal; node `minipc`) is the control plane (tainted `CriticalAddonsOnly=true:NoExecute`); all 6 workers (pi1, pi2, pi3, tx2, orin1, orin2) Ready against k3s-cp; **36 CronJobs, none suspended**; `pipeline_heartbeat` 16/16 feeds `fresh`.
 > **Not re-verified 2026-11-15:** TX2 fixed config (TX2 disk WAS checked later that day: eMMC 60%, SSD 16%; the earlier "SSH auth failed" was a wrong SSH user — §5),
 > per-Pi thermal detail, pi1 24 h power acceptance.
 > The 2026-10-20 pi2 findings below still stand (reboot ~01:56 UTC, cause unknown, no journal trace; case removed
@@ -14,7 +14,7 @@
 | Node | Hardware | In k3s? | Primary job | Pinned workloads | If it dies |
 |---|---|---|---|---|---|
 | **pi0** | Pi 1 B+, 512 MB, SD | **No** | LAN DNS (Pi-hole + unbound), out-of-cluster watcher | none (not a k8s node) | LAN ad-block DNS gone; the dead-man's switch goes silent |
-| **k3s-cp** (N100 VM) | N100 mini PC, 2 vCPU / 4 GB, amd64 | **Control plane** | k3s server (API, scheduler, datastore, CoreDNS) | none (tainted `CriticalAddonsOnly=true:NoExecute`) | Cluster loses API; restore from k3s control-plane backup (ops manual §9) |
+| **k3s-cp** (node `minipc`, N100 bare metal) | N100 mini PC, 4 cores / 16 GB shared with Coolify (Docker), amd64 | **Control plane** | k3s server (API, scheduler, datastore, CoreDNS) | none (tainted `CriticalAddonsOnly=true:NoExecute`) | Cluster loses API; restore from k3s control-plane backup (ops manual §9) |
 | **pi1** | Pi 3 B, 1 GB, 233 GB SSD | Worker | Telegram bot + marketview host; general ingestion pool | `telegram-bot`, `telegram-digest`, `telegram-alerts`, `marketview` | Bot stops answering; digest/alerts not sent; unpinned jobs land on pi3/orin2. Power supply replaced 2026-10-14; 24h acceptance PASSED 2026-10-20 — item CLOSED (tracker §1). |
 | **pi2** | Pi 3 B+, 1 GB | Worker (after control-plane move) | CPU jobs fallback; formerly the control plane | none (was cordoned) | Unpinned jobs land here if image imported; pi2 no longer holds cluster API (see §4) |
 | **pi3** | Pi 3 B, 1 GB, SSD | Worker | Grafana, backups, general ingestion pool | `grafana`, `pg-backup`, `restore-drill` (Job) | No dashboards, no nightly dump; unpinned jobs land on pi1/orin2 |
@@ -26,7 +26,7 @@
 
 | Node | Role | What changed |
 |---|---|---|
-| **k3s-cp** (N100 VM) | k3s control plane only | New N100 VM, tainted `CriticalAddonsOnly=true:NoExecute` (amd64: never runs marketdata pods). pi2's `state.db` + token + TLS restored onto it. |
+| **k3s-cp** (node `minipc`) | k3s control plane only | k3s server installed directly on the N100's Ubuntu 26.04 (bare metal, no Proxmox/VM; Coolify runs alongside in Docker), tainted `CriticalAddonsOnly=true:NoExecute` (amd64: never runs marketdata pods). pi2's `state.db` + token + TLS restored onto it. |
 | **pi2** | Worker, CPU jobs | Stopped being the control plane; uncordoned; k3s-agent repointed to k3s-cp (K3S_CP_IP:6443) |
 | **pi1, pi3** | Workers, CPU jobs + pinned workloads | k3s-agent repointed to k3s-cp |
 | **4th Pi 3** (870 EVO boot) | Worker, CPU jobs | New; joins after the control-plane move |
@@ -118,11 +118,18 @@ the workspace `hardware/ROADMAP.md` + `hardware/CONTROL-PLANE-MIGRATION.md`.
 - **Live 2026-11-15:** up 28 d 13 h, load 0.37/0.42/0.43, 905 MiB RAM (464 MiB available), `throttled=0x0`,
   `/` at 9 % (20 G of 229 G).
 
-### k3s-cp — control plane (N100 VM)
+### k3s-cp — control plane (N100 bare metal, node `minipc`)
 - **Does:** k3s server — API on :6443, scheduler, controllers, datastore (kine/`state.db`), CoreDNS.
   Installed 2026-11-16 (k3s v1.36.4+k3s1, amd64) on the N100 mini PC; pi2's `state.db` + token + TLS restored onto it
-  so existing agents keep trusting the CA without rejoining. Tainted `CriticalAddonsOnly=true:NoExecute` — amd64 VM,
+  so existing agents keep trusting the CA without rejoining. Tainted `CriticalAddonsOnly=true:NoExecute` — amd64 host,
   must never run marketdata pods.
+- **Host:** **bare metal, not a VM** — k3s server runs directly on the N100's Ubuntu 26.04 (hostname and
+  Kubernetes node name `minipc`; `kubectl ... node minipc`, SSH user `minipc`). It sees the whole box (4 cores / 16 GB)
+  and **shares it with Coolify** (Docker containers on the same host). Consequences: no Proxmox snapshot/`vzdump`
+  safety net — `pull-k3s-backup.sh` is the only control-plane backup; a Coolify/Docker restart, upgrade or reboot of
+  the N100 takes the API down with it; Docker and k3s both program iptables on this host, so don't flush rules.
+  Coolify here is **experiments only** (decided 2026-11-16): production SaaS runs on the pve2 Coolify, and the N100 must
+  never be added as a server to that Coolify (it would get root on the host holding the k3s CA keys + join token).
 - **Scheduling:** tainted control-plane-only; no marketdata workloads schedule here.
 - **Rules:** k3s-cp's health gates everything else. Never restart more than one agent at a time; if load > 3 sustained,
   follow ops manual §8 cool-down first.
@@ -326,7 +333,7 @@ scheduled); fixed that day on all five (ADR 0011 amendment).
 
 ## 5. Current state (live check 2026-11-16)
 
-- **Nodes (2026-11-16):** k3s-cp (N100 VM) is the control plane, Ready, tainted `CriticalAddonsOnly=true:NoExecute`;
+- **Nodes (2026-11-16):** k3s-cp (node `minipc`, N100 bare metal) is the control plane, Ready, tainted `CriticalAddonsOnly=true:NoExecute`;
   all 6 workers (pi1, pi2, pi3, tx2, orin1, orin2) Ready against k3s-cp (`K3S_URL` repointed from pi2 to k3s-cp);
   pi0 up but not a k3s node.
   Versions: server k3s-cp v1.36.4+k3s1; agents pi1/pi2/pi3 v1.36.4, orin1/orin2 v1.37.2, tx2 pinned v1.35.3+k3s1 (cgroup v1).

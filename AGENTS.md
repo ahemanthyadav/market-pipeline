@@ -1,6 +1,9 @@
 # Market Data Pipeline — Agent Guide
 
-k3s homelab market-data pipeline: 6-node Pi/Jetson k3s cluster (pi1, pi2, pi3, TX2, orin1, orin2 workers; k3s-cp VM on N100 control plane)
+> **Installing or deploying a new application/service?** First follow the workspace placement rules in `../../PLACEMENT.md`, which lives outside this repo. They say which machine it goes on: pve2 Coolify, the N100's Coolify, or the k3s workers. If the file isn't there, ask the owner.
+
+
+k3s homelab market-data pipeline: 6-node Pi/Jetson k3s cluster (pi1, pi2, pi3, TX2, orin1, orin2 workers; k3s-cp control plane on the N100, bare metal)
 plus one non-cluster host (pi0 = LAN DNS) ingesting daily market data into TimescaleDB, with Grafana dashboards
 and a Telegram bot/digest. Per-node roles: `docs/node-roles.md`.
 Git repo on `main` (origin GitHub) — conventional commits; never commit credentials or IPs.
@@ -14,7 +17,7 @@ Read before cluster mutations: `docs/market-data-pipeline-operations-manual.md`
 
 1. **Working directory** — run everything from `marketdata/`. Export
    `KUBECONFIG=~/.kube/pi-cluster.yaml` before any kubectl in a new shell.
-2. **k3s-cp is the control plane** (N100 VM, amd64, tainted `CriticalAddonsOnly=true:NoExecute`). Never restart more than one agent at a time; if load > 3 sustained, follow §8 cool-down first.
+2. **k3s-cp is the control plane** (N100 mini PC, bare-metal Ubuntu, Kubernetes node name `minipc`, amd64, tainted `CriticalAddonsOnly=true:NoExecute`; shares the host with an experiments-only Coolify — production SaaS is on pve2). Never restart more than one agent at a time; if load > 3 sustained, follow §8 cool-down first.
 3. **TX2 fixed config is load-bearing** (agent flags, containerd fragment,
    iptables wrappers — §2). Never "clean up" or apt-upgrade without §8 re-verification.
 4. **Data invariants**: fetchers DELETE+INSERT only their own `(key, ts)` rows —
