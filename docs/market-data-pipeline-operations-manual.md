@@ -269,8 +269,9 @@ Applied with `kubectl apply` after a `kubectl diff` review; it did not change `s
 - One-shot Jobs (kept as manifests, run on demand): `backfill-*-1y` (history
   seeding), `timescaledb-schema`, `timescaledb-write-test`, `restore-drill`.
   **Re-running the schema Job:** after editing `schema-configmap.yaml`, `kubectl apply` it, then run the Job under a NEW name
-  (e.g. `sed '8s/name: timescaledb-schema$/name: schema-<tag>/' manifests/timescaledb/schema-job.yaml | kubectl apply -f -`;
-  replace only line 8 — the ConfigMap reference further down must keep its name). The permission config denies deleting
+  (e.g. `sed 's/^  name: timescaledb-schema$/  name: schema-<tag>/' manifests/timescaledb/schema-job.yaml | kubectl apply -f -`;
+  the two-space anchor renames only the Job's metadata name — the ConfigMap reference further down is deeper-indented
+  and must keep its name. 2026-11-15: the old `8s/…/` form had silently stopped matching after the header grew). The permission config denies deleting
   anything named `timescaledb…` (rule 5), so the old Job cannot be deleted and re-created. Schema 09 (multi-user bot) was applied
   this way on 2026-10-12 as `schema-multiuser-09`; a first attempt (`timescaledb-schema-09`, ConfigMap name rewritten by a too-broad
   sed) never started and was suspended, not deleted.
@@ -472,7 +473,7 @@ md5sum manifests/images/data/fx-fetcher.py   # must match line for line
 # 4. Save the tarball STRAIGHT INTO the archive (restore source if a node's
 #    containerd store is lost — §8 prune incident), plus a home-dir copy to pull:
 python3 ops-tools/runcmd.py tx2 ahytx2 \
-  'echo @@PW@@ | sudo -S sh -c "docker save local/marketdata-data:v9 | gzip > /mnt/tx2-ssd/image-tarballs/marketdata-data-v8.tar.gz && cp /mnt/tx2-ssd/image-tarballs/marketdata-data-v8.tar.gz /home/ahytx2/marketdata-data-v8.tar.gz && chown ahytx2:ahytx2 /home/ahytx2/marketdata-data-v8.tar.gz" && ls -lh /home/ahytx2/marketdata-data-v8.tar.gz'
+  'echo @@PW@@ | sudo -S sh -c "docker save local/marketdata-data:v9 | gzip > /mnt/tx2-ssd/image-tarballs/marketdata-data-v9.tar.gz && cp /mnt/tx2-ssd/image-tarballs/marketdata-data-v9.tar.gz /home/ahytx2/marketdata-data-v9.tar.gz && chown ahytx2:ahytx2 /home/ahytx2/marketdata-data-v9.tar.gz" && ls -lh /home/ahytx2/marketdata-data-v9.tar.gz'
 python3 ops-tools/runcmd.py tx2 ahytx2 \
   'cd /mnt/tx2-ssd/image-tarballs && echo @@PW@@ | sudo -S sh -c "sha256sum *.tar.gz > SHA256SUMS.all" && grep marketdata-data SHA256SUMS.all'
 
