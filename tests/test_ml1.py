@@ -190,5 +190,58 @@ class RuleFixes20261112(unittest.TestCase):
         self.assertEqual(len(ml1.detect_bad_bars(unrecorded)), 1)
 
 
+class OS1NewRules(unittest.TestCase):
+    """OS-1: duplicate-key, OHLC volume sanity, coverage rules."""
+
+    def test_duplicate_key_detected(self):
+        base = pd.date_range("2025-01-02", periods=3, freq="D")
+        df = pd.DataFrame({"symbol": "AAA", "ts": list(base) + [base[0]],
+                           "open": [100.0]*4, "high": [101.0]*4,
+                           "low": [99.0]*4, "close": [100.0]*4, "volume": [1000.0]*4})
+        anom = ml1.detect_duplicate_keys(df)
+        self.assertEqual(len(anom), 1)
+        self.assertEqual(anom[0]["kind"], "duplicate_key")
+        self.assertEqual(anom[0]["subject"], "AAA")
+        self.assertEqual(anom[0]["details"]["dup_rows"], 2)
+
+    def test_no_duplicate_key_clean(self):
+        base = pd.date_range("2025-01-02", periods=3, freq="D")
+        df = pd.DataFrame({"symbol": "AAA", "ts": base,
+                           "open": [100.0]*3, "high": [101.0]*3,
+                           "low": [99.0]*3, "close": [100.0]*3, "volume": [1000.0]*3})
+        self.assertEqual(ml1.detect_duplicate_keys(df), [])
+
+    def test_negative_volume_detected(self):
+        base = pd.date_range("2025-01-02", periods=3, freq="D")
+        df = pd.DataFrame({"symbol": "BBB", "ts": base,
+                           "open": [100.0]*3, "high": [101.0]*3,
+                           "low": [99.0]*3, "close": [100.0]*3,
+                           "volume": [1000.0, -500.0, 1000.0]})
+        anom = ml1.detect_ohlc_volume_sanity(df)
+        self.assertEqual(len(anom), 1)
+        self.assertEqual(anom[0]["kind"], "ohlc_volume_sanity")
+        self.assertEqual(anom[0]["details"]["volume"], -500.0)
+
+    def test_coverage_below_threshold_detected(self):
+        base = pd.Timestamp("2025-01-02")
+        # expected 3 symbols, only 2 received -> 66% coverage < 95%
+        df = pd.DataFrame({"symbol": ["AAA", "BBB"], "ts": [base, base],
+                           "open": [100.0, 100.0], "high": [101.0, 101.0],
+                           "low": [99.0, 99.0], "close": [100.0, 100.0],
+                           "volume": [1000.0, 1000.0]})
+        anom = ml1.detect_expected_vs_received(df, {"AAA", "BBB", "CCC"})
+        self.assertEqual(len(anom), 1)
+        self.assertEqual(anom[0]["kind"], "coverage")
+        self.assertEqual(anom[0]["details"]["missing_count"], 1)
+
+    def test_coverage_above_threshold_no_anomaly(self):
+        base = pd.Timestamp("2025-01-02")
+        df = pd.DataFrame({"symbol": ["AAA", "BBB", "CCC"], "ts": [base]*3,
+                           "open": [100.0]*3, "high": [101.0]*3,
+                           "low": [99.0]*3, "close": [100.0]*3,
+                           "volume": [1000.0]*3})
+        self.assertEqual(ml1.detect_expected_vs_received(df, {"AAA", "BBB", "CCC"}), [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

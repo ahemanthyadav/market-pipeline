@@ -1223,3 +1223,17 @@ data:
             WHERE ts >= now() - interval '7 days'
             ORDER BY universe, sector, ts DESC) m
       LEFT JOIN sector_styles st ON st.sector = m.sector;
+  26-anomaly-severity.sql: |
+    -- OS-3: severity on data_anomalies so Grafana can alert on spikes by severity.
+    ALTER TABLE app.data_anomalies ADD COLUMN IF NOT EXISTS severity TEXT NOT NULL DEFAULT 'info';
+  27-disk-baseline.sql: |
+    -- OS-16: weekly size + disk baseline table (growth trend, not a snapshot).
+    CREATE TABLE IF NOT EXISTS app.disk_baseline (
+      recorded_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+      db_size_bytes BIGINT NOT NULL,
+      top_table     TEXT NOT NULL,
+      top_table_bytes BIGINT NOT NULL,
+      tx2_emmc_pct  DOUBLE PRECISION,
+      tx2_ssd_pct   DOUBLE PRECISION
+    );
+    CREATE INDEX IF NOT EXISTS ix_disk_baseline_ts ON app.disk_baseline (recorded_at);

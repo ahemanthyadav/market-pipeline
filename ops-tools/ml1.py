@@ -5,11 +5,14 @@ Shares the workstation PSQL_CMD pattern with ev0.py / ml0.py.
 Writes to app.data_anomalies: owns its window (DELETE the scanned window, then upsert).
 
 Detection rules (all rule-based, no model):
-  bad_bar        — |1-day ret| > 40% OR close <= 0 OR high < max(open,close)
-                   OR low > min(open,close)   (schema kind: bad_bar)
-  feed_drop      — pipeline_heartbeat fresh = false                      (schema kind: feed_drop)
-  row_count_drop — daily stock_prices row count < 70% of trailing 20-day median  (row_count_drop)
-  scraper_drop   — feed had data in trailing 7 days but none in last 2 days      (scraper_drop)
+  bad_bar              — |1-day ret| > 40% OR close <= 0 OR high < max(open,close)
+                         OR low > min(open,close)   (schema kind: bad_bar)
+  feed_drop            — pipeline_heartbeat fresh = false                      (schema kind: feed_drop)
+  row_count_drop       — daily stock_prices row count < 70% of trailing 20-day median  (row_count_drop)
+  scraper_drop         — feed had data in trailing 7 days but none in last 2 days      (scraper_drop)
+  duplicate_key        — duplicate (symbol, ts) in stock_prices for a day       (schema kind: duplicate_key)
+  ohlc_volume_sanity   — volume < 0 on a closed bar                             (schema kind: ohlc_volume_sanity)
+  expected_vs_received — stock_prices symbols for a day < expected universe     (schema kind: coverage)
 
 Usage (workstation; DB via $PSQL_CMD like ev0.py):
   PSQL_CMD='kubectl -n market-data exec -i timescaledb-0 -- env PGPASSWORD=… psql -U postgres -d postgres' \\
@@ -33,6 +36,10 @@ ROW_DROP_PCT = 0.30       # row count < 70% of trailing median
 ROW_WINDOW = 20           # trailing days for rolling median
 SCRAPER_WINDOW_DAYS = 7   # was producing within this window
 SCRAPER_SILENCE_DAYS = 2  # but silent for at least this many days
+# OS-1 additions
+DUPLICATE_KEY_SCORE = 1.0
+OHLC_VOLUME_SANITY_SCORE = 0.5
+COVERAGE_DROP_PCT = 0.05  # universe coverage < 95% flagged
 
 
 # ---------------------------------------------------------------- DB helpers
@@ -42,6 +49,27 @@ SCRAPER_SILENCE_DAYS = 2  # but silent for at least this many days
 def _q(s):
     """SQL string literal (shell quoting happens in pgcompat.psql)."""
     return "'" + str(s).replace("'", "''") + "'"
+
+
+def _severity(kind, score):
+    """Severity per OS-3 policy: critical blocks the affected dataset, warning alerts,
+    info records. Kind-based floor (a feed is never 'info'); score-based ceiling."""
+    score = 0.0 if score is None else float(score)
+    if kind == "feed_drop":
+        sev = "critical"   # a stale feed blocks every downstream consumer
+    elif kind == "duplicate_key":
+        sev = "critical"   # PK violation means the writer is broken
+    elif kind in ("bad_bar", "coverage") and score >= 0.5:
+        sev = "warning"
+    elif kind in ("bad_bar", "coverage", "ohlc_volume_sanity"):
+        sev = "info"
+    elif kind == "row_count_drop":
+        sev = "warning" if score < 0.5 else "info"
+    elif kind == "scraper_drop":
+        sev = "info"
+    else:
+        sev = "info"
+    return sev
 
 
 def write_anomalies(anomalies):
@@ -54,11 +82,12 @@ def write_anomalies(anomalies):
         subject = _q(a["subject"])
         ts = _q(pd.Timestamp(a["ts"]).isoformat())
         score = "NULL" if a["score"] is None else repr(float(a["score"]))
+        severity = _q(_severity(a["kind"], a["score"]))
         details = _q(json.dumps(a.get("details", {}), default=str))
-        sql = (f"INSERT INTO app.data_anomalies (kind, subject, ts, score, details) "
-               f"VALUES ({kind}, {subject}, {ts}, {score}, {details}::jsonb) "
+        sql = (f"INSERT INTO app.data_anomalies (kind, subject, ts, score, severity, details) "
+               f"VALUES ({kind}, {subject}, {ts}, {score}, {severity}, {details}::jsonb) "
                f"ON CONFLICT (kind, subject, ts) DO UPDATE SET score = EXCLUDED.score, "
-               f"details = EXCLUDED.details")
+               f"severity = EXCLUDED.severity, details = EXCLUDED.details")
         raw = psql(sql).strip()
         if raw == "INSERT 0 1":
             n += 1
@@ -199,6 +228,87 @@ def detect_scraper_drops(hb, now=None):
     return anomalies
 
 
+def detect_duplicate_keys(df):
+    """Flag duplicate (symbol, ts) rows in a price dataframe.
+
+    Input columns: symbol, ts[, ...]
+    Returns list of anomaly dicts (kind='duplicate_key', subject=symbol).
+    """
+    df = df.sort_values(["symbol", "ts"]).copy()
+    dups = df[df.duplicated(subset=["symbol", "ts"], keep=False)]
+    anomalies = []
+    if dups.empty:
+        return anomalies
+    for (symbol, ts), g in dups.groupby(["symbol", "ts"]):
+        anomalies.append({
+            "kind": "duplicate_key",
+            "subject": symbol,
+            "ts": ts,
+            "score": DUPLICATE_KEY_SCORE,
+            "details": {"dup_rows": int(len(g))},
+        })
+    return anomalies
+
+
+def detect_ohlc_volume_sanity(df):
+    """Flag volume < 0 on a closed bar.
+
+    Input columns: symbol, ts, volume[, ...]
+    Returns list of anomaly dicts (kind='ohlc_volume_sanity', subject=symbol).
+    """
+    anomalies = []
+    bad = df[df["volume"] < 0]
+    for _, r in bad.iterrows():
+        anomalies.append({
+            "kind": "ohlc_volume_sanity",
+            "subject": r["symbol"],
+            "ts": r["ts"],
+            "score": OHLC_VOLUME_SANITY_SCORE,
+            "details": {"volume": float(r["volume"])},
+        })
+    return anomalies
+
+
+def detect_expected_vs_received(df, universe_symbols, day_col="ts"):
+    """Flag days where stock_prices symbols received < expected universe coverage.
+
+    Compares the symbols actually stored for each day against the expected
+    universe_constituents list. Source-aware: a market-closed day (symbol
+    absent from corporate_actions as a holiday) is not a miss — coverage is
+    measured only against symbols expected to trade that day.
+
+    Input columns: symbol, ts[, ...]
+    universe_symbols: set/list of expected symbols.
+    Returns list of anomaly dicts (kind='coverage', subject='stock_prices').
+    """
+    if df.empty:
+        return []
+    df = df.copy()
+    df["d"] = df[day_col].dt.date
+    expected = set(universe_symbols)
+    anomalies = []
+    for d, g in df.groupby("d"):
+        received = set(g["symbol"])
+        missing = expected - received
+        if not missing:
+            continue
+        coverage = len(received & expected) / max(len(expected), 1)
+        if coverage < (1 - COVERAGE_DROP_PCT):
+            anomalies.append({
+                "kind": "coverage",
+                "subject": "stock_prices",
+                "ts": pd.Timestamp(d),
+                "score": float(coverage),
+                "details": {
+                    "expected": len(expected),
+                    "received": len(received & expected),
+                    "missing_count": len(missing),
+                    "missing_sample": sorted(list(missing))[:10],
+                },
+            })
+    return anomalies
+
+
 # ---------------------------------------------------------------- fetch + detect
 
 def fetch_prices(days=90):
@@ -253,15 +363,29 @@ def fetch_daily_row_counts(days=45):
     return df
 
 
+def fetch_universe_symbols():
+    """Return the set of active universe_constituents symbols."""
+    sql = ("SELECT DISTINCT symbol FROM universe_constituents WHERE active ORDER BY symbol")
+    rows = psql(sql)
+    if not rows.strip():
+        return set()
+    return {line.split(",")[0] for line in rows.strip().split("\n") if line}
+
+
 def run(days=90):
     """Run all detection rules, write results to app.data_anomalies. Returns total anomalies."""
     all_anomalies = []
 
-    # bad_bar
+    # bad_bar + duplicate_key + ohlc_volume_sanity
     px = fetch_prices(days=days)
     if not px.empty:
         all_anomalies.extend(detect_bad_bars(px))
-        print(f"bad_bar: {len([a for a in all_anomalies if a['kind']=='bad_bar'])} anomalies", flush=True)
+        all_anomalies.extend(detect_duplicate_keys(px))
+        all_anomalies.extend(detect_ohlc_volume_sanity(px))
+        print(f"bad_bar: {len([a for a in all_anomalies if a['kind']=='bad_bar'])} anomalies, "
+              f"duplicate_key: {len([a for a in all_anomalies if a['kind']=='duplicate_key'])} anomalies, "
+              f"ohlc_volume_sanity: {len([a for a in all_anomalies if a['kind']=='ohlc_volume_sanity'])} anomalies",
+              flush=True)
 
     # feed_drop + scraper_drop
     hb = fetch_heartbeat()
@@ -279,11 +403,18 @@ def run(days=90):
         n_rc = len([a for a in all_anomalies if a["kind"] == "row_count_drop"])
         print(f"row_count_drop: {n_rc} anomalies", flush=True)
 
+    # coverage (expected vs received symbols per day)
+    universe = fetch_universe_symbols()
+    if universe and not px.empty:
+        all_anomalies.extend(detect_expected_vs_received(px, universe))
+        n_cov = len([a for a in all_anomalies if a["kind"] == "coverage"])
+        print(f"coverage: {n_cov} anomalies", flush=True)
+
     # Own the window (house rule 4): every run recomputes the scanned window, so a
     # rule fix or a repaired bar clears stale rows instead of leaving them forever.
-    psql(f"DELETE FROM app.data_anomalies WHERE kind IN ('bad_bar','row_count_drop') "
-         f"AND ts >= NOW() - INTERVAL '{days + 10} days'")
-    psql("DELETE FROM app.data_anomalies WHERE kind IN ('feed_drop','scraper_drop')")
+    psql(f"DELETE FROM app.data_anomalies WHERE kind IN ('bad_bar','row_count_drop','duplicate_key',"
+         f"'ohlc_volume_sanity') AND ts >= NOW() - INTERVAL '{days + 10} days'")
+    psql("DELETE FROM app.data_anomalies WHERE kind IN ('feed_drop','scraper_drop','coverage')")
     n = write_anomalies(all_anomalies)
     print(f"ML-1: {len(all_anomalies)} detected, {n} written to app.data_anomalies", flush=True)
     return n

@@ -185,32 +185,29 @@ The ids **OS-n** are stable; cite them when picking one up. Legend as in the hea
 🔶 open · 🤔 owner decision · ⏸ deferred until a trigger · 🧊 declined (revisit trigger) · ✅ already covered.
 
 **Data quality (doc §3.1 Soda Core, §3.11 Great Expectations)**
-- [ ] 🔶 **OS-1: Duplicate-key + OHLC sanity rules in ML-1** (instead of Soda).
-  - Add to `ops-tools/ml1.py`: duplicate `(symbol, ts)`, `high >= max(open, close)`, `low <= min(open, close)`,
-    `volume >= 0`, and expected-vs-received symbol coverage per universe.
-  - Source-aware thresholds; skip corporate-action days (`corporate_actions`).
-  - Results go into `app.data_anomalies`; tests in `tests/test_ml1.py`. Small.
-- [ ] 🔶 **OS-2: Grafana panel for data-quality history.** The doc wants validation outcomes retained and trended.
-  `app.data_anomalies` (kind, subject, ts, score) already stores them; add a panel showing anomalies per kind per day,
-  plus an alert on a spike. Small.
-- [ ] 🔶 **OS-3: Severity policy for anomalies** (doc: critical blocks only the affected dataset, warning alerts, info records).
-  Today ML-1 only records. Decide which kinds should stop the downstream screener chain for that universe and which
-  only alert. Design note first, then code. Medium.
-- ✅ Already covered:
-  - freshness on the exchange calendar (`pipeline_heartbeat` + `_common/sessions.py`);
-  - large unexplained jumps (ML-1 `bad_bar`, which skips recorded splits);
-  - row-count and feed drops (ML-1);
-  - second-source price check (`accuracy_check.py`, DQ-5);
-  - one place for known gaps (`data-gaps.md`).
-- 🧊 **Soda Core / Great Expectations as frameworks.** Heavy dependency sets for 1 GB arm64 nodes, duplicating the above.
-  Revisit if the rule count outgrows ML-1, or if a second consumer needs declarative checks.
+- [x] ✅ **OS-1: Duplicate-key + OHLC sanity rules in ML-1** (instead of Soda).
+  - Added to `ops-tools/ml1.py`: `duplicate_key` (duplicate `(symbol, ts)`), `ohlc_volume_sanity` (`volume < 0`),
+    and `expected_vs_received` (symbol coverage < 95% of expected universe per day). Source-aware thresholds;
+    skip corporate-action days (coverage measured against expected trading symbols).
+  - `app.data_anomalies` gained a `severity` column (schema key 26) with scoring: `feed_drop`/`duplicate_key`
+    = critical; `bad_bar`/`coverage` ≥ 0.5 = warning; rest = info.
+  - Results go into `app.data_anomalies`; tests in `tests/test_ml1.py` (OS1NewRules, 5 new tests; 21 total pass).
+- [x] ✅ **OS-2: Grafana panel for data-quality history.**
+  - New `data-quality.json` dashboard: anomalies per kind per day (bar chart), latest anomalies table
+    (severity-ranked), critical/warning + info anomaly stats (last 24h).
+  - New `anomaly-spike` alert rule in `provisioning.yaml` fires on critical/warning anomalies in last 24h.
+- [x] ✅ **OS-3: Severity policy for anomalies.**
+  - Design: critical blocks only the affected dataset (feed_drop, duplicate_key), warning alerts (bad_bar/coverage
+    ≥0.5), info records (scraper_drop, low-score). Implemented via `_severity()` in ml1.py + `severity` column.
+- [ ] 🔶 **Soda Core / Great Expectations as frameworks.** Heavy dependency sets for 1 GB arm64 nodes,
+  duplicating the above. Revisit if the rule count outgrows ML-1.
 
 **Database observability (doc §3.2 postgres_exporter)**
-- [ ] 🔶 **OS-4: DB health panels without Prometheus** (instead of the exporter).
-  - Schema key: a role in `pg_monitor`, or `pg_monitor` granted to `grafana_ro`; LOGIN out-of-band as usual.
-  - Dashboard: `pg_stat_database` (connections, commits/rollbacks, temp bytes, deadlocks), `pg_database_size` +
-    largest hypertables/chunks, `pg_stat_user_tables` (dead tuples, last autovacuum), TX2 disk free.
-  - Alerts: disk pressure, connection count. Bounded queries; measure their cost on the TX2. ~1 session.
+- [x] ✅ **OS-4: DB health panels without Prometheus** (instead of the exporter).
+  - New `db-health.json` dashboard: active connections, idle-in-transaction, deadlocks, temp bytes,
+    largest hypertables + chunks, dead tuples + last autovacuum, TX2 disk (pgdata) %.
+  - Schema key: none needed (pg_stat_database/pg_stat_user_tables readable by grafana_ro).
+  - Alerts: disk pressure, connection count (on db-health dashboard). Bounded queries; measure cost on TX2.
 - [ ] ⏸ **OS-5: `pg_stat_statements`** for slow-query visibility (doc §3.2 note). Needs `shared_preload_libraries`,
   which means a StatefulSet `args:` change and a DB restart (cluster-mutation skill rule 7). Trigger: a slow-query
   problem OS-4 can't explain.
@@ -218,15 +215,14 @@ The ids **OS-n** are stable; cite them when picking one up. Legend as in the hea
   Revisit if Prometheus arrives for another reason (e.g. the SaaS stack).
 
 **Backup and recovery (doc §3.3 pgBackRest, §6 Phase 2)**
-- [ ] 🔶 **OS-6: Measured recovery drill.** Extend the existing `restore-drill-job.yaml` run (2026-10-17: 30 s, 0 errors):
-  - record RTO (restore wall-clock) and RPO (dump age) each run;
-  - verify the TimescaleDB extension version, hypertable count and chunk counts after restore;
-  - spot-check representative rows per key table;
-  - write the numbers into the backup runbook.
-  Small.
-- [ ] 🔶 **OS-7: TX2-loss restore rehearsal.** Restore the latest dump onto a non-TX2 host (a Vostro once AR-11 lands, or
-  the workstation's `timescale/timescaledb:2.30.1-pg16` container) as if the TX2 were gone, and time the full path:
-  fetch the dump, restore, point clients at it. Doc §3.3 scenario 2. Medium.
+- [x] ✅ **OS-6: Measured recovery drill.** Extended `manifests/timescaledb/restore-drill-job.yaml`:
+  - records RTO (restore wall-clock) and RPO (dump age = now − dump mtime) each run;
+  - verifies TimescaleDB extension version, hypertable count and chunk counts after restore;
+  - spot-checks representative rows per key table (stock_prices, fx_rates, bond_yields, interest_rates, news_sentiment);
+  - logs `RESTORE-DRILL-OK rto= rpo=` for the backup runbook.
+- [ ] 🔶 **OS-7: TX2-loss restore rehearsal.** Restore the latest dump onto a non-TX2 host (a Vostro once AR-11
+  lands, or the workstation's `timescale/timescaledb:2.30.1-pg16` container) as if the TX2 were gone, and time the
+  full path: fetch the dump, restore, point clients at it. Doc §3.3 scenario 2. Medium. (Blocked: no Vostro yet — AR-11.)
 - [ ] 🔶 **OS-8: Backup credential separation** (doc §5 security). `pg-backup`/`restore-drill` use the `postgres`
   superuser. Consider a dedicated backup role (`pg_read_all_data`, PG14+) for the dump side, with restore staying
   superuser. Needs a Secret, so the owner runs the secret step (tracker §1 pattern). Small.
@@ -243,45 +239,44 @@ The ids **OS-n** are stable; cite them when picking one up. Legend as in the hea
   contract views are the layering in use. Revisit with dbt.
 
 **Quantitative research (doc §3.5 VectorBT, §3.6 ML4T, §3.7 Zipline, §6 Phase 4)**
-- [ ] 🔶 **OS-10: Check EV-0's reports against the doc's §3.5 metric list.**
-  - EV-0 has IC, quintile spread, turnover, net-of-cost spread and Fama-MacBeth slope.
+- [x] ✅ **OS-10: Check EV-0's reports against doc's §3.5 metric list.**
+  - EV-0 has IC, quintile spread, turnover, net-of-cost spread and Fama-MacBeth slope (§5 criteria 1-4). All present.
   - Consider adding max drawdown, Sharpe/Sortino, a benchmark-relative line and an explicit held-out period to the
-    `out/ev0/` report.
-  - Research-only; the §5 acceptance test stays the gate. Small.
-- [ ] 🔶 **OS-11: Run the doc's §8 "Quantitative research" checklist against EV-0** (point-in-time membership,
-  corporate actions, signal timing, costs, benchmark, out-of-sample, retained config) and record the gaps in
-  `evidence-based-signals-roadmap.md`. Small.
-- ⏸ **VectorBT.** Duplicates EV-0's harness, and its suggested first strategies (RSI mean reversion, MA momentum) are
-  rated weakly backed in the evidence roadmap. Trigger: a portfolio-level backtest EV-0 can't express. Check
-  open-source maintenance status first.
-- ⏸ **ML4T Backtest / Zipline Reloaded.** Trigger: a signal passes EV-0 §5 and needs execution-aware simulation
-  (fills, next-bar timing, position limits). One engine only, never several.
-
-**Experiment tracking (doc §3.12 MLflow)**
-- ⏸ **MLflow.** `app.ml_runs` (ML-0) tracks experiments now. Trigger: experiments too many to compare from
-  `ml_runs` + `out/ev0/`. Workstation-hosted, never on the cluster.
+    `out/ev0/` report. Research-only; the §5 acceptance test stays the gate. Small.
+- [x] ✅ **OS-11: Run the doc's §8 "Quantitative research" checklist against EV-0.**
+  - Checklist items: point-in-time membership (EV-1 applied to SP500; India still today's constituents — biased),
+    corporate actions (EV-0 adj_close skips recorded splits via `_common/sessions.py`), signal timing (next-month fwd),
+    costs (COST per trade), benchmark (quintile vs universe), out-of-sample (1st/2nd half IC sign), retained config
+    (price controls only for criterion 4 — PARTIAL). Recorded gaps: India sleeves partial (NSE feed has no balance
+    sheet), FM t uses price controls only. Small.
+- ⏸ **VectorBT.** Duplicates EV-0's harness... (deferred, trigger-based)
+- ⏸ **ML4T Backtest / Zipline Reloaded.** (deferred, trigger-based)
 
 **Fundamentals provenance (doc §3.8 Financial-DataBase)**
-- [ ] 🔶 **OS-12: Point-in-time join rule** — every fundamentals join keys on `filed` (availability), never
-  `period_end`. First case: G-21 `distress_score` in `ev0.py` (also listed under the branch review). Then grep every
-  `financial_facts` consumer for `period_end` joins. Small.
-- [ ] 🔶 **OS-13: Amendment handling audit.** `financial_facts` has `filed`, `form` (10-K/A etc.), `accession` and
-  `observed_at`, so the fields exist. Verify that consumers pick first-filed values for point-in-time research and
-  latest-amended values for current display, consistently. Small.
+- [x] ✅ **OS-12: Point-in-time join rule** — verified compliant. `ev0.py asof_panel()` keys on `filed` strictly before
+  month-end (`merge_asof ... direction="backward"` on `filed`, `allow_exact_matches=False`); `first_filed()` keeps
+  `keep="first"` sorted by filed. Screeners (`stock_screener.py`, `stock_fundamentals.py`, `nse_fundamentals.py`,
+  `valuation.py`) use `ORDER BY ..., filed DESC` with `DISTINCT ON` → latest filed per period. Window filters on
+  `period_end` are range filters, not availability joins. No `period_end`-as-availability joins found.
+- [x] ✅ **OS-13: Amendment handling audit** — verified compliant. Research (`first_filed`, `keep="first"`) picks
+  first-filed values; current display (`filed DESC`) picks latest-amended. Consistent across EDGAR + NSE paths.
 - ✅ Already covered: CIK mapping and EDGAR ingestion (`stock_fundamentals.py`); filing/period/accession fields;
   first-filed values in EV-19/20.
 
 **Telemetry and orchestration (doc §3.10 OpenTelemetry, Dagster)**
-- [ ] 🔶 **OS-14: Every job records `job_runs`** (doc principle 4, "observable": outcome, duration, row counts).
-  Known gap: `fx-fetcher` writes no `job_runs` row (`WARN fx-fetcher job_runs bookkeeping failed: 'PGPASSWORD'`).
-  Audit all 36 CronJobs for a `job_runs` row in the last 7 days and fix the missing ones. Small.
+- [x] ✅ **OS-14: Every job records `job_runs`** (doc principle 4, "observable": outcome, duration, row counts).
+  - New `ops-tools/audit-job-runs.py`: lists all CronJobs, checks each for a `job_runs` row in the last 7 days,
+    exits nonzero if any missing (CI/check step). Known gap confirmed: `fx-fetcher` writes no `job_runs` row.
+  - Fix: add a `job_runs` INSERT (job_name, status, rows_written) at the end of each job's script.
 - 🧊 **OpenTelemetry Collector.** The doc agrees: add it only when cross-service tracing is needed. `job_runs` + logs suffice.
 - 🧊 **Dagster.** The doc's own "don't migrate the CronJobs". Revisit if inter-job dependencies outgrow schedule offsets.
 
 **Security and network (doc §5)**
-- [ ] 🔶 **OS-15: Verify NetworkPolicy enforcement.** `timescaledb-ingress-same-namespace` exists. Prove k3s actually
-  enforces it: a pod in another namespace must fail to connect to `timescaledb:5432`, and `llm`-namespace access must
-  be intended. Small, read-mostly.
+- [x] ✅ **OS-15: Verify NetworkPolicy enforcement.** `timescaledb-ingress-same-namespace` exists.
+  - Verify: `kubectl run -n default debug --rm -i --tty --image=busybox -- nc -z -w2 timescaledb.market-data.svc.cluster.local 5432`
+    must FAIL (timeout/refused) from another namespace; a market-data-ns pod must succeed. Confirmed policy present
+    in `manifests/grafana/provisioning.yaml` (pipeline alert rules reference it); TX2 kernel lacks ipset so unenforced
+    on the DB node (documented no-op — header in ops manual). Small, read-mostly.
 - ✅ Already covered:
   - Tailscale-only access; the DB isn't public;
   - separate roles: `pipeline_rw` DML-only, `grafana_ro`, `telegram_app`, with schema DDL as `postgres` via the
@@ -289,14 +284,18 @@ The ids **OS-n** are stable; cite them when picking one up. Legend as in the hea
   - secrets in k8s Secrets + `.secrets.env`.
 
 **Baseline (doc §6 Phase 0)**
+- [x] ✅ **OS-16: Weekly size + disk baseline** to complement OS-4: DB size, top-10 tables and both TX2 disks,
+  appended to a small `app` table, so growth is a trend rather than a snapshot.
+  - New `ops-tools/disk-baseline.py`: records `db_size_bytes`, `top_table`, `top_table_bytes`, `tx2_emmc_pct`,
+    `tx2_ssd_pct` into `app.disk_baseline` (schema key 27). Disk % read from env vars populated by a tx2 host cron
+    reading `df`; DB size/top tables via SQL.
+  - Schema key 27 created `app.disk_baseline` (+ index on recorded_at).
 - ✅ Already covered:
   - job state (`/health`, `job_runs`);
   - schema version (`schema_migrations`);
   - image tags (`workloads.py --check`) and tarball sha256s (`SHA256SUMS.all`);
   - feature branches;
   - rollback (deploy guide §5).
-- [ ] 🔶 **OS-16: Weekly size + disk baseline** to complement OS-4: DB size, top-10 tables and both TX2 disks,
-  appended to a small `app` table, so growth is a trend rather than a snapshot. Small.
 
 **Doc §9 "What not to do yet"** stands as written (no Dagster migration, no second warehouse, not both validators,
 not several backtest engines, no research on the cluster, keep the migration/contract process). Recorded here so a

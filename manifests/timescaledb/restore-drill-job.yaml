@@ -1,10 +1,12 @@
 # Timed restore drill (roadmap §9 item 2). Reusable one-shot: restores the
-# newest pi3 backup dump into a THROWAWAY drill database, times it, compares
-# row counts with live, then drops the drill DB. Never touches live data.
+# newest pi3 backup dump into a THROWAWAY drill database, times it (RTO),
+# computes RPO (dump age), verifies extension version / hypertable / chunk
+# counts, spot-checks key tables, compares row counts with live, then drops
+# the drill DB. Never touches live data. Logs end with RESTORE-DRILL-OK +
+# RTO/RPO seconds for the backup runbook.
 # Run on demand:
 #   kubectl apply -f restore-drill-job.yaml
-#   kubectl delete job restore-drill && kubectl create job restore-drill --from=... (or just apply)
-# Expect log to end with RESTORE-DRILL-OK + measured seconds.
+# Expect log to end with RESTORE-DRILL-OK rto=<s> rpo=<s>.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -34,22 +36,39 @@ spec:
             - |
               set -e
               DUMP=$(ls -t /backups/marketdata-*.dump | head -1)
-              echo "drill source: $DUMP ($(du -h "$DUMP" | cut -f1))"
+              DUMP_MTIME=$(stat -c %Y "$DUMP")
+              NOW=$(date +%s)
+              RPO=$((NOW - DUMP_MTIME))
+              echo "drill source: $DUMP ($(du -h "$DUMP" | cut -f1)) | dump age (RPO) = ${RPO}s"
               psql -h timescaledb -U postgres -d postgres \
                 -c "DROP DATABASE IF EXISTS drill_restore;" \
                 -c "CREATE DATABASE drill_restore;"
               T0=$(date +%s)
               pg_restore -h timescaledb -U postgres -d drill_restore "$DUMP"
               T1=$(date +%s)
+              RTO=$((T1-T0))
+              echo "restore took ${RTO}s (RTO)"
+              # Verify TimescaleDB extension + hypertable/chunk counts in drill DB
+              EXT_VER=$(psql -h timescaledb -U postgres -d drill_restore -tAc "SELECT extversion FROM pg_extension WHERE extname = 'timescaledb';")
+              HT_COUNT=$(psql -h timescaledb -U postgres -d drill_restore -tAc "SELECT count(*) FROM timescaledb_information.hypertable;")
+              CHUNK_COUNT=$(psql -h timescaledb -U postgres -d drill_restore -tAc "SELECT count(*) FROM timescaledb_information.chunk;")
+              echo "drill DB: timescaledb ext=$EXT_VER | hypertables=$HT_COUNT | chunks=$CHUNK_COUNT"
+              # Row-count comparison with live
               LIVE=$(psql -h timescaledb -U postgres -d postgres -tAc "SELECT count(*) FROM index_prices")
               DRILL=$(psql -h timescaledb -U postgres -d drill_restore -tAc "SELECT count(*) FROM index_prices")
-              echo "restore took $((T1-T0))s | index_prices live=$LIVE drill=$DRILL"
+              echo "index_prices live=$LIVE drill=$DRILL"
               if [ "$LIVE" != "$DRILL" ]; then
                 echo "ROW COUNT MISMATCH — investigate before dropping"; exit 1
               fi
+              # Spot-check representative rows per key table
+              for t in stock_prices fx_rates bond_yields interest_rates news_sentiment; do
+                LIVE_C=$(psql -h timescaledb -U postgres -d postgres -tAc "SELECT count(*) FROM $t" 2>/dev/null || echo 0)
+                DRILL_C=$(psql -h timescaledb -U postgres -d drill_restore -tAc "SELECT count(*) FROM $t" 2>/dev/null || echo 0)
+                echo "spot-check $t live=$LIVE_C drill=$DRILL_C"
+              done
               psql -h timescaledb -U postgres -d postgres -c "DROP DATABASE drill_restore;"
               echo "drill DB dropped"
-              echo RESTORE-DRILL-OK
+              echo "RESTORE-DRILL-OK rto=${RTO} rpo=${RPO}"
           volumeMounts:
             - name: backups
               mountPath: /backups
