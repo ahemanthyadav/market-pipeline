@@ -75,7 +75,7 @@ re-runs and late corrections overwrite cleanly, never duplicate.
 | pi3 | Pi 3 B, 1 GB | <pi3-ip> | <pi3-tailnet-ip> | k3s worker; Grafana + pg-backup pinned here |
 | ahytx2-desktop | Jetson TX2, 7.7 GB | <tx2-ip> (router DHCP reservation, confirmed 2026-10-03) | <tx2-tailnet-ip> | GPU/tainted worker; DB host |
 | orin1 | Orin Nano, 8 GB | <orin1-ip> | — | k3s worker, tainted `gpu=orin:NoSchedule` (reserved for the STT/TTS voice layer — **not deployed**) |
-| orin2 | Orin Nano, 8 GB | <orin2-ip> | — | k3s worker, **untainted** — where the floating market-data jobs now run |
+| orin2 | Orin Nano, 8 GB | <orin2-ip> | — | k3s worker, tainted `gpu=orin:NoSchedule` — GPU only: voice (STT/TTS) + robotics, no floating market-data jobs |
 
 - Per-node jobs, pinned workloads and blast radius: see `node-roles.md` (2026-11-15). Live check 2026-11-15: pi2 is
   **cordoned** (`SchedulingDisabled`) since 2026-10-10 06:11 UTC (taint `timeAdded`; set during the outage recovery — reason
@@ -486,9 +486,8 @@ python3 ops-tools/getfile.py tx2 ahytx2 \
 #    · node-pinned images (telegram-digest, marketview → pi1): that node only
 #    · TX2-only images (sentiment, headline-ner, …): skip this step entirely
 #    · unpinned CronJobs: all Pi workers (pi1/pi2/pi3)
-#    · data + light images ALSO on orin2 (worker since 2026-11-13; `ssh orin2` works passwordless from the admin
-#      workstation — use `runcmd.py orin2 orin2` or putfile directly; host key pinned, address from
-#      `kubectl get node orin2`)
+#    · data + light images ALSO on pi1/pi3/pi2 (worker since 2026-11-16; `ssh pi1/pi3/pi2` works passwordless from the admin
+#      workstation — use `runcmd.py pi1 pi1` or putfile directly; host key pinned, address from `kubectl get node pi1`)
 for h in pi1 pi3; do   # data image runs on pi1/pi3; light runs on TX2 too; ml is TX2-only
   python3 ops-tools/putfile.py $h $h /tmp/marketdata-data-v1.tar.gz /home/$h/marketdata-data-v1.tar.gz
   python3 ops-tools/runcmd.py $h $h "echo @@PW@@ | sudo -S /usr/local/bin/k3s ctr -n k8s.io images import /home/$h/marketdata-data-v1.tar.gz 2>&1 | tail -1 && rm /home/$h/marketdata-data-v1.tar.gz"
@@ -568,8 +567,8 @@ python3 ops-tools/runcmd.py tx2  ahytx2 "echo @@PW@@ | sudo -S /usr/local/bin/k3
 # NOTE: check with `k3s ctr`, NOT `kubectl get node -o jsonpath={.status.images}` — the kubelet's
 # image list is an incomplete view. Verified 2026-11-15: status.images showed pi1 as missing
 # telegram-digest:v42 and marketdata-light:v1; both were present in containerd and in daily use.
-# The floating workers that need an import are now pi1, pi3 AND orin2 (orin2 runs all 31
-# floating CronJobs since 2026-11-13 — see node-roles.md §3.1).
+# The floating workers that need an import are now pi1, pi3 AND pi2 (floating jobs moved off orin2
+# when it became GPU-only for voice/robotics — see node-roles.md §3.1).
 
 # 2. Pull the missing tarball(s) from TX2 to the admin machine:
 python3 ops-tools/getfile.py tx2 ahytx2 /home/ahytx2/marketdata-data-v1.tar.gz /tmp/marketdata-data-v1.tar.gz
@@ -583,7 +582,7 @@ for h in pi1 pi3; do
 done
 # pi2: must run detached (nohup) + poll — a foreground import wedges the session.
 # orin1: SKIP — tainted `gpu=orin:NoSchedule`, STT/TTS voice only, no market-data images.
-# orin2: uncordoned and receiving floating jobs; import via `ssh orin2` (passwordless from admin workstation).
+# orin2: SKIP — tainted `gpu=orin:NoSchedule`, voice + robotics only, no market-data images.
 
 # 4. Verify imports landed:
 python3 ops-tools/runcmd.py pi1 pi1 "echo @@PW@@ | sudo -S /usr/local/bin/k3s ctr -n k8s.io images ls | grep marketdata-data:v1 | head -1"
@@ -605,8 +604,7 @@ kubectl -n market-data exec timescaledb-0 -- env PGPASSWORD="$PW" \
 python3 ops-tools/runcmd.py tx2 ahytx2 "echo @@PW@@ | sudo -S sh -c 'cd /mnt/tx2-ssd/image-tarballs && sha256sum *.tar.gz > SHA256SUMS.all'"
 
 # 8. If orin2 was restored, uncordon it so the scheduler can use it again:
-kubectl uncordon orin2
-# Leave orin1 cordoned-by-taint (never un-taint — STT/TTS only).
+# Leave orin1 and orin2 cordoned-by-taint (never un-taint — GPU only: voice/robotics).
 
 **Never:** `crictl rmi --prune` / `ctr images prune` (deletes every CronJob image; `Never` pull cannot recover).
 **Never:** remove tags with prune — one by one by name only.

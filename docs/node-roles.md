@@ -19,8 +19,8 @@
 | **pi2** | Pi 3 B+, 1 GB | Worker (after control-plane move) | CPU jobs fallback; formerly the control plane | none (was cordoned) | Unpinned jobs land here if image imported; pi2 no longer holds cluster API (see §4) |
 | **pi3** | Pi 3 B, 1 GB, SSD | Worker | Grafana, backups, general ingestion pool | `grafana`, `pg-backup`, `restore-drill` (Job) | No dashboards, no nightly dump; unpinned jobs land on pi1/orin2 |
 | **tx2** (`ahytx2-desktop`) | Jetson TX2, 7.7 GB, eMMC + 224 GB SSD | Worker (tainted `gpu=true`) | **The database**, NLP jobs, LLM gateway, image build host | `timescaledb`, `llm-gateway` (ns `llm`), `sentiment-scorer`, `headline-ner` | **Every pipeline write fails** (DB down); data is safe on the Retain PV |
-| **orin1** | Jetson Orin Nano, 8 GB, 932 GB SSD, 1×GPU | Worker (tainted `gpu=orin`) | **STT/TTS voice layer only** — reserved, not yet deployed | `stt-service` (Whisper), `tts-service` (Piper) — *manifests exist, deployments not applied* | Voice input/output stays silent; Telegram text commands and marketview still work |
-| **orin2** | Jetson Orin Nano, 8 GB, 476 GB SSD, 1×GPU | Worker (untainted) | **General ingestion pool** — where the floating CronJobs actually run | none (takes floating jobs) | Floating jobs reschedule to pi1/pi3; no pinned workload lost |
+| **orin1** | Jetson Orin Nano, 8 GB, 932 GB SSD, 1×GPU | Worker (tainted `gpu=orin`) | **GPU only: STT/TTS voice layer + market-data inference (future)** | `stt-service` (Whisper), `tts-service` (Piper) — *manifests exist, deployments not applied* | Voice input/output stays silent; Telegram text commands and marketview still work |
+| **orin2** | Jetson Orin Nano, 8 GB, 476 GB SSD, 1×GPU | Worker (untainted) | **GPU only: voice (STT/TTS) + robotics** — no market-data CronJobs | none (GPU-only workloads) | No market-data impact; floating CronJobs run on pi1/pi3/pi2 |
 
 ### 1b. Target layout (applied 2026-11-16; §1 above is the live state)
 
@@ -30,8 +30,8 @@
 | **pi2** | Worker, CPU jobs | Stopped being the control plane; uncordoned; k3s-agent repointed to k3s-cp (K3S_CP_IP:6443) |
 | **pi1, pi3** | Workers, CPU jobs + pinned workloads | k3s-agent repointed to k3s-cp |
 | **4th Pi 3** (870 EVO boot) | Worker, CPU jobs | New; joins after the control-plane move |
-| **tx2** | TimescaleDB, `llm-gateway`, image builds | GPU jobs (`sentiment-scorer`, `headline-ner`) move to orin1 |
-| **orin1** | GPU only: market-data inference | Was reserved for voice |
+| **tx2** | TimescaleDB, `llm-gateway`, image builds | Keeps all workloads (DB, NLP jobs `sentiment-scorer`, `headline-ner`, LLM gateway, image builds) — AR-10 on hold |
+| **orin1** | GPU only: voice (STT/TTS) + market-data inference | Reserved for `stt-service`/`tts-service`; later market-data inference (sentiment-scorer, headline-ner, embeddings) per AR-10 |
 | **orin2** | GPU only: voice (STT/TTS) + robotics | Floating jobs leave; may go mobile without affecting the cluster |
 | **Vostros** (remote, not in k3s) | Off-site encrypted backups, site-down watcher, restore drills | New (AR-11, AR-12) |
 
@@ -186,27 +186,13 @@ the workspace `hardware/ROADMAP.md` + `hardware/CONTROL-PLANE-MIGRATION.md`.
   context live in the container image, built on TX2 per §6 and distributed as tarballs.
 - **Watch:** GPU memory is shared with system RAM on Orin Nano — do not co-locate other GPU workloads without re-checking RAM.
 
-### orin2 — general ingestion worker (untainted)
+### orin2 — GPU only: voice (STT/TTS) + robotics
 
-- **Does:** the node the **floating market-data CronJobs actually run on** since 2026-11-13. Live 2026-11-15: ~49 pods
-  scheduled here — every floating CronJob (`fx`, `yields`, `rates`, `stock-prices`, `news`, `ta-compute`,
-  `pipeline-health`, `stock-metrics`, `stock-screener`, `stock-report`, `stock-valuation`, `prediction-tracker`,
-  `ml1-anomalies`, `ml3-volatility`, `ml7b-per-symbol`, `llm-narrative`, `news-embed`, `nse-fetcher`,
-  `stock-fundamentals`, `rbi-fetcher`, `fiidii-fetcher`, `intraday-fetcher`, `universe-refresh`, …).
-  **One job currently Running:** `nse-fundamentals-29912760-5974f` (~3 h, weekly NSE fundamentals fetcher); all other
-  market-data pods are `Completed`. **Orin2 holds NO market data** — no PVC or hostPath mount on either Orin node;
-  jobs write only to TimescaleDB on tx2. **Not a single point of failure:** every floating job's image
-  (`marketdata-data:v8`, `marketdata-light:v1`) is imported on pi1 and pi3 as well as orin2, so if orin2 dies the
-  scheduler reschedules onto the Pis — no data lost, no availability gap (the Orins ran nothing before 2026-11-13).
-  The gap is *observability*: orin2 isn't pinged by nodewatch and has no node-stats logger host cron.
-- **Labels/taints (live):** `hardware=orin-cpu`, `tier=saas`, 1× GPU allocatable, **no taint** — which is exactly why
-  it takes floating work (the `gpu=orin` taint on orin1 keeps voice pods off it and vice-versa).
+- **Does:** GPU-only worker for voice (STT/TTS) + robotics. **No market-data CronJobs** — floating ingestion jobs run on pi1/pi3/pi2 (and the 4th Pi when it joins).
+- **Labels/taints (live):** `hardware=orin-cpu`, `tier=saas`, 1× GPU allocatable, taint **`gpu=orin:NoSchedule`** — only GPU workloads that tolerate it schedule here.
 - **Pinned:** none. Every pinned workload (tx2 GPU jobs, pi1 Telegram, pi3 Grafana/backup) stays where it is.
-- **Image obligation (2026-11-13):** orin2 needs `marketdata-data:v8` + `marketdata-light:v1` imported. **Every future
-  data/light image cycle must import on orin2 too** — pi1 and pi3 already hold both images, so a cycle that misses
-  orin2 leaves floating jobs able to fall back to the Pis but orin2 itself would start failing with `ErrImageNeverPull`
-  (`imagePullPolicy: Never`, no registry — AGENTS.md rule 6).
-- **Capacity:** 6 CPU / 7.6 GB RAM / 476 GB SSD — the most headroom of any worker, which is why it wins floating jobs.
+- **Image obligation:** None — orin2 runs no market-data CronJobs, so `marketdata-data`/`marketdata-light` image imports are not required on orin2.
+- **Capacity:** 6 CPU / 7.6 GB RAM / 476 GB SSD — the most headroom of any worker, but reserved for GPU voice/robotics workloads.
 - **Live 2026-11-16:** Ready worker against k3s-cp (`K3S_URL` repointed from pi2 to k3s-cp), v1.37.2+k3s1, up 10 d 3 h,
   load 0.06, 3.3 GiB peak (k3s agent), GPU present but idle — no CUDA processes, no GPU memory in use. **Passwordless SSH
   + passwordless sudo now configured** via `ssh orin2` (`sudo -n` works without a sudo password). Joined the tailnet
@@ -244,18 +230,15 @@ rule 6), so a floating job only works on a node that has imported its image.
 | **pi3** | `pg-backup` `30 1 * * *` | pinned (`kubernetes.io/hostname: pi3`; dumps live on its SSD) |
 | **pi1** | `telegram-digest` `0 8 * * *` (IST), `telegram-alerts` `45 2 * * *` | pinned (`pi1`) |
 | **k3s-cp** | none | tainted `CriticalAddonsOnly=true:NoExecute` — no workloads schedule here |
-| **orin2** | the 31 floating jobs below | untainted worker holding the newest `local/*` images |
-| **pi1 or pi3 or pi2** | fallback for any floating job | valid landing zones (image must be imported) |
-| **orin1** | none | tainted `gpu=orin` — reserved for the voice layer, which is not deployed |
+| **orin2** | none | tainted `gpu=orin:NoSchedule` — reserved for voice (STT/TTS) + robotics; no market-data CronJobs |
+| **orin1** | none | tainted `gpu=orin` — reserved for voice layer, which is not deployed |
+| **pi1 or pi3 or pi2** | the 31 floating jobs below | valid landing zones (image must be imported) — floating work moved off orin2 |
 | **pi0** | none | not a k3s node |
 
 Pinned jobs, last scheduled (UTC, 2026-11-16): sentiment-scorer 08:15 · headline-ner 08:45 · pg-backup 09:30
 (`BACKUP-OK`, dump `marketdata-2026-11-15.dump` 539 MiB) · telegram-digest 02:30 · telegram-alerts 10:45.
 
-**Floating jobs (31).** "Seen on" = the node of the retained pods. Every floating job's pods are on **orin2** as of
-2026-11-15. Before 2026-11-13 they mostly landed on pi1/pi3; the orin2 import (data v7 + light v1) moved the bulk
-there, and orin2's 6 CPU / 7.6 GB headroom now wins the scheduler's choice. (`telegram-digest` is listed for
-completeness — it is the one pinned job in this table.)
+**Floating jobs (31).** "Seen on" = the node of the retained pods. Every floating job's pods are on **pi1/pi3/pi2** as of 2026-11-16. Before 2026-11-13 they mostly landed on pi1/pi3; orin2 held the bulk from 2026-11-13 until floating jobs were moved off orin2 when it became GPU-only for voice/robotics. Floating jobs can reschedule to any of pi1/pi3/pi2 that hold the image. (`telegram-digest` is listed for completeness — it is the one pinned job in this table.)
 
 | CronJob | Schedule (node-local) | Last scheduled (UTC, 2026-11-15) | Seen on |
 |---|---|---|---|
