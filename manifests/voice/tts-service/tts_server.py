@@ -11,7 +11,7 @@ import io
 import wave
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
-from piper.tts import PiperTts
+from piper import PiperVoice
 import uvicorn
 
 app = FastAPI(title="tts-service", version="1.0.0")
@@ -27,7 +27,7 @@ def load_model():
     model_path = os.path.join(VOICE_DIR, VOICE_MODEL)
     if not os.path.exists(model_path):
         raise RuntimeError(f"Piper voice model not found: {model_path}")
-    tts = PiperTts(model_path)
+    tts = PiperVoice(model_path)
 
 @app.get("/healthz")
 def healthz():

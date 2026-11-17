@@ -16,10 +16,11 @@ spec:
         app: stt-service
     spec:
       restartPolicy: Always
+      nodeName: orin1
       nodeSelector:
-        hardware: orin
+        hardware: orin-cpu
       tolerations:
-        - key: hardware
+        - key: gpu
           operator: Equal
           value: orin
           effect: NoSchedule
@@ -36,6 +37,13 @@ spec:
             limits:
               memory: "2Gi"
               cpu: "2"
+          env:
+            - name: WHISPER_DEVICE
+              value: "cpu"
+            - name: WHISPER_COMPUTE_TYPE
+              value: "int8"
+            - name: WHISPER_MODEL
+              value: "tiny"
           livenessProbe:
             httpGet:
               path: /healthz

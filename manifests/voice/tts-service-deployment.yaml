@@ -16,10 +16,11 @@ spec:
         app: tts-service
     spec:
       restartPolicy: Always
+      nodeName: orin1
       nodeSelector:
-        hardware: orin
+        hardware: orin-cpu
       tolerations:
-        - key: hardware
+        - key: gpu
           operator: Equal
           value: orin
           effect: NoSchedule
@@ -36,6 +37,14 @@ spec:
             limits:
               memory: "1Gi"
               cpu: "1"
+          env:
+            - name: PIPER_MODEL
+              value: "en_US-lessac-medium.onnx"
+            - name: PIPER_VOICE_DIR
+              value: "/root/.local/share/piper/voices"
+          volumeMounts:
+            - name: piper-voices
+              mountPath: /root/.local/share/piper/voices
           livenessProbe:
             httpGet:
               path: /healthz
@@ -48,6 +57,10 @@ spec:
               port: 8001
             initialDelaySeconds: 10
             periodSeconds: 5
+      volumes:
+        - name: piper-voices
+          hostPath:
+            path: /root/.local/share/piper/voices
 
 ---
 apiVersion: v1

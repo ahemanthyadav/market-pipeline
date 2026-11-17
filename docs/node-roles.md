@@ -162,28 +162,28 @@ the workspace `hardware/ROADMAP.md` + `hardware/CONTROL-PLANE-MIGRATION.md`.
   the NVIDIA GPU resource with `nodeSelector: hardware=gpu` — it will never schedule.
 - **Live 2026-11-16:** Ready worker against k3s-cp (`K3S_URL` repointed from pi2 to k3s-cp). Disk checked: eMMC 60%, SSD 16%, load 0.2. **SSH key auth + passwordless sudo now configured** (`sudo -n` works without a sudo password). The fixed-config re-verification (ops manual §2) is still to do.
 
-### orin1 — STT/TTS voice inference (reserved, not yet running)
+### orin1 — STT/TTS voice inference (deployed)
 
-- **Does:** reserved for `stt-service` (Whisper `tiny`/`base` via faster-whisper with CUDA) and `tts-service` (Piper),
+- **Does:** `stt-service` (Whisper `tiny` via faster-whisper on CPU) and `tts-service` (Piper),
   exposed inside the cluster only via ClusterIP Services (`stt-service.market-data.svc.cluster.local:8000`,
-  `tts-service...:8001`).
+  `tts-service.market-data.svc.cluster.local:8001`).
 - **Labels/taints (live):** `hardware=orin-cpu`, `tier=saas`, 1× GPU allocatable, taint **`gpu=orin:NoSchedule`**.
-- **Status 2026-11-16: the voice layer is NOT deployed.** `stt-service`/`tts-service` have no Deployment in the
-  cluster, so orin1 currently runs **nothing but kube-system pods** (the NVIDIA device plugin + the Traefik service LB).
-  k3s-agent repointed from pi2 to k3s-cp and Ready against k3s-cp.
-- **Live 2026-11-16:** Ready worker against k3s-cp (K3S_URL repointed from pi2 to k3s-cp), v1.37.2+k3s1, up 10 d 12 h,
-  load 0.02, 854 MiB peak (k3s agent), GPU present but idle — no CUDA processes, no GPU memory in use. Running a desktop
-  session (Firefox, GNOME shell, Xorg) in addition to k3s — the node doubles as a GUI workstation. **Passwordless SSH +
+- **Status 2026-11-16: voice layer deployed.** `stt-service` Deployment is Running on orin1 (Whisper `tiny` on CPU).
+  `tts-service` Deployment is deployed (Piper) but needs a voice model (`en_US-lessac-medium.onnx`) placed at
+  `/root/.local/share/piper/voices/` on orin1 before it can synthesize speech. k3s-agent Ready against k3s-cp.
+- **Labels/taints (live):** `hardware=orin-cpu`, `tier=saas`, 1× GPU allocatable, taint **`gpu=orin:NoSchedule`**.
+- **Live 2026-11-16:** Ready worker against k3s-cp (`K3S_URL` repointed from pi2 to k3s-cp), v1.37.2+k3s1, up 11 d,
+  load 0.02, ~6 GiB available (GUI removed 2026-11-16, freeing ~1.6 GiB). GPU present but idle. **Passwordless SSH +
   passwordless sudo now configured** via `ssh orin1` (`sudo -n` works without a sudo password). Joined the tailnet
   2026-11-05; Tailscale IP reachable.
-- **⚠ Selector/label mismatch — the manifests would not schedule.** `manifests/voice/stt-service-deployment.yaml` and
-  `manifests/voice/tts-service-deployment.yaml` select `nodeSelector: {hardware: orin}` and tolerate
-  `hardware=orin:NoSchedule`, but **both live Orin nodes are labelled `hardware=orin-cpu`** and the taint key is
-  `gpu=orin`. Applying the voice manifests as written leaves the pods `Pending` forever. Fix the selector/taint in the
-  manifests (or the node labels) before deploying — tracker §1.
-- **Not responsible for:** TimescaleDB (stays on TX2), ingestion fetchers, Grafana. Orin is voice-only by design.
+- **Not yet covered by ops tooling:** `ORIN1_IP`/`ORIN2_IP` aliases now exist in `.hosts.env` (added 2026-11-15),
+  but no `_creds.py` host password slot yet, so `ops-tools/runcmd.py` still cannot reach orin1/orin2 — no
+  node-stats logger host cron, no `vcgencmd`/throttle check, no image-import helper via that tool.
+  Direct `ssh orin1` / `ssh orin2` works passwordless from the admin workstation. Tracker §1.
+- **Not responsible for:** TimescaleDB (stays on TX2), ingestion fetchers (run on Pis), Grafana. Orin is voice-only
+  by design.
 - **Resources:** Whisper `tiny` + CUDA on a 4 GB Orin Nano is workable but tight; 8 GB preferred. Voice models and CUDA
-  context live in the container image, built on TX2 per §6 and distributed as tarballs.
+  context live in the container image, built on orin1 per §6 and distributed as tarballs.
 - **Watch:** GPU memory is shared with system RAM on Orin Nano — do not co-locate other GPU workloads without re-checking RAM.
 
 ### orin2 — GPU only: voice (STT/TTS) + robotics
