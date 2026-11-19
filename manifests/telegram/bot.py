@@ -51,12 +51,17 @@ import requests
 import stocks
 import users
 import router
+import voice
 from digest import TELEGRAM_LIMIT, build_message
 
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 OWNER = os.environ["TELEGRAM_CHAT_ID"]
 ALLOWED = OWNER   # back-compat alias for the single-user name
 API = f"https://api.telegram.org/bot{TOKEN}"
+FILE_API = f"https://api.telegram.org/file/bot{TOKEN}"
+# True only while handle() is answering a voice note. run_command() reads it, so the
+# read-only rule for voice holds on every routing path, exactly like the ADMIN check.
+VOICE_TURN = {"on": False}
 
 
 # ---------------------------------------------------------------- DB helpers
@@ -147,7 +152,8 @@ def cmd_route(text: str, chat: str = None) -> str:
 
 def _help_text() -> str:
     return (
-        "<b>Marketfredbot</b> — read-only commands:\n"
+        "<b>Marketfredbot</b> — read-only commands "
+        "(type them, or send a short voice note: “TCS price”):\n"
         "/status — pipeline heartbeat freshness\n"
         "/vix — VIX + India VIX\n"
         "/nifty · /sensex · /gold — close, day, YTD, 52w range, trend\n"
@@ -489,8 +495,18 @@ def run_command(cmd: str, text: str, chat: str) -> str:
     (e.g. "/multibagger /adduser 999 X" re-routing into /adduser)."""
     if cmd in ADMIN and not REGISTRY.is_owner(chat):
         return OWNER_ONLY
+    if VOICE_TURN["on"] and voice_blocked(cmd, text):
+        return voice.READ_ONLY
     handler = COMMANDS[cmd]
     return handler(text, chat) if cmd in PERSONAL else handler(text)
+
+
+def voice_blocked(cmd: str, text: str) -> bool:
+    """Pure. A voice turn may not run an owner-only command, and may only LIST the
+    watchlist: "/watch tesla" is an implicit add, so any argument could write."""
+    if cmd in ADMIN:
+        return True
+    return cmd == "watch" and len((text or "").split()) > 1
 
 
 AI_FLAGS = frozenset({"ai", "explain", "why", "summary", "?"})
@@ -534,6 +550,38 @@ def send(text: str, chat: str = None) -> None:
 
 
 def handle(update: dict) -> None:
+    """One update. A voice note is transcribed first and then answered like typed
+    text, but read-only (VOICE_TURN, enforced in run_command)."""
+    VOICE_TURN["on"] = False
+    try:
+        _handle(update)
+    finally:
+        VOICE_TURN["on"] = False
+
+
+def heard(msg: dict, chat: str):
+    """Transcript of a voice note from an ALLOWED chat (None = nothing to answer;
+    the user has already been told why)."""
+    ref = voice.voice_ref(msg)
+    if not ref:
+        return None
+    file_id, seconds, size = ref
+    if not voice.enabled():
+        send(voice.NOT_ENABLED, chat)
+        return None
+    problem = voice.refusal(seconds, size)
+    text = None
+    if not problem:
+        text, problem = voice.transcribe(API, FILE_API, file_id, requests)
+    if problem:
+        send(problem, chat)
+        return None
+    print(f"voice note {seconds}s transcribed ({len(text)} chars)", flush=True)
+    send(f"🎙 <i>Heard: “{html.escape(text)}”</i>", chat)
+    return text
+
+
+def _handle(update: dict) -> None:
     msg = update.get("message") or update.get("edited_message")
     if not msg:
         return
@@ -550,7 +598,11 @@ def handle(update: dict) -> None:
         return
 
     if not text:
-        return
+        # Only after the access check above: a stranger's audio is never downloaded.
+        text = heard(msg, chat)
+        if not text:
+            return
+        VOICE_TURN["on"] = True
     clean_text, want_ai = split_ai_flag(text)
     typed_slash = clean_text.startswith("/")
     cmd = clean_text.split()[0].lstrip("/").split("@")[0].lower()

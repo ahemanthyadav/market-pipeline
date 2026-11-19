@@ -36,7 +36,7 @@ spec:
         runAsGroup: 1000
       containers:
         - name: listener
-          image: local/telegram-digest:v44
+          image: local/telegram-digest:v45
           imagePullPolicy: Never
           securityContext:
             allowPrivilegeEscalation: false
@@ -66,6 +66,10 @@ spec:
               valueFrom: {secretKeyRef: {name: llm-gateway-key, key: base-url}}
             - name: LLM_API_KEY
               valueFrom: {secretKeyRef: {name: llm-gateway-key, key: api-key}}
+            - name: STT_URL                   # voice notes -> text (voice.py); unset = voice input off
+              value: http://stt-service.market-data.svc.cluster.local:8000
+            - name: VOICE_API_TOKEN           # sent as a bearer token once the Secret exists
+              valueFrom: {secretKeyRef: {name: voice-api-token, key: token, optional: true}}
             - name: PGHOST
               value: timescaledb.market-data.svc.cluster.local
             - name: PGUSER

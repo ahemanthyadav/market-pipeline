@@ -522,5 +522,155 @@ class MenuSyncTest(unittest.TestCase):
 
 
 
+class VoiceInputTest(BotFlowTest):
+    """2026-11-19: a voice note is transcribed and answered like text, but read-only."""
+
+    def setUp(self):
+        super().setUp()
+        self._voice = (bot.voice.transcribe, os.environ.get("STT_URL"))
+        os.environ["STT_URL"] = "http://stt.test"
+        self.asked = []
+        self.says = "tesla"
+
+        def fake(api, file_api, file_id, http):
+            self.asked.append(file_id)
+            return (self.says, None) if self.says else (None, bot.voice.NOT_HEARD)
+        bot.voice.transcribe = fake
+
+    def tearDown(self):
+        bot.voice.transcribe = self._voice[0]
+        if self._voice[1] is None:
+            os.environ.pop("STT_URL", None)
+        else:
+            os.environ["STT_URL"] = self._voice[1]
+        super().tearDown()
+
+    def speak(self, chat, seconds=3, size=9000):
+        bot.handle({"message": {"chat": {"id": int(chat)}, "from": {"id": int(chat)},
+                                "voice": {"file_id": "F1", "duration": seconds, "file_size": size}}})
+
+    def test_transcript_is_echoed_then_answered(self):
+        self.says = "status"
+        self.speak(OWNER)
+        self.assertEqual(self.asked, ["F1"])
+        self.assertIn("Heard: “status”", self.replies(OWNER)[0])
+        self.assertEqual(len(self.replies(OWNER)), 2)           # the echo + the answer
+        self.assertFalse(bot.VOICE_TURN["on"])                  # flag never leaks past the turn
+
+    def test_voice_can_list_but_never_change_a_watchlist(self):
+        for heard in ("watch tesla", "watch add tesla 10 200", "watch rm tesla"):
+            self.says = heard
+            self.speak(OWNER)
+            self.assertEqual(self.db.watch, {}, heard)
+            self.assertEqual(self.replies(OWNER)[-1], bot.voice.READ_ONLY, heard)
+        self.db.watch[(OWNER, "TSLA")] = (None, None, None)
+        self.says = "watch"
+        self.speak(OWNER)
+        self.assertNotEqual(self.replies(OWNER)[-1], bot.voice.READ_ONLY)
+        self.say(OWNER, "/watch tesla")                         # typed text still writes
+        self.assertIn((OWNER, "TESLA.NS"), self.db.watch)
+
+    def test_voice_never_runs_an_owner_command_even_for_the_owner(self):
+        self.says = "adduser 300000003 bob"
+        self.speak(OWNER)
+        self.assertEqual(self.db.members, {})
+        self.assertTrue(bot.voice_blocked("adduser", "/adduser 1 x"))
+        self.assertTrue(bot.voice_blocked("watch", "/watch tesla"))
+        self.assertFalse(bot.voice_blocked("watch", "/watch"))
+        self.assertFalse(bot.voice_blocked("stock", "/stock TCS"))
+
+    def test_a_strangers_audio_is_never_downloaded(self):
+        self.speak(STRANGER)
+        self.assertEqual(self.asked, [])
+        self.assertEqual(self.replies(STRANGER), [])
+
+    def test_long_note_is_refused_before_any_download(self):
+        self.speak(OWNER, seconds=bot.voice.MAX_SECONDS + 1)
+        self.assertEqual(self.asked, [])
+        self.assertIn("the limit is", self.replies(OWNER)[-1])
+
+    def test_nothing_heard_and_voice_off_are_said_plainly(self):
+        self.says = ""
+        self.speak(OWNER)
+        self.assertEqual(self.replies(OWNER)[-1], bot.voice.NOT_HEARD)
+        os.environ.pop("STT_URL")
+        self.speak(OWNER)
+        self.assertEqual(self.replies(OWNER)[-1], bot.voice.NOT_ENABLED)
+        os.environ["STT_URL"] = "http://stt.test"
+
+
+class VoiceModuleTest(unittest.TestCase):
+    class Resp:
+        def __init__(self, status=200, body=None, content=b""):
+            self.status_code, self._body, self.content = status, body or {}, content
+
+        def json(self):
+            return self._body
+
+    class Http:
+        def __init__(self, stt):
+            self.stt, self.calls = stt, []
+
+        def get(self, url, **kw):
+            self.calls.append(("GET", url, kw))
+            if url.endswith("/getFile"):
+                return VoiceModuleTest.Resp(body={"result": {"file_path": "voice/f.oga"}})
+            return VoiceModuleTest.Resp(content=b"OggS" + b"0" * 100)
+
+        def post(self, url, **kw):
+            self.calls.append(("POST", url, kw))
+            return self.stt
+
+    def setUp(self):
+        self._env = {k: os.environ.get(k) for k in ("STT_URL", "VOICE_API_TOKEN")}
+        os.environ["STT_URL"] = "http://stt.test/"
+        os.environ.pop("VOICE_API_TOKEN", None)
+
+    def tearDown(self):
+        for k, v in self._env.items():
+            os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+
+    def test_clean_transcript(self):
+        v = bot.voice
+        self.assertEqual(v.clean_transcript(" Tcs  price. "), "Tcs price")
+        self.assertEqual(v.clean_transcript("“What's Nifty at?”"), "What's Nifty at")
+        self.assertEqual(v.clean_transcript("..."), "")
+        self.assertEqual(v.clean_transcript(None), "")
+
+    def test_voice_ref_and_limits(self):
+        v = bot.voice
+        self.assertEqual(v.voice_ref({"voice": {"file_id": "a", "duration": 4, "file_size": 10}}), ("a", 4, 10))
+        self.assertEqual(v.voice_ref({"audio": {"file_id": "b"}}), ("b", 0, 0))
+        self.assertIsNone(v.voice_ref({"text": "hi"}))
+        self.assertIsNone(v.refusal(30, 1000, 30, 2000))
+        self.assertIn("limit is 30s", v.refusal(31, 1000, 30, 2000))
+        self.assertIn("too large", v.refusal(5, 2001, 30, 2000))
+
+    def test_round_trip_and_optional_bearer_token(self):
+        http = self.Http(self.Resp(body={"text": " Tcs price. "}))
+        self.assertEqual(bot.voice.transcribe("A", "F", "id1", http), ("Tcs price", None))
+        post = http.calls[-1]
+        self.assertEqual(post[1], "http://stt.test/transcribe")
+        self.assertEqual(post[2]["headers"], {})
+        self.assertEqual(post[2]["files"]["audio"][0], "voice.ogg")
+        self.assertEqual(http.calls[1][1], "F/voice/f.oga")
+        os.environ["VOICE_API_TOKEN"] = "s3cret"
+        bot.voice.transcribe("A", "F", "id1", http)
+        self.assertEqual(http.calls[-1][2]["headers"], {"Authorization": "Bearer s3cret"})
+
+    def test_failures_become_messages_never_exceptions(self):
+        v = bot.voice
+        self.assertEqual(v.transcribe("A", "F", "x", self.Http(self.Resp(status=500))), (None, v.FAILED))
+        self.assertEqual(v.transcribe("A", "F", "x", self.Http(self.Resp(body={"text": " . "}))),
+                         (None, v.NOT_HEARD))
+
+        class Down:
+            def get(self, *a, **k):
+                raise ConnectionError("no route")
+        self.assertEqual(v.transcribe("A", "F", "x", Down()), (None, v.FAILED))
+        os.environ.pop("STT_URL")
+        self.assertEqual(v.transcribe("A", "F", "x", Down()), (None, v.NOT_ENABLED))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

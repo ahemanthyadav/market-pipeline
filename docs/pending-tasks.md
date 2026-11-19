@@ -399,6 +399,18 @@ each with a regression test that fails on the old code. **Deploy is still pendin
   1. ✅ data half 2026-11-12: `cash_and_equivalents` added to `EDGAR_MAP` + `YF_MAP` in `stock_fundamentals.py` (`marketdata-data:v6`; fills on the Saturday `stock-fundamentals` run). NSE results filings carry no balance sheet, so India cash comes from the yfinance leg only. 🤔 **Owner:** switching `epv`/`damodaran_fcff`/`ev_ebitda_peer`/`owner_earnings` to net debt reverses ADR 0026/0030's deliberate no-cash-credit stance — needs an ADR amendment, not done. **Cash & Short-Term Investments (`cash_and_equivalents`, `DG-20`):** Add `CashAndCashEquivalentsAtCarryingValue` / `CashCashEquivalentsAndShortTermInvestments` to `EDGAR_MAP` in `stock_fundamentals.py` and `nse_fundamentals.py` if exact `net_debt = total_debt - cash` is desired for `ev_ebitda_peer`, `damodaran_fcff`, `epv`, and `owner_earnings` (currently uses gross `total_debt` without cash credit by design per ADR 0026 / ADR 0030).
   2. **Post-Earnings-Announcement Drift (`EV-19` PEAD / SUE):** Compute standardized quarterly EPS surprise (`SUE = (EPS_q - EPS_{q-4}) / sigma`) on the filing date using `earnings_calendar` (Schema 19) + quarterly `financial_facts` (`duration_days BETWEEN 75 AND 105`), and test against `ev0.py` §5 acceptance rules. ✅ **Tested 2026-11-12** (`ev0.py export-pit`/`run-pit`, roadmap §5c): **FAIL §5** — SP500 IC 0.007 (t 1.0), NIFTY500 0.028 (t 2.7, biased universe); event date = `filed` (earnings_calendar has no history). Re-run NIFTY after EV-1 India.
   3. **Point-in-Time Fundamental Panel Backtest (`EV-20`):** Reconstruct historical Value and Quality factor sleeves at each month-end from first-filed `financial_facts` in `ops-tools/ev0.py` to test fundamental sleeves with the same Newey-West / Fama-MacBeth rigor as price signals. ✅ **Tested 2026-11-12** (roadmap §5c): **FAIL §5** — SP500 value IC 0.004 (t 0.4), quality 0.006 (t 0.7); best component FCF yield t 1.8. India sleeves partial (NSE feed has no balance sheet). Composite unchanged.
+- [x] ✅ 2026-11-19 **marketview v15 — `/ideas` entry signals LIVE on pi1** (marketview `e2def23`, branch
+  `feat/ideas-entry-signals` — not yet merged/pushed). New `/ideas` page + `/api/ideas` + dossier entry-signal card: rule-based
+  Buy / Hold / Sell from value / quality / timing pillars (`app/signals.py`, one read-only `SQLS["ideas"]` query per universe).
+  Canaried: `/ping`, chart.js checksum, `/api/price`, `/api/ideas` ×5 universes (2.5–3.6 s), `/ideas`, `/stock/AAPL`, bad symbol 404;
+  pod 73Mi/192Mi. Design + plan: marketview `docs/IDEAS-ENTRY-SIGNALS.md`.
+- [x] ✅ 2026-11-19 **marketview v16 LIVE on pi1** (marketview `96ae712`, same branch): pool of 3 read-only DB connections (was one
+  shared connection) + 10-minute per-universe cache of the `/api/ideas` payload (bounded: 5 entries × ~0.7 MB). `/api/ideas` 2.3–3.5 s
+  cold → 0.4–1.3 s warm on pi1; pod 72Mi/192Mi; all canaries + browser check green. Rollback = v15 or v14 (both still imported).
+- [ ] 🤔 **marketview `/ideas` owner decisions:** (1) Buy/Hold/Sell labels vs marketview AGENTS.md rule 7 ("label, never
+  editorialize") — record the exception in the rule or rename the labels; (2) weights/thresholds are unvalidated constants —
+  snapshot the signal as a `prediction_snapshots` kind so `/scorecard` can test it (Phase 2 in the marketview doc); (3) merge + push
+  the branch.
 - [ ] 🔑 **OWNER-RUN: tailnet exposure of marketview + Grafana** (feature wave #3, ADR 0028 §6 — the
   agent permission system refuses to widen network exposure, by design). pi1 is on the tailnet.
   From the workstation (resolves the ClusterIPs, then configures serve on pi1 over ssh):

@@ -43,7 +43,7 @@ spec:
             runAsGroup: 1000
           containers:
             - name: digest
-              image: local/telegram-digest:v44
+              image: local/telegram-digest:v45
               imagePullPolicy: Never
               securityContext:
                 allowPrivilegeEscalation: false
@@ -97,6 +97,7 @@ metadata:
   namespace: market-data
 spec:
   schedule: "45 2 * * *"
+  timeZone: America/Los_Angeles   # explicit since 2026-11-19: without it the schedule follows the control plane's clock (UTC on the N100)
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 3600
   successfulJobsHistoryLimit: 3
@@ -118,7 +119,7 @@ spec:
             runAsGroup: 1000
           containers:
             - name: alerts
-              image: local/telegram-digest:v44
+              image: local/telegram-digest:v45
               imagePullPolicy: Never
               args: ["python", "alerts.py"]
               securityContext:

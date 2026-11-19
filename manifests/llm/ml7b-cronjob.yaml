@@ -7,6 +7,7 @@ metadata:
     app: ml7b-per-symbol
 spec:
   schedule: "45 2 * * 6"   # Saturdays 02:45 PDT, 30 min after stock-screener (node-local PDT)
+  timeZone: America/Los_Angeles   # explicit since 2026-11-19: without it the schedule follows the control plane's clock (UTC on the N100)
   concurrencyPolicy: Forbid
   failedJobsHistoryLimit: 1
   successfulJobsHistoryLimit: 3

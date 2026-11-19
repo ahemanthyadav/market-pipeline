@@ -13,5 +13,5 @@ WORKDIR /app
 # requirements.lock (AR-5): installed from the lock since v9 (2026-10-18).
 COPY requirements.lock ./
 RUN pip install --no-cache-dir -r requirements.lock
-COPY digest.py bot.py alerts.py stocks.py users.py resolver.py factcheck.py ask.py router.py nicknames.py ./
+COPY digest.py bot.py alerts.py stocks.py users.py resolver.py factcheck.py ask.py router.py nicknames.py voice.py ./
 CMD ["python", "digest.py"]

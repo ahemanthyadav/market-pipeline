@@ -48,6 +48,21 @@ class Safeguards(unittest.TestCase):
                                          f"{name}: {env['name']} must come from a Secret")
 
 
+class ExplicitTimeZone(unittest.TestCase):
+    """2026-11-19: a CronJob without spec.timeZone follows the control plane's clock.
+    When the control plane moved to the N100 (UTC) every schedule silently fired 8 h
+    earlier than the docs said, for three days. Every CronJob names its zone."""
+
+    def test_every_cronjob_names_its_time_zone(self):
+        missing = [f"{path}:{doc['metadata']['name']}" for path, doc in cronjobs()
+                   if not doc["spec"].get("timeZone")]
+        self.assertEqual(missing, [])
+
+    def test_only_the_two_known_zones(self):
+        zones = {doc["spec"].get("timeZone") for _path, doc in cronjobs()}
+        self.assertEqual(zones, {"America/Los_Angeles", "Asia/Kolkata"})
+
+
 class SchemaReapplySafety(unittest.TestCase):
     """schema-job re-applies EVERY key on EVERY run (2026-11-15 review: key 22 broke
     re-runs after key 25 widened its views; key 23 granted to a role no key created)."""

@@ -9,6 +9,7 @@ metadata:
   namespace: market-data
 spec:
   schedule: "0 13 * * 1"
+  timeZone: America/Los_Angeles   # explicit since 2026-11-19: without it the schedule follows the control plane's clock (UTC on the N100)
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 3600
   successfulJobsHistoryLimit: 2

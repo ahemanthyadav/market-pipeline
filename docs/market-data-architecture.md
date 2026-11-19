@@ -632,12 +632,12 @@ layer (JOINs on ticker/symbol), not in DDL.*
 | yields-fetcher | 15 23 * * * | local/marketdata-data:v11 | bond_yields (^TNX/^FVX/^TYX/^IRX) |
 | rates-fetcher | 20 23 * * * | local/marketdata-data:v11 | interest_rates DFF + bond_yields DGS2/10/30 |
 | news-fetcher | 45 23 * * * | local/marketdata-light:v1 | raw_headlines (RSS staging) |
-| sentiment-scorer | 15 0 * * * | local/marketdata-ml:v1 (TX2 only) | news_sentiment |
+| sentiment-scorer | 15 0 * * * | local/marketdata-ml:v2 (TX2 only) | news_sentiment |
 | ta-compute | 30 0 * * * | local/marketdata-data:v11 | technical_indicators |
 | headline-ner | 45 0 * * * | local/marketdata-light:v1 (TX2 only) | headline_entities + headline_events (ADR 0010) |
 | rbi-fetcher | 0 7 * * * | local/marketdata-light:v1 | interest_rates (IN_* policy rates) + bond_yields (IN_GS_*) |
-| telegram-digest | 0 8 * * * (Asia/Kolkata) | local/telegram-digest:v44 (pinned pi1) | Telegram digest (read-only) |
-| telegram-alerts | 45 2 * * * (node-local) | local/telegram-digest:v44, `args: alerts.py` (pinned pi1) | Telegram change alerts (read-only; silent when nothing changed) |
+| telegram-digest | 0 8 * * * (Asia/Kolkata) | local/telegram-digest:v45 (pinned pi1) | Telegram digest (read-only) |
+| telegram-alerts | 45 2 * * * (node-local) | local/telegram-digest:v45, `args: alerts.py` (pinned pi1) | Telegram change alerts (read-only; silent when nothing changed) |
 | llm-narrative | 40 7 * * * (Asia/Kolkata) | local/marketdata-light:v1 | llm_narratives — ML-7a AI market note via the shared llm-gateway (ADR 0022); digest shows it only if every number checks out |
 | news-embed | 0 1 * * * | local/marketdata-light:v1 | headline_embeddings — ML-2: embeds new headlines via the gateway `embed` capability, groups near-duplicates into stories (ADR 0024) |
 | ml1-anomalies | 0 2 * * * | local/marketdata-data:v11 | data_anomalies — ML-1: return/volume spikes, zero-volume bars, feed row-count + freshness drops |

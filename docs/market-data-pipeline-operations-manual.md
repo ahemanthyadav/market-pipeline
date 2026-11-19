@@ -209,7 +209,7 @@ Applied with `kubectl apply` after a `kubectl diff` review; it did not change `s
 | yields-fetcher | 15 23 * * * | local/marketdata-data:v11 | bond_yields (^TNX/^FVX/^TYX/^IRX) |
 | rates-fetcher | 20 23 * * * | local/marketdata-data:v11 | interest_rates DFF + bond_yields DGS2/10/30 |
 | news-fetcher | 45 23 * * * | local/marketdata-light:v1 | raw_headlines (RSS staging) |
-| sentiment-scorer | 15 0 * * * | local/marketdata-ml:v1 (TX2 only) | news_sentiment |
+| sentiment-scorer | 15 0 * * * | local/marketdata-ml:v2 (TX2 only) | news_sentiment |
 | ta-compute | 30 0 * * * | local/marketdata-data:v11 | technical_indicators |
 | pg-backup | 30 1 * * * | timescale/timescaledb:2.30.1-pg16 (pi3) | /var/lib/market-data/backups on pi3 |
 | pipeline-health | 45 1 * * * | local/marketdata-light:v1 | pipeline_heartbeat (feed freshness, **16 feeds** incl. rbi + llm_narrative + llm_gateway; weekend-safe 96 h on stock prices/scores since v5) |
@@ -224,8 +224,8 @@ Applied with `kubectl apply` after a `kubectl diff` review; it did not change `s
 | rbi-fetcher | 0 7 * * * | local/marketdata-light:v1 | interest_rates (7 IN_* policy rates) + bond_yields (5 G-Sec tenors + 3 T-bills) + pipeline_heartbeat self-row 'rbi' |
 | headline-ner | 45 0 * * * | local/marketdata-light:v1 (TX2 only) | headline_entities + headline_events (gazetteer extraction over raw_headlines, ADR 0010) |
 | fdi-watch | 0 9 1 * * | local/marketdata-light:v1 | logs only (manual INSERT follows) |
-| telegram-digest | 0 8 * * * — **timeZone: Asia/Kolkata** (ADR 0009) | local/telegram-digest:v44 (pinned pi1) | Telegram digest (read-only; no DB write) |
-| telegram-alerts | 45 2 * * * (node-local, after the screener chain) | local/telegram-digest:v44, `args: alerts.py` (pinned pi1) | Telegram change alerts (read-only): screener top-20 entries/exits, watchlist moves/crossings/news events; silent when nothing changed (added 2026-10-10) |
+| telegram-digest | 0 8 * * * — **timeZone: Asia/Kolkata** (ADR 0009) | local/telegram-digest:v45 (pinned pi1) | Telegram digest (read-only; no DB write) |
+| telegram-alerts | 45 2 * * * (node-local, after the screener chain) | local/telegram-digest:v45, `args: alerts.py` (pinned pi1) | Telegram change alerts (read-only): screener top-20 entries/exits, watchlist moves/crossings/news events; silent when nothing changed (added 2026-10-10) |
 | llm-narrative | 40 7 * * * — **timeZone: Asia/Kolkata** (ADR 0009) | local/marketdata-light:v1 | llm_narratives — ML-7a AI market note via the shared llm-gateway (ADR 0022); digest shows it only if every number checks out |
 | news-embed | 0 1 * * * | local/marketdata-light:v1 | headline_embeddings — ML-2: embeds new headlines via the gateway `embed` capability, groups near-duplicates into stories (ADR 0024) |
 | ml1-anomalies | 0 2 * * * | local/marketdata-data:v11 | data_anomalies — ML-1: return/volume spikes, zero-volume bars, feed row-count + freshness drops |
@@ -260,7 +260,7 @@ Applied with `kubectl apply` after a `kubectl diff` review; it did not change `s
   alerting-provisioning error and the section is all-or-nothing per file —
   a bad alerting.yaml crash-loops the pod (finds F29–F32).
 - Telegram two-way listener (2026-10-09, Tier 2): Deployment `telegram-bot`
-  (1×, pi1), `local/telegram-digest:v44` (since 2026-10-10: stock/watchlist/
+  (1×, pi1), `local/telegram-digest:v45` (since 2026-10-10: stock/watchlist/
   screener/world commands, telegram-bot doc §1a) with `args: bot.py` — the ONLY
   getUpdates consumer (Telegram 409s a second poller; the digest CronJob and
   Grafana only sendMessage). Multi-user (ADR 0012, v8): answers the owner + `bot_users`

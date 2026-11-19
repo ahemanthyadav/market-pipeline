@@ -54,6 +54,11 @@ spec:
               value: "int8"
             - name: WHISPER_MODEL
               value: "tiny"
+          volumeMounts:
+            # Whisper's model is downloaded here on first start; on the node's disk it
+            # survives restarts, so the service comes back without internet access.
+            - name: whisper-cache
+              mountPath: /root/.cache/faster-whisper
           livenessProbe:
             httpGet:
               path: /healthz
@@ -66,6 +71,11 @@ spec:
               port: 8000
             initialDelaySeconds: 10
             periodSeconds: 5
+      volumes:
+        - name: whisper-cache
+          hostPath:
+            path: /var/lib/voice/faster-whisper
+            type: DirectoryOrCreate
 
 ---
 apiVersion: v1
