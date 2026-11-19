@@ -4,7 +4,18 @@
 > the linked docs — this file is the index + status. Maintained per AGENTS.md docs
 > discipline: mark items ✅ with a date (and where the completion is recorded) when
 > done; prune ✅ lines into the relevant doc's history at housekeeping time.
-> **Last reviewed: 2026-11-15** (live cluster check + doc refresh): **6 k3s nodes** (pi1, pi2 cordoned, pi3, tx2,
+> **Last reviewed: 2026-11-19** (owner: "fix all that can be fixed"): the 2026-11-15 branch-review findings are
+> fixed and LIVE — `marketdata-data:v11` on all 21 data CronJobs (4 canaries green on pi2), `telegram-digest:v44`
+> (bot + digest + alerts), voice `stt-service:v3` + `tts-service:v2` on orin1 (text → speech → text round trip
+> verified; both had been broken since the 11-17 deploy), `ml7b` deadline 600 s → 3600 s with a script-side budget,
+> orin1/orin2 now pinged by pi0's nodewatch and running the node-stats logger. Found and cleared: a truncated
+> `marketdata-data-v9.tar` filling the RAM-backed `/tmp` on pi1, pi2 and pi3 (~450 MB of RAM each, since 11-17).
+> New §1 items: voice token Secret (owner-run), CronJob schedules now fire in UTC, EV-0 re-run for two G-21
+> signals, `marketdata-ml` pins ride the next rebuild. Detail: "2026-11-19 fix pass" in §1.
+> **Corrections to the 11-15/11-16 text below:** the voice manifests are NOT blocked (fixed 11-17, working 11-19);
+> orin2 no longer runs floating jobs (both Orins are tainted `gpu=orin:NoSchedule`, verified live) — the image
+> obligation is **pi1 + pi2 + pi3**.
+> **Earlier 2026-11-15** (live cluster check + doc refresh): **6 k3s nodes** (pi1, pi2 cordoned, pi3, tx2,
 > orin1, orin2) + pi0 (non-cluster DNS) — all Ready; **36 CronJobs, none suspended**; 30 of the 31 jobs started in the
 > last 26 h `Succeeded` (0 failures; `nse-fundamentals` still `Running` at the check — long weekly job);
 > `pipeline_heartbeat` **16/16 feeds fresh**; pi3 dump `marketdata-2026-11-15.dump` (539 MiB) present.
@@ -156,8 +167,8 @@ Both wired into bot.py COMMANDS + MENU, router SAFE_AI_COMMANDS, and nicknames.
 | ~~EV-9 (roadmap half): more statement lines~~ | ✅ done 2026-10-26, `screener:v17` live, canary 3/3; universe fills on the 10-31 weekly run | done |
 | EV-10…14 → EV-17/18 composite v2 | 2+ sessions | data gates CLEARED 2026-10-26 (EV-1 US + EV-9 live); next = EV-0 §5 re-run on point-in-time membership, then per-universe rules = owner |
 | ~~G-20 factor returns~~ | ✅ done 2026-10-26 (`factors-fetcher:v1` live, terms verified; EV-0 §5 test-4 extension rides the next scoring change) | done |
-| G-21 extra signals | ✅ Amihud/max_daily_ret/idio_vol + industry_momentum added to `ev0.py` + EV-0 §5 tested ✅; net payout yield, distress score need fundamentals/sector data | each must pass EV-0 §5 |
-| **Orin Nano STT/TTS voice node** | 🔶 **BLOCKER (found 2026-11-15): the voice manifests select `hardware: orin` and tolerate `hardware=orin:NoSchedule`, but both live Orin nodes are labelled `hardware=orin-cpu` and the taint key is `gpu=orin` — applying `manifests/voice/*.yaml` as written leaves the pods `Pending` forever. Fix the selector/taint (or relabel the nodes) FIRST.** **2026-11-15: target node is now orin2, not orin1** (orin1 takes the TX2's GPU work; roadmap H4). Also missing: Dockerfiles + `requirements.lock` for both images, and auth/limits on the services (2026-11-15 review). Build the images **on an Orin** (JetPack 7 base; the TX2 can't), deploy via the §6 cycle, wire `bot.py` to voice messages (docs: `docs/orin-nano-stt-tts-runbook.md`) | ~2–3 sessions | Selector/taint fix; Dockerfiles; Orin build path |
+| G-21 extra signals | ✅ Amihud/max_daily_ret/idio_vol + industry_momentum added to `ev0.py` + EV-0 §5 tested ✅ — **but the `industry_momentum` and `distress_score` results predate the 2026-11-19 fixes (compounding, NaN, look-ahead) and must be re-run** (§1); net payout yield, distress score need fundamentals/sector data | each must pass EV-0 §5 |
+| **Orin Nano STT/TTS voice node** | ✅ **Services live on orin1 2026-11-19** (`stt-service:v3`, `tts-service:v2`; Dockerfiles + pinned `requirements.txt`, optional bearer auth, request limits, `tests/test_voice.py`; round trip verified). The 11-17 deployment never worked: TTS crash-looped (wrong Piper API, wrong model file), STT returned 500 on every request (PyAV 19). 🔶 Remaining: wire `bot.py` to voice messages; create the `voice-api-token` Secret (owner-run, §1); give Whisper's model a volume so a restart needs no download | ~1 session | bot wiring = own session |
 | ~~Auto/FMCG + MIDCAP150 fetcher~~ | ✅ done 2026-10-26 (`nse-fetcher:v7`, series live 2015→today) | done |
 | ~~ML-0 experiment infra~~ | ✅ done 2026-11-04 — `ops-tools/ml0.py` (walk-forward splitter, leakage test, trial budget, `ml_runs` tracking via `app.ml_runs`); tested end-to-end with ret_12m across 5 universes | ~1 session |
 | ~~ML-1 anomaly v1~~ | ✅ **actually live 2026-11-12** (the 11-04 CronJob ran `python -m ml1_anomalies` — that library module, `manifests/ml/ml1_anomalies.py`, was never copied into the image and has no entry point — failed every night; 2026-11-13 rule fixes: per-market row counts, adj_close returns, per-feed silence threshold, DELETE+upsert of its window; now `ml1.py run` on `marketdata-data:v6` via `pgcompat`, canary 15 anomalies) — `ops-tools/ml1.py` (bad_bar, feed_drop, row_count_drop, scraper_drop rules; writes to `app.data_anomalies` idempotently; `tests/test_ml1.py` 11 tests all pass) | ~1 session |
@@ -170,7 +181,7 @@ Both wired into bot.py COMMANDS + MENU, router SAFE_AI_COMMANDS, and nicknames.
 | **Rust incremental rewrite** | Rewrite CPU-heavy jobs in Rust to save RAM on 1 GB workers: `ta-compute`, `stock-screener`, `ML-3` (GARCH MLE). Keep I/O-bound fetchers (yfinance, fx, news) in Python. Each Rust job = own small image built on TX2, imported via §6 cycle; no registry (ADR 0004). | multi-session | Test parity via `tests/run-all.sh`; measure RAM/runtime before expanding |
 | 🔲 **Rehearse the control-plane restore (added 2026-11-16)** | The N100 control plane is bare metal: no VM snapshot, so `pull-k3s-backup.sh` is the only fallback and it has never been restored. Restore the latest archive onto a scratch amd64 host/VM (not `minipc`, not on the cluster LAN IP), start k3s, confirm `kubectl get nodes` lists the cluster, then destroy it. Write the timings into ops manual §9. Do it before the v1.37 server upgrade. | small session | Fresh `pull-k3s-backup.sh` archive; a scratch amd64 machine |
 | ✅ **pi2 post-transfer role** | **Decided 2026-11-15: plain worker for CPU jobs.** pi2 is already a Ready worker against k3s-cp (k3s-agent service created, `K3S_URL` repointed from pi2 to k3s-cp, uncordoned). Import `data` + `light` images on pi2 as the next image cycle comes around. | small session | Control plane migration complete ✅ |
-| **Orins GPU-only (decided 2026-11-15)** | **Applied.** Floating CronJobs moved off orin2 back to pi1/pi3/pi2. orin1 and orin2 are GPU-only workers for voice (STT/TTS) + robotics. Both Orins on Ethernet; nodewatch + node-stats + ops-tools SSH slot for both; both tainted `gpu=orin:PreferNoSchedule` (CPU jobs prefer the Pis but may overflow). Keep `data` + `light` NOT imported on orin2 (no market-data jobs run there). Update `docs/node-roles.md` §1/§3 when applied | small session | Orins wired + monitored; pi2 a worker, or the 4th Pi joined, so the Pis have the room |
+| **Orins GPU-only (decided 2026-11-15)** | **Applied.** Floating CronJobs moved off orin2 back to pi1/pi3/pi2. orin1 and orin2 are GPU-only workers for voice (STT/TTS) + robotics. Both tainted **`gpu=orin:NoSchedule`** (verified live 2026-11-19 — not `PreferNoSchedule`: CPU jobs cannot overflow onto them). nodewatch + node-stats were NOT in place until 2026-11-19 (this row said they were); access is `ssh orin1`/`ssh orin2`, no ops-tools password slot. Keep `data` + `light` NOT imported on orin2 (no market-data jobs run there). Update `docs/node-roles.md` §1/§3 when applied | small session | Orins wired + monitored; pi2 a worker, or the 4th Pi joined, so the Pis have the room |
 | **4th Pi worker (spare Pi 3, 870 EVO boot)** | Added 2026-11-15. 64-bit Pi OS on the 870 EVO over USB (Pi 3 B: check `otp_dump` 17: = `3020000a`), cgroup memory flags, reserved IP; name `pi4` or `pi3b`. **Join it after the control-plane move.** Cordon it until `data` + `light` are imported; every later image cycle imports on it too. Add it to nodewatch/node-stats, `.hosts.env` and `_creds.py`. Prep: workspace `hardware/INVENTORY.md` §3.3 | small session | Control plane on `k3s-cp`; a switch port |
 | **Second watcher host (A29 / AR-12)** | pi0 is the only out-of-cluster alert path. **Decided 2026-11-15: a Vostro (remote site)** pings the home nodes over Tailscale and sends a Telegram alert when the whole home site goes dark. That covers home power and uplink loss, which no home host can. Optionally the 4th Pi also runs `nodewatch.sh` as a host cron to cover a pi0 failure. Normally-closed relay if it ever drives power control. | small session | Vostro has Debian (roadmap H1 bench work; the RAM upgrade isn't needed) |
 
@@ -343,60 +354,47 @@ each with a regression test that fails on the old code. **Deploy is still pendin
   - `REVOKE CREATE ON SCHEMA public FROM pipeline_rw`; explicit DML grants re-issued.
   - Verified: no public table is owned by `pipeline_rw`; grafana_ro/telegram_app SELECT intact.
   - Re-canary `stock-valuation` as DML-only `pipeline_rw`: VALUATION-OK, still 2,236 rows (idempotent).
-- [ ] 🔶 **Review findings not yet fixed** (reported by reviewers, not independently re-verified; verify each before fixing):
-  - Data:
-    - `predictions.py` stores an absolute `adj_close` base, so splits book fake returns and outcomes are write-once.
-    - `ev0.py` G-21 `distress_score` joins financials on `period_end`, not `filed` (look-ahead).
-    - `ev0.py` `industry_momentum` compounds (2+r), and NaN blanks the sector.
-    - `stock_prices.py` never phantom-checks the oldest bar in the window (seed `prev_close` from the DB).
-    - `ml1.py:284` deletes 100 days but rewrites 90.
-    - `ml3_volatility.py` EWMA is one day stale.
-    - `valuation.py` `easton_mpeg` uses g instead of r on the dps term.
-    - `universe_refresh.py` errors in the SEC CIK map fail the SP400/600 refresh.
-  - Bot:
-    - `router.py:364` `format_route` doesn't escape args.
-    - `valuation_text` crashes on NULL `upside_pct`.
-    - The facts fallback makes one 20 s gateway call per word on the poll loop.
-    - Nickname rows aren't checked against `universe_constituents`.
-    - The AI route to `watch` can write the watchlist.
-    - `/sectors` exceeds PHONE_WIDTH.
-    - `/scorecard` d1/d10 direction is unlabelled.
-    - `/methods` is truncated at 4096 characters.
+- [x] ✅ 2026-11-19 **Review findings fixed** (each verified against the code before fixing; commit `5a64b0c` + follow-up; tests added in the named files; live via the images in the header):
+  - Data (`marketdata-data:v11`):
+    - ✅ `predictions.py`: the return base is re-read from `stock_prices` at the snapshot date at resolve time, so base and target share one adjustment basis (a later split no longer books a fake return). No outcome had been written yet — the first 30-day horizon lands ~11-26. (`test_feature_jobs.py` `PredictionRebase`)
+    - ✅ `ev0.py` `distress_score`: joins statements on the filing date (strictly before the price date), first-filed values only, and a late filing for an older period never replaces a newer one. (`test_ev0.py` `G21Signals`)
+    - ✅ `ev0.py` `industry_momentum`: compounds (1 + r) once; one member's NaN no longer blanks the sector.
+    - ✅ `stock_prices.py`: `prev_close` is seeded from the DB (bounded 45-day lookback), so the oldest bar of the window is phantom-checked. (`test_stock_prices.py` `PhantomFirstBar`)
+    - ✅ `ml1.py`: each DELETE spans exactly the window its rule re-scanned (price rules `--days`, `row_count_drop` `--days + 10`). (`test_ml1.py` `OwnsExactlyItsWindow`)
+    - ✅ `ml3_volatility.py`: the EWMA forecast takes one more step so the newest return counts. (`test_ml3.py` `EwmaUsesTheNewestReturn`)
+    - ✅ `valuation.py` `easton_mpeg`: the dividend term is `r × DPS`, not `r × DPS × g` (Easton 2004: P = (eps₂ + r·dps₁ − eps₁)/r²). Catalog formula updated in the script and the schema ConfigMap. Effect on the 11-19 run: KO 17.54 → 37.50, JNJ 79.46 → 127.33, ITC.NS 66.15 → 186.86, MSFT 265.60 → 296.77; `fair_value` (the median of the methods) moves with it for dividend payers. Descriptive only (ADR 0026).
+    - ✅ `universe_refresh.py`: an SEC CIK-map outage degrades to "keep the stored CIK" instead of failing the S&P refresh.
+  - Bot (`telegram-digest:v44`):
+    - ✅ `router.format_route` escapes args.
+    - ✅ `valuation_text` handles NULL `upside_pct` / counts / `ts`.
+    - ✅ Facts fallback: only the whole phrase may reach the AI resolver (one gateway call per message, not one per word).
+    - ✅ Nickname rows are checked against the live universe (real row returned; a stock nickname whose symbol left the universe falls through; index/FX tickers exempt). All 119 stock nicknames resolve in the live universe today.
+    - ✅ The AI route to `watch` is list-only — any argument is dropped (`/watch tesla` is an implicit add).
+    - ✅ `/sectors` fits PHONE_WIDTH 38 (long names clipped); verified 38 on live SP500 data.
+    - ✅ `/scorecard` labels d1/d10 per kind (d1 = best-ranked for `screener_rank`, least upside for `valuation_upside`) and says how excess is computed.
+    - ✅ `/methods` is an index (2,341 characters live) + `/methods <key, name or category>` detail; the full catalog never fit 4096.
   - Ops:
-    - Voice services have no Dockerfiles, no auth, and a likely wrong piper import.
-    - `images/ml` torch/FinBERT are unpinned.
-    - `images/*/Dockerfile` comments name `-v1` tarballs and pi2 imports.
-    - `opencode.jsonc` runs an unpinned `mcp-telegram-bot` with the prod token.
-    - `ml7b` 600 s deadline vs 40×2×180 s.
-    - Floating CronJobs rely only on pi2's cordon.
+    - ✅ Voice: see the Orin row in §0 — Dockerfiles, pinned deps, optional auth, limits, the Piper API fix, the PyAV pin.
+    - ✅ `ml7b`: script stops itself at `BUDGET_SECONDS` 3000 and exits 0; Job deadline 3600 s (applied via `apply-llm.sh`, live spec verified). First scheduled proof: Sat 2026-11-21.
+    - ✅ `images/*/Dockerfile` comments: `vN` tags and the real import list (pi1, pi2, pi3).
+    - ✅ `opencode.jsonc`: `mcp-telegram-bot` pinned to `0.1.0` and disabled by default.
+    - ✅ in repo, 🔶 **not built**: `images/ml` pins torch 2.15.0, `huggingface_hub` 1.33.0 and the FinBERT commit (all read from the live `marketdata-ml:v1` image), and `sentiment-score.py` loads that revision. The live image is unchanged — the pins take effect at the next natural `marketdata-ml` rebuild (bump the tag in `manifests/sentiment/cronjob.yaml` then; a rebuild only for this is not worth a torch build on the DB host).
+    - ➖ "Floating CronJobs rely only on pi2's cordon": obsolete — pi2 is a planned worker since 2026-11-16 and holds the data + light images.
 
-- [ ] ⏸ **Roll out ADR 0033 & Schema 25 (`25-valuation-and-metrics-catalog.sql`) to the cluster (§6 cycle):** steps 1–4 ✅ (verified 2026-11-12: `valuation_methods` 34 rows, `stock_scientific_metrics` + `calibration_metrics` + `v_*` views present, sector_metrics lens columns live, 2,239 valuations for 11-12); **only step 5 remains, time-blocked** (first `prediction_outcomes` resolve ~2026-11-26; needs ≥6 resolved cross-sections).
-  Code and hermetic unit tests are committed across `marketdata` and `marketview`:
-  1. ✅ (applied via `valuation.ensure_schema_and_catalog()` with the v3 image, 2026-11-09) **Apply TimescaleDB Schema 25:** `kubectl apply -f manifests/timescaledb/schema-configmap.yaml` and run the schema job (or trigger one `stock-valuation` job, as `valuation.ensure_schema_and_catalog()` idempotently creates `valuation_methods`, `stock_scientific_metrics`, `calibration_metrics`, additive columns on `stock_valuations` and `sector_metrics`, contract views `v_valuation_methods`, `v_latest_scientific_metrics`, `v_latest_calibration`, and grants `SELECT` to `grafana_ro` and `telegram_app`).
-  2. ✅ (`marketdata-data:v3` 2026-11-09, now v6) **Update `stock-screener` scripts/image:** Apply the updated `stock-screener` ConfigMap (`valuation.py` 15-method engine + 34-row catalog + `scientific_row()`, `stock_metrics.py` `adj_close` total-return series + `ret_12_1` + `near_high`, `stock_fundamentals.py` `COGS_TAGS` fallback for `gross_profit`, `stock_report.py` dual-lens report) and run a canary `stock-valuation` job.
-  3. ✅ **Build & roll out `local/telegram-digest:v40`:** Build on TX2, archive tarball to `/mnt/tx2-ssd/image-tarballs/telegram-digest-v40.tar.gz`, import on `pi1`, and apply `manifests/telegram/deployment.yaml` + `manifests/telegram/cronjob.yaml`. Fixes `/valuation` `UndefinedColumn` on `ev_ebitda_peer` — degrades gracefully until Schema 25 is applied. Canary `DIGEST-DONE rc=0`.
-  4. ✅ 2026-11-12 (`marketview:v13` live on pi1, md5-verified vs marketview `2bc56de`; `/`, `/stock/AAPL`, `/multibagger`, `/strategies`, `/sectors`, `/scorecard`, `/screener?universe=SP600` all 200; bad symbol 404) **Build & roll out `local/marketview:v13`:** Bump `deploy/deployment.yaml` to `local/marketview:v13`, build on TX2, import on `pi1`, roll out, and canary `/stock/AAPL`, `/multibagger`, and `/strategies`.
-  5. ⏸ (time-blocked, see above) **Run continuous calibration loop (`ops-tools/classifier_loop.py`):** Run `python3 ops-tools/classifier_loop.py run --horizon 91` from the workstation once `prediction_outcomes` has ≥6 resolved cross-sections to populate `__calibration__` in `stock_reports` and structured rows in `calibration_metrics`.
-- [x] ✅ 2026-11-13 **Price writers stored mid-session bars as closes (found by ML-1 + a Yahoo cross-check)** — fixed in
-  `marketdata-data:v7` (`manifests/_common/sessions.py`, manual §3 correction, F20 amended). Index history 2026-10-01→ re-fetched;
-  today's transitional partial rows (written by v6 before the roll) deleted once (743 NSE stock + 13 index rows). `v8` (live
-  2026-11-13): the writer also DELETEs a stored row it now skips, and drops zero-volume carry-forward bars (`phantom_bar()`);
-  both index fetchers WARN when a ticker has no closed bars (a transient Yahoo miss was silent). Canary: 20 symbols, 85 rows,
-  0 open-session rows, 0 phantoms.
-- [x] ✅ 2026-11-13 **NSE holiday phantom bars** (found via ML-1 `row_count_drop` on 09-14/10-02): 15,820 zero-volume
-  carry-forward rows on 124 NSE-closed days (1996–2026; none on US closed days) — fake 0 % returns in vol/momentum/EV-0.
-  Exact rows saved to `out/cleanup/nse-holiday-phantom-bars-2026-11-13.csv` (gitignored; restore = `\copy … from`), then deleted
-  in 5-year transactions (count matched). Prevention ships in `marketdata-data:v8`. Watch item: the next `stock-prices` run should log
-  no 11-13-style NSE partials, and `^NSEI` should gain a bar every NSE trading day.
-- [x] ✅ 2026-11-13 **marketview v14** — `/scorecard` links `/reports/__calibration__` only once calibration rows exist (was a 404).
-- [ ] 🤔 **INDIAGLYCO.NS (2026-09-02) / HEGAM.NS (2026-09-07) unadjusted demerger-like drops** — Yahoo records no action; adj_close
-  is discontinuous for those two names (manual §4). Needs a corporate-action source with demerger ratios (e.g. NSE CA feed) — owner call
-  whether it is worth wiring in for 2 names.
-- [x] ✅ 2026-11-12 **MarketView UI surface extensions for Schema 25 tables** — all three shipped in `marketview:v13` (marketview `2bc56de`: `/sectors` reads `v_sector_latest` + 4 lens columns with derivation footnotes; `/scorecard` calibration table from `v_latest_calibration`, empty state until ~11-26; method catalog drawer on `/strategies`). Note: the scorecard's `/reports/__calibration__` link 404s until the first calibration run writes that report.
-  `/stock/{symbol}`, `/multibagger`, `/strategies`, and `/reports/__calibration__` already render the dual-lens models; three optional UI enhancements remain:
-  1. **`/sectors` (`sectors.html` + `SQLS["sectors"]` in `marketview/app/db.py`):** Expose the 4 new `sector_metrics` columns (`median_practitioner_upside_pct`, `median_academic_upside_pct`, `median_gpa`, `median_f_score`) alongside `median_upside_pct`.
-  2. **`/scorecard` (`scorecard.html`):** Render a structured calibration table directly from `v_latest_calibration` (`calibration_metrics`: Factor Rank ICs, Archetype Cohort Excess Returns, Multibagger Gate Marginal Value GMV, and Shrinkage-Proposed Factor Weights) in addition to the `/reports/__calibration__` markdown link.
-  3. **34-Row Method & Metric Reference Drawer (`v_valuation_methods`):** Render the full 34-row `valuation_methods` catalog (15 valuations, 8 scientific diagnostics, 5 factor pillars, 2 composites, 2 archetype taxonomies, 2 multibagger screens with formulas and peer-reviewed sources) on `/strategies` or `/scorecard`.
+- [ ] 🔑 **OWNER-RUN: voice service token (2026-11-19).** `stt-service` and `tts-service` enforce `Authorization: Bearer` only once this Secret exists (the agent permission system refuses secret-store writes); until then any pod in the cluster can call them. Then restart both so they read it:
+  ```bash
+  export KUBECONFIG=~/.kube/pi-cluster.yaml
+  kubectl -n market-data create secret generic voice-api-token --from-literal=token="$(openssl rand -hex 32)"
+  kubectl -n market-data rollout restart deploy/stt-service deploy/tts-service
+  ```
+  Whatever calls them later (the bot) reads the same Secret key.
+- [ ] 🤔 **CronJob schedules now fire in UTC (found 2026-11-19).** Every `schedule:` without a `timeZone` follows the control plane's clock, and since the move to the N100 that is UTC (live: `ml1-anomalies` `0 2 * * *` last fired 02:00Z; `stock-prices` `30 23 * * *` fired 23:30Z). The docs and the comments in the manifests still describe these as node-local America/Los_Angeles times, i.e. everything moved 8 h earlier on 2026-11-16. Nothing is failing — the fetchers run after the US close and outside NSE hours, and `sessions.py` skips open sessions — but two orderings changed: the screener chain (02:00–02:45) now runs minutes before the 08:00 IST digest (02:30Z) instead of 16 h before it, and `stock-report` (02:30) starts at the same minute as the digest. **Owner decision:** accept UTC and rewrite the schedule docs, or set `timeZone:` on each CronJob. Until then read every "PT" time in `node-roles.md` §3 and the ops manual as UTC.
+- [ ] 🔶 **Re-run EV-0 for `industry_momentum` and `distress_score` (2026-11-19).** Both were computed wrongly when their §5 results were recorded (momentum compounded 2 + r; distress read statements before they were filed). `python3 ops-tools/ev0.py export` then `run`, compare with the earlier reports in `out/ev0/`, and record the result in the evidence roadmap §5. Neither is a scoring input, so nothing live depends on the old numbers. ~1 session.
+- [ ] 🟡 **Whisper model has no volume (2026-11-19).** `stt-service` downloads `faster-whisper-tiny` into the container at every start; a restart without internet access leaves it not ready. Mount a hostPath for `/root/.cache/faster-whisper` like the Piper voice (manifest-only change).
+- [ ] 🟡 **Eight CronJob runs failed 2026-11-17 22:30Z → 11-18 03:00Z** (`yfinance-fetcher`, `fx-fetcher`, `yields-fetcher`, `stock-prices`, `stock-metrics`, `ml3-volatility`, `intraday-fetcher`, and `news-fetcher` on 11-15). Their pods are gone, so the cause is not proven; the window starts minutes after the `/tmp` tarball copies below. Every later run succeeded. If a gap shows in those feeds for 11-17, re-run the fetcher (idempotent).
+- [x] ✅ 2026-11-19 **`/tmp` on pi1/pi2/pi3 was 100 % full** with a truncated `marketdata-data-v9.tar` (copied 2026-11-17 22:22–22:37Z; `/tmp` is a 453 MB RAM tmpfs, the tar is ~475 MB). It held ~450 MB of RAM on each 905 MB Pi and broke `kubectl exec` on pi1. Removed on all three (v9 is imported on each node and archived on the TX2 with its checksum). Rule added to the ops manual §6 and the deployment guide: stage tarballs in the home directory.
+- [x] ✅ 2026-11-19 **`.hosts.env` Orin addresses are current** — `ORIN1_IP`/`ORIN2_IP` equal the nodes' IPv4 InternalIP. (A node reports IPv4 and IPv6 together in `.status.addresses`; take the IPv4 when scripting against it.)
+
 - [ ] 🤔 **Open Data & Accounting Enhancements (`DG-20`, `EV-19`, `EV-20`):** EV-19/EV-20 ✅ tested (FAIL); DG-20 data half ✅; **remaining = owner decision** on the net-debt bridge (below).
   1. ✅ data half 2026-11-12: `cash_and_equivalents` added to `EDGAR_MAP` + `YF_MAP` in `stock_fundamentals.py` (`marketdata-data:v6`; fills on the Saturday `stock-fundamentals` run). NSE results filings carry no balance sheet, so India cash comes from the yfinance leg only. 🤔 **Owner:** switching `epv`/`damodaran_fcff`/`ev_ebitda_peer`/`owner_earnings` to net debt reverses ADR 0026/0030's deliberate no-cash-credit stance — needs an ADR amendment, not done. **Cash & Short-Term Investments (`cash_and_equivalents`, `DG-20`):** Add `CashAndCashEquivalentsAtCarryingValue` / `CashCashEquivalentsAndShortTermInvestments` to `EDGAR_MAP` in `stock_fundamentals.py` and `nse_fundamentals.py` if exact `net_debt = total_debt - cash` is desired for `ev_ebitda_peer`, `damodaran_fcff`, `epv`, and `owner_earnings` (currently uses gross `total_debt` without cash credit by design per ADR 0026 / ADR 0030).
   2. **Post-Earnings-Announcement Drift (`EV-19` PEAD / SUE):** Compute standardized quarterly EPS surprise (`SUE = (EPS_q - EPS_{q-4}) / sigma`) on the filing date using `earnings_calendar` (Schema 19) + quarterly `financial_facts` (`duration_days BETWEEN 75 AND 105`), and test against `ev0.py` §5 acceptance rules. ✅ **Tested 2026-11-12** (`ev0.py export-pit`/`run-pit`, roadmap §5c): **FAIL §5** — SP500 IC 0.007 (t 1.0), NIFTY500 0.028 (t 2.7, biased universe); event date = `filed` (earnings_calendar has no history). Re-run NIFTY after EV-1 India.
@@ -438,14 +436,7 @@ each with a regression test that fails on the old code. **Deploy is still pendin
   (15.5 G used of 27.4 G — up from 54% at the 2026-10-10 move, alert threshold 85%); SSD `/dev/sda4` pgdata at
   **16 %** (23 G used of 157 G).
 
-- [ ] 🟠 **Orin nodes are unmonitored (found 2026-11-15).** orin1/orin2 (joined 2026-11-05) are missing from three
-  places: (a) `nodewatch.sh` on pi0 still pings only `pi0..pi3` + `tx2` — verified by reading
-  `/usr/local/bin/nodewatch.sh`; (b) neither node runs the AR-12 `node-stats-log.sh` host cron, so they contribute no
-  telemetry to `stats.csv`; (c) there is no `ORIN1_IP`/`ORIN2_IP` alias in `.hosts.env` and no `_creds.py` password
-  slot, so `ops-tools/runcmd.py` cannot reach them (no `vcgencmd`/throttle check, no image-import helper via that tool).
-  Direct `ssh orin1` / `ssh orin2` now works passwordless from the admin workstation (Tailscale IPs reachable),
-  but `ops-tools` host-aware commands still need `.hosts.env` + `_creds.py` entries.
-  Consequence: a failure of the node that runs **every floating CronJob** is invisible to the out-of-cluster watcher.
+- [x] ✅ 2026-11-19 **Orin nodes are monitored** (was: unmonitored, found 2026-11-15). (a) `nodewatch.sh` now watches `orin1` and `orin2` (keys `ORIN1_IP`/`ORIN2_IP` are required — a missing address is exit 2, not a silent gap); installed on pi0 with `/etc/nodewatch.hosts` extended (previous files kept as `*.bak-20261119`), dry run and the next scheduled run both `down=[none]`, md5 = repo. (b) `node-stats-log.sh` + root cron `*/5` + logrotate installed on both Orins, first samples written; `collect-node-stats.sh` pulls them over `scp`. (c) No `_creds.py` slot: the Orins use key auth and `sudo -n`, so `ssh orin1` / `ssh orin2` is the supported path. (`tests/test-nodewatch.sh`, 14 checks.)
 
 - [ ] 🟡 **Admin-workstation clock skew (observed 2026-11-15).** The workstation clock was ~10 h 50 m behind UTC at the
   start of the session and self-corrected mid-session (NTP sync). While skewed, `kubectl get` relative columns

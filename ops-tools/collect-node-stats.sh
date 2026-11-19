@@ -5,7 +5,7 @@
 # Usage:
 #   bash ops-tools/collect-node-stats.sh
 #
-# Output: out/node-stats/<host>.csv (pi0 pi1 pi2 pi3 tx2)
+# Output: out/node-stats/<host>.csv (pi0 pi1 pi2 pi3 tx2 orin1 orin2)
 #
 # Passwords: ops-tools/getfile.py reads PI_PASS / TX2_PASS from the gitignored
 # `.secrets.env` (host-aware, via _creds.py) — nothing is read from docs, printed
@@ -30,6 +30,13 @@ done
 
 python3 ops-tools/getfile.py tx2 ahytx2 \
   /var/log/node-stats/stats.csv "$OUT/tx2.csv"
+
+# orin1/orin2 (logger installed 2026-11-19): key auth through the workstation's ssh
+# aliases — they have no password slot in _creds.py, so getfile.py cannot reach them.
+for h in orin1 orin2; do
+  scp -q -o BatchMode=yes -o ConnectTimeout=8 "$h:/var/log/node-stats/stats.csv" "$OUT/$h.csv" \
+    || echo "WARN $h: stats.csv not collected (ssh alias '$h' unreachable?)" >&2
+done
 
 echo "--- freshest sample per node:"
 for f in "$OUT"/*.csv; do tail -n 1 "$f"; done

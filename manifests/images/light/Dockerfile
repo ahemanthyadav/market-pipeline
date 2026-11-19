@@ -5,7 +5,7 @@
 # Build natively on the TX2 (no registry, imagePullPolicy: Never):
 #   docker build -t local/marketdata-light:vN .   # N = the tag in the CronJob manifests
 #   docker save local/marketdata-light:vN | gzip > marketdata-light-vN.tar.gz
-#   k3s ctr -n k8s.io images import marketdata-light-vN.tar.gz  # pi1, pi2, pi3 + orin2 (see images/data/Dockerfile)
+#   k3s ctr -n k8s.io images import marketdata-light-vN.tar.gz  # pi1, pi2, pi3 (see images/data/Dockerfile)
 #
 # CronJobs using this image pass their script via `command:`:
 #   command: ["python", "pipeline-health.py"]

@@ -45,7 +45,7 @@ Conventional commits; push over SSH. `git log --oneline -5` shows the current st
 | pi2 | Control plane (cordoned, 1 GB — fragile) | k3s API, scheduler, datastore; **no workloads** |
 | pi3 | Worker — Grafana + backups | Grafana (pinned), pg-backup (01:30); floating jobs as fallback |
 | tx2 | GPU/tainted + DB host | TimescaleDB (Guaranteed QoS), sentiment-scorer, headline-ner, llm-gateway; image build host |
-| orin1 | Voice-only inference (tainted `gpu=orin`) | **reserved — stt-service/tts-service are NOT deployed**; currently only kube-system pods |
+| orin1 | Voice-only inference (tainted `gpu=orin`) | `stt-service` + `tts-service` running (2026-11-19) |
 | orin2 | Worker — general ingestion (untainted) | **where the 31 floating CronJobs run** (since 2026-11-13); needs every data/light image imported |
 
 **Security boundaries:** `postgres` (jobs/schema), `grafana_ro` (SELECT only), `telegram_app` (SELECT + watchlist/bot_users writes). No registry — images built natively on TX2 and tarball-distributed.
@@ -213,25 +213,27 @@ The previous image is still imported on the node (and archived on TX2): revert t
 
 ---
 
-## 4. Voice service (orin1) — reserved, not yet deployed
+## 4. Voice service (orin1) — deployed 2026-11-19
 
-`manifests/voice/stt_server.py` and `tts_server.py` are real FastAPI services:
+`manifests/voice/stt-service/stt_server.py` and `tts-service/tts_server.py` are FastAPI services on orin1:
 
-- `stt-service` — faster-whisper HTTP server (`tiny`/`base` + CUDA), `:8000`, `local/stt-service:v1`
-- `tts-service` — Piper HTTP server, `:8001`, `local/tts-service:v1`
+- `stt-service` — faster-whisper (`tiny`, CPU int8), `:8000`, `local/stt-service:v3`: `POST /transcribe` (multipart `audio`)
+- `tts-service` — Piper, `:8001`, `local/tts-service:v2`: `POST /speak` (`{"text": …}`) → OGG/Opus
 
-**As of 2026-11-15 neither service is deployed** — orin1 runs only kube-system pods. The manifests pin to
-`hardware: orin` via `nodeSelector` + `hardware=orin:NoSchedule` toleration, but the live Orin nodes are labelled
-**`hardware=orin-cpu`** and the taint key is **`gpu=orin`** — so applying them as written leaves the pods `Pending`.
-Fix the selector/taint (or the node labels) before deploying. Intended shape once fixed: voice pods land on
-**orin1** only, never on orin2 (which carries the floating market-data jobs), and are exposed inside the cluster only
-as ClusterIP Services (`stt-service.market-data.svc.cluster.local:8000`, `tts-service...:8001`).
+Both are ClusterIP only (`stt-service.market-data.svc.cluster.local:8000`, `tts-service…:8001`), pinned to orin1
+(`nodeName`, `hardware: orin-cpu`, toleration `gpu=orin`). Verified end to end 2026-11-19: text → speech → text
+round trip returned the sentence unchanged.
 
 **Operating notes:**
-- Whisper `tiny` + CUDA on a 4 GB Orin Nano is tight — 8 GB preferred; watch GPU/system shared RAM.
-- Do not co-locate other GPU workloads (e.g. future RAG) without re-checking RAM.
-- Voice models + CUDA context live in the container image, built on TX2 per §3 and tarball-distributed to orin1.
-- If you edit either `*_server.py`, you must bump `local/stt-service:v1` / `local/tts-service:v1` and run the full §3 cycle (tag bump → build → verify → tarball → SHA256SUMS → import → apply).
+- **Build on orin1, not the TX2** (`sudo docker build`, then `docker save | k3s ctr -n k8s.io images import -`);
+  the images exist only on orin1. Any edit to a `*_server.py` or `requirements.txt` = a tag bump in the
+  deployment manifest + rebuild + import + apply.
+- `requirements.txt` is pinned from a working image. `av` must stay below 19 for faster-whisper 1.2.1.
+- The Piper voice is a hostPath on orin1 (`/root/.local/share/piper/voices/`): the `.onnx` AND its `.onnx.json`.
+  Fetch one with `python3 -m piper.download_voices <name> --download-dir <dir>` inside the image.
+- Auth is optional and off until the Secret `voice-api-token` (key `token`) exists; then both services require
+  `Authorization: Bearer <token>`. Limits: 2,000 characters per `/speak`, 20 MB per `/transcribe`.
+- Tests: `python3 tests/test_voice.py`.
 
 ---
 

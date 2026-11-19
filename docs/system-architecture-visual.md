@@ -366,7 +366,7 @@ flowchart LR
 | Image | Node(s) | Used by |
 |-------|---------|---------|
 | `local/marketdata-light:v1` | TX2 + pi1/pi3 | headline-ner, sentiment-scorer (TX2 only via taint), rbi-fetcher, factors-fetcher, news-fetcher, etc. |
-| `local/marketdata-data:v9` | pi1/pi3 (+ tarball on TX2) | all unpinned CronJobs (stock-prices, nse-fetcher, yfinance-fetcher, screener chain, fundamentals, metrics, report, valuation, ...) |
+| `local/marketdata-data:v11` | pi1/pi2/pi3 (+ tarball on TX2) | all unpinned CronJobs (stock-prices, nse-fetcher, yfinance-fetcher, screener chain, fundamentals, metrics, report, valuation, ...) |
 | `local/marketdata-ml:v1` | TX2 | sentiment-scorer (GPU taint path) |
 | `local/litellm-database:1.106.0` | TX2 | llm-gateway Deployment |
 | `local/marketview:v14` | pi1 | marketview web app |

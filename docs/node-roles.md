@@ -35,8 +35,9 @@
 | **orin2** | GPU only: voice (STT/TTS) + robotics | Floating jobs leave; may go mobile without affecting the cluster |
 | **Vostros** (remote, not in k3s) | Off-site encrypted backups, site-down watcher, restore drills | New (AR-11, AR-12) |
 
-Both Orins get the soft taint `gpu=orin:PreferNoSchedule`: CPU jobs prefer the Pis but may overflow onto an
-Orin. Order and steps: `pending-tasks.md` (control-plane migration ✅, Orins GPU-only, 4th Pi, AR-10/11/12) and
+Both Orins were to get the soft taint `gpu=orin:PreferNoSchedule` (CPU jobs prefer the Pis but may overflow onto an
+Orin). **Live since 2026-11-16 the taint is the hard `gpu=orin:NoSchedule`** (verified 2026-11-19): nothing overflows,
+and the image obligation for floating jobs is pi1 + pi2 + pi3 only. Order and steps: `pending-tasks.md` (control-plane migration ✅, Orins GPU-only, 4th Pi, AR-10/11/12) and
 the workspace `hardware/ROADMAP.md` + `hardware/CONTROL-PLANE-MIGRATION.md`.
 
 ## 2. Per node
@@ -168,18 +169,25 @@ the workspace `hardware/ROADMAP.md` + `hardware/CONTROL-PLANE-MIGRATION.md`.
   exposed inside the cluster only via ClusterIP Services (`stt-service.market-data.svc.cluster.local:8000`,
   `tts-service.market-data.svc.cluster.local:8001`).
 - **Labels/taints (live):** `hardware=orin-cpu`, `tier=saas`, 1× GPU allocatable, taint **`gpu=orin:NoSchedule`**.
-- **Status 2026-11-16: voice layer deployed.** `stt-service` Deployment is Running on orin1 (Whisper `tiny` on CPU).
-  `tts-service` Deployment is deployed (Piper) but needs a voice model (`en_US-lessac-medium.onnx`) placed at
-  `/root/.local/share/piper/voices/` on orin1 before it can synthesize speech. k3s-agent Ready against k3s-cp.
+- **Status 2026-11-19: both services work end to end** (`stt-service:v3`, `tts-service:v2`). A sentence
+  synthesized by `/speak` (OGG/Opus, the Telegram voice format) was transcribed back word for word by
+  `/transcribe`. What the 2026-11-17 deployment actually was: `tts-service` crash-looped from the first minute
+  (569 restarts — it called a Piper API that does not exist, and the file placed as the voice was not a Piper
+  model and had no `.onnx.json` config), and `stt-service` answered every `/transcribe` with HTTP 500 (PyAV 19
+  removed an argument faster-whisper 1.2.1 passes; pinned to `av==18.1.0`). The voice (`en_US-lessac-medium.onnx`
+  + `.onnx.json`, 63 MB) is a hostPath at `/root/.local/share/piper/voices/` on orin1, not in the image.
+  Both services accept an optional bearer token (`VOICE_API_TOKEN` from Secret `voice-api-token`, not created
+  yet — tracker §1) and cap request size. The bot is not wired to them yet. Whisper's model is downloaded into
+  the container at each start (no volume) — a restart needs internet access.
 - **Labels/taints (live):** `hardware=orin-cpu`, `tier=saas`, 1× GPU allocatable, taint **`gpu=orin:NoSchedule`**.
 - **Live 2026-11-16:** Ready worker against k3s-cp (`K3S_URL` repointed from pi2 to k3s-cp), v1.37.2+k3s1, up 11 d,
   load 0.02, ~6 GiB available (GUI removed 2026-11-16, freeing ~1.6 GiB). GPU present but idle. **Passwordless SSH +
   passwordless sudo now configured** via `ssh orin1` (`sudo -n` works without a sudo password). Joined the tailnet
   2026-11-05; Tailscale IP reachable.
-- **Not yet covered by ops tooling:** `ORIN1_IP`/`ORIN2_IP` aliases now exist in `.hosts.env` (added 2026-11-15),
-  but no `_creds.py` host password slot yet, so `ops-tools/runcmd.py` still cannot reach orin1/orin2 — no
-  node-stats logger host cron, no `vcgencmd`/throttle check, no image-import helper via that tool.
-  Direct `ssh orin1` / `ssh orin2` works passwordless from the admin workstation. Tracker §1.
+- **Monitoring (2026-11-19):** pi0's `nodewatch.sh` pings orin1 and orin2, and both run the `node-stats-log.sh`
+  root cron (`/var/log/node-stats/stats.csv`, pulled by `collect-node-stats.sh`). Access is `ssh orin1` /
+  `ssh orin2` from the admin workstation (key auth, `sudo -n`); `ops-tools/runcmd.py` has no password slot for
+  them and does not need one.
 - **Not responsible for:** TimescaleDB (stays on TX2), ingestion fetchers (run on Pis), Grafana. Orin is voice-only
   by design.
 - **Resources:** Whisper `tiny` + CUDA on a 4 GB Orin Nano is workable but tight; 8 GB preferred. Voice models and CUDA
@@ -197,10 +205,10 @@ the workspace `hardware/ROADMAP.md` + `hardware/CONTROL-PLANE-MIGRATION.md`.
   load 0.06, 3.3 GiB peak (k3s agent), GPU present but idle — no CUDA processes, no GPU memory in use. **Passwordless SSH
   + passwordless sudo now configured** via `ssh orin2` (`sudo -n` works without a sudo password). Joined the tailnet
   2026-11-05; Tailscale IP reachable.
-- **Not yet covered by ops tooling:** `ORIN1_IP`/`ORIN2_IP` aliases now exist in `.hosts.env` (added 2026-11-15),
-  but no `_creds.py` host password slot yet, so `ops-tools/runcmd.py` still cannot reach orin1/orin2 — no
-  node-stats logger host cron, no `vcgencmd`/throttle check, no image-import helper via that tool.
-  Direct `ssh orin1` / `ssh orin2` works passwordless from the admin workstation. Tracker §1.
+- **Monitoring (2026-11-19):** pi0's `nodewatch.sh` pings orin1 and orin2, and both run the `node-stats-log.sh`
+  root cron (`/var/log/node-stats/stats.csv`, pulled by `collect-node-stats.sh`). Access is `ssh orin1` /
+  `ssh orin2` from the admin workstation (key auth, `sudo -n`); `ops-tools/runcmd.py` has no password slot for
+  them and does not need one.
 
 ## 3. Every scheduled job, by node
 
@@ -231,7 +239,7 @@ rule 6), so a floating job only works on a node that has imported its image.
 | **pi1** | `telegram-digest` `0 8 * * *` (IST), `telegram-alerts` `45 2 * * *` | pinned (`pi1`) |
 | **k3s-cp** | none | tainted `CriticalAddonsOnly=true:NoExecute` — no workloads schedule here |
 | **orin2** | none | tainted `gpu=orin:NoSchedule` — reserved for voice (STT/TTS) + robotics; no market-data CronJobs |
-| **orin1** | none | tainted `gpu=orin` — reserved for voice layer, which is not deployed |
+| **orin1** | `stt-service`, `tts-service` (Deployments, `nodeName: orin1`) | tainted `gpu=orin:NoSchedule` — voice layer only |
 | **pi1 or pi3 or pi2** | the 31 floating jobs below | valid landing zones (image must be imported) — floating work moved off orin2 |
 | **pi0** | none | not a k3s node |
 
@@ -309,7 +317,7 @@ scheduled); fixed that day on all five (ADR 0011 amendment).
 - **pi0 down** → LAN DNS gone *and* the out-of-cluster alert path is silent (this is why a second watcher host is an open question — AR-12).
 - **orin2 down** → the 31 floating CronJobs reschedule to pi1/pi3 — **only if those nodes hold the image**; otherwise
   they fail with `ErrImageNeverPull` until the tarball is imported. No pinned workload is lost.
-- **orin1 down** → no impact today — the voice layer is not deployed (it only holds kube-system pods).
+- **orin1 down** → the voice services (`stt-service`, `tts-service`) are down; nothing depends on them yet (the bot is not wired to voice). pi0's nodewatch reports it.
 - **Shared charger:** pi1/pi2/pi3 dropped together on 2026-10-10 while pi0 stayed up — the power supply is a single
   point of failure across all of them (tracker §1).
 - **No registry:** an image missing on a node gives `ErrImageNeverPull`; keep the "which node has which image" list true.

@@ -4,7 +4,7 @@
 > cluster, validated, documented". This is the wrapper; the copy-paste depth
 > lives in the ops manual (§6 image cycle, §7 health checklist, §8 recovery)
 > and the skills (`cluster-mutation`, `canary-validate`, `commit-and-changelog`).
-> **Last verified: 2026-10-30** (telegram-digest v34 rollout, end to end).
+> **Last verified: 2026-11-19** (marketdata-data v11 + telegram-digest v44 rollout, end to end).
 
 ## 0. What "deploy" means here
 
@@ -57,12 +57,16 @@ from the gitignored `.secrets.env` only inside commands that consume it.
    source after the §8 prune incident — never skip it).
 6. **Distribute only where the workload can schedule**: pinned images
    (telegram, marketview → pi1) go to that node only; TX2-tainted images skip
-   distribution; unpinned CronJobs go to **pi1, pi3 and orin2** (since 2026-11-13 orin2 runs most of them; its sudo
-   needs the owner's password, so stage the tarball with `scp` (key auth) and ask the owner to import).
-   pi2 is cordoned: skip it. `getfile.py` →
-   `putfile.py` → `k3s ctr -n k8s.io images import`. pi1/pi3 imports block
-   1–2 min (fine); **pi2 imports run detached or they wedge the session**.
-   Verify with `ctr images ls | grep <tag>` before applying anything.
+   distribution; unpinned CronJobs go to **pi1, pi2 and pi3** (the Orins are
+   tainted `gpu=orin:NoSchedule` and take no market-data images — verify the
+   taints with `kubectl get nodes -o jsonpath=…spec.taints` before trusting
+   this list; a node that can schedule the job but lacks the image fails with
+   `ErrImageNeverPull`). `getfile.py` → `putfile.py` (into the **home
+   directory**, never `/tmp`: on the Pis `/tmp` is a 453 MB RAM tmpfs — ops
+   manual §6) → `k3s ctr -n k8s.io images import`. Imports take 1–2 min and
+   push the node's load to ~6: run them detached (`nohup` + a done-marker) on
+   every Pi, **always on pi2**. Verify with `ctr images ls | grep <tag>` before
+   applying anything.
 7. **Clean up**: delete the home-dir tarball copies and the build dir on the
    TX2, and the tarball from each node after import (the archive copy stays).
 

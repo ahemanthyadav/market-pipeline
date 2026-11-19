@@ -74,7 +74,7 @@ re-runs and late corrections overwrite cleanly, never duplicate.
 | k3s-cp | N100 mini PC, 4 cores / 16 GB, amd64 | <K3S_CP_IP> | <K3S_CP_TS_IP> | k3s control-plane only; tainted `CriticalAddonsOnly=true:NoExecute` |
 | pi3 | Pi 3 B, 1 GB | <pi3-ip> | <pi3-tailnet-ip> | k3s worker; Grafana + pg-backup pinned here |
 | ahytx2-desktop | Jetson TX2, 7.7 GB | <tx2-ip> (router DHCP reservation, confirmed 2026-10-03) | <tx2-tailnet-ip> | GPU/tainted worker; DB host |
-| orin1 | Orin Nano, 8 GB | <orin1-ip> | — | k3s worker, tainted `gpu=orin:NoSchedule` (reserved for the STT/TTS voice layer — **not deployed**) |
+| orin1 | Orin Nano, 8 GB | <orin1-ip> | — | k3s worker, tainted `gpu=orin:NoSchedule` (runs the STT/TTS voice layer: `stt-service` + `tts-service`, live 2026-11-19) |
 | orin2 | Orin Nano, 8 GB | <orin2-ip> | — | k3s worker, tainted `gpu=orin:NoSchedule` — GPU only: voice (STT/TTS) + robotics, no floating market-data jobs |
 
 - Per-node jobs, pinned workloads and blast radius: see `node-roles.md` (2026-11-15). Live check 2026-11-15: pi2 is
@@ -82,8 +82,9 @@ re-runs and late corrections overwrite cleanly, never duplicate.
   inferred, not recorded). Keep it cordoned.
 - k3s: server v1.36.4+k3s1 (pi2); agents v1.36.4 on the Pis, **pinned v1.35.3+k3s1 on TX2**, v1.37.2 on orin1/orin2.
 - **Label/taint drift to be aware of (2026-11-15):** both Orin nodes carry `hardware=orin-cpu` (not `hardware=orin`) and the
-  Orin taint key is `gpu=orin` (not `hardware=orin`). The voice manifests under `manifests/voice/` still select
-  `hardware: orin` and tolerate `hardware=orin` — **they would not schedule as written**. See `node-roles.md` §2.
+  Orin taint key is `gpu=orin` (not `hardware=orin`). The voice manifests under `manifests/voice/` select
+  `hardware: orin-cpu` and tolerate `gpu=orin` (fixed 2026-11-17); both services run on orin1 (`stt-service:v3`,
+  `tts-service:v2`, 2026-11-19). See `node-roles.md` §2.
 - **TX2's GPU is not exposed to Kubernetes:** the node carries the GPU-present label but advertises **no GPU
   allocatable capacity** — the NVIDIA device plugin runs only on orin1/orin2. Reach TX2's GPU through the GPU
   RuntimeClass (smoke-test path) — never request the NVIDIA GPU resource on a `nodeSelector: hardware=gpu` node.
@@ -259,7 +260,7 @@ Applied with `kubectl apply` after a `kubectl diff` review; it did not change `s
   alerting-provisioning error and the section is all-or-nothing per file —
   a bad alerting.yaml crash-loops the pod (finds F29–F32).
 - Telegram two-way listener (2026-10-09, Tier 2): Deployment `telegram-bot`
-  (1×, pi1), `local/telegram-digest:v43` (since 2026-10-10: stock/watchlist/
+  (1×, pi1), `local/telegram-digest:v44` (since 2026-10-10: stock/watchlist/
   screener/world commands, telegram-bot doc §1a) with `args: bot.py` — the ONLY
   getUpdates consumer (Telegram 409s a second poller; the digest CronJob and
   Grafana only sendMessage). Multi-user (ADR 0012, v8): answers the owner + `bot_users`
@@ -529,6 +530,18 @@ light/ml/litellm tarballs above; older data v1–v3 and telegram v37–v41 tarba
 verifying their checksums, and `SHA256SUMS.pi-only-images` went with them). Historical tags are no longer kept: the repo +
 `requirements.lock` can rebuild any of them, and the live-image tarballs are what a store loss actually needs.
 
+**Live set 2026-11-19:** `marketdata-data:v11`, `telegram-digest:v44` (archived with `SHA256SUMS.all` regenerated);
+data v9/v10 and telegram v43 stay as rollbacks. The voice images (`stt-service:v3`, `tts-service:v2`) are built ON
+orin1 and exist only in its docker + containerd stores — they are not in this archive (rebuild from
+`manifests/voice/*/` with the pinned `requirements.txt`).
+
+**Never stage a tarball in `/tmp` on a Pi (found 2026-11-19).** `/tmp` there is a 453 MB RAM-backed tmpfs: an
+uncompressed `marketdata-data-v9.tar` (≈475 MB) copied to `/tmp` on 2026-11-17 filled it on pi1, pi2 AND pi3, was
+truncated, and then sat there holding ~450 MB of each Pi's 905 MB of RAM for two days. Symptoms: `kubectl exec`
+fails with `write /tmp/runc-process…: no space left on device`, redirects into `/tmp` produce empty files, and
+jobs fail under memory pressure (eight CronJob runs failed in the hours after the copy). Stage tarballs in the
+user's home directory (on the SSD) as step 6 shows, and delete them after the import. Check: `df -h /tmp`.
+
 **TX2 docker build cache (2026-10-31):** the build store now holds exactly `local/marketdata-light:v1`, `local/marketdata-ml:v1`
 and `local/litellm-database:1.106.0` — every pre-AR-5 per-fetcher tag, the old marketview/telegram tags, the 24 dangling build
 layers and the base images (`python:3.11-slim`, `python:3.12-slim`, `ghcr.io/berriai/litellm-database:main-stable`) were removed
@@ -581,6 +594,7 @@ for h in pi1 pi3; do
   python3 ops-tools/runcmd.py $h $h "echo @@PW@@ | sudo -S rm /home/$h/marketdata-data-v1.tar.gz"
 done
 # pi2: must run detached (nohup) + poll — a foreground import wedges the session.
+# Stage tarballs in the home directory, NEVER /tmp (RAM tmpfs on the Pis — see the note above).
 # orin1: SKIP — tainted `gpu=orin:NoSchedule`, STT/TTS voice only, no market-data images.
 # orin2: SKIP — tainted `gpu=orin:NoSchedule`, voice + robotics only, no market-data images.
 
@@ -1198,7 +1212,7 @@ old/new rows never compare — re-embed a day with the job if search looks thin.
   `/etc/nodewatch.secrets` mode 600, root cron `*/5`, delivery test HTTP 200). Order matters: an empty/absent credentials
   file makes the script record a state change as handled without sending it, so enable cron only after the secrets file
   exists and a delivery test succeeds; `TELEGRAM_CHAT_ID` must be numeric. Install on pi0 (outside
-  k3s): copy the script, create `/etc/nodewatch.hosts` (PI0_IP…TX2_IP) and `/etc/nodewatch.secrets` (mode 600:
+  k3s): copy the script, create `/etc/nodewatch.hosts` (PI0_IP…TX2_IP, K3S_CP_IP, ORIN1_IP, ORIN2_IP — every key required; orin1/orin2 added 2026-11-19) and `/etc/nodewatch.secrets` (mode 600:
   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID), cron `*/5 * * * *`. Dry-run anywhere: `bash ops-tools/nodewatch.sh --dry-run`.
 - **Never without care:** TX2 k3s upgrade past v1.35 (cgroup v1 ceiling →
   control plane capped ~v1.38); TX2 apt upgrades (wrappers, §8); JetPack 5

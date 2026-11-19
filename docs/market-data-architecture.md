@@ -228,7 +228,7 @@ whole DB via `pg_dump`.*
 | pi2 | Pi 3 B+, 1 GB | <pi2-ip> | <pi2-tailnet-ip> | server v1.36.4+k3s1 | **Control-plane — fragile + cordoned, see §9** |
 | pi3 | Pi 3 B, 1 GB | <pi3-ip> | <pi3-tailnet-ip> | agent v1.36.4 | Worker — Grafana + pg-backup pinned here |
 | ahytx2-desktop | Jetson TX2, 7.7 GB RAM | <tx2-ip> (DHCP, router-reserved) | <tx2-tailnet-ip> | agent pinned v1.35.3+k3s1 | GPU/tainted worker + DB host + LLM gateway + image build host |
-| orin1 | Jetson Orin Nano, 8 GB, 1× GPU | <orin1-ip> | — | agent v1.37.2 | Worker — tainted `gpu=orin`, reserved for the STT/TTS voice layer (**not deployed**) |
+| orin1 | Jetson Orin Nano, 8 GB, 1× GPU | <orin1-ip> | — | agent v1.37.2 | Worker — tainted `gpu=orin`, runs the STT/TTS voice layer (`stt-service:v3`, `tts-service:v2`, live 2026-11-19) |
 | orin2 | Jetson Orin Nano, 8 GB, 1× GPU | <orin2-ip> | — | agent v1.37.2 | Worker — untainted; **where the floating CronJobs run** (since 2026-11-13) |
 
 - Network `<lan-cidr>`, gateway `<gateway-ip>`; LAN DNS = pi0. Admin from `<admin-host>`

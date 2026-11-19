@@ -1,6 +1,8 @@
 # Frozen from the running image 2026-11-19 (pip freeze); re-freeze after any rebuild.
 # av comes from PyPI as a wheel (the apt python3-av targets the distro python, not
-# /usr/local's 3.12, so it was never the one imported).
+# /usr/local's 3.12, so it was never the one imported). It MUST stay below 19:
+# faster-whisper 1.2.1 calls av.open(metadata_errors=...), which av 19 removed —
+# every /transcribe in the v1 and v2 images answered 500 (found 2026-11-19).
 fastapi==0.163.1
 uvicorn==0.54.0
 starlette==1.10.0
@@ -8,7 +10,7 @@ pydantic==2.14.3
 python-multipart==0.0.34
 faster-whisper==1.2.1
 ctranslate2==4.9.0
-av==19.0.2
+av==18.1.0
 tokenizers==0.23.3
 huggingface_hub==2.4.0
 onnxruntime==1.32.0

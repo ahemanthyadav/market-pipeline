@@ -3,6 +3,11 @@
 > **Purpose:** everything about the Marketfredbot Telegram channel — how the
 > deployed digest + alert pipeline is wired, how to operate and change it, and
 > the tiered menu of two-way/next-step upgrades with their real constraints.
+> **Live 2026-11-19 (v44):** review fixes — `/methods` is an index + per-method detail (the catalog was cut at
+> 4096 characters); `/sectors` fits 38 columns; `/scorecard` says what d1 and d10 mean per kind; `/valuation`
+> survives a NULL upside; an AI-routed `/watch` is list-only (it could add a symbol); the facts fallback makes
+> at most one AI-resolver call per message (was one per word, 20 s each, on the single poll loop); nickname
+> matches are checked against the live universe; `/route` escapes user text.
 > **Repo state 2026-10-31 (v37):** `local/telegram-digest:v37` — symbol-aware routing
 > (`/status cub`, `/movers cub`, `/top tcs stock` → `/stock`) with a live-universe lookup
 > layer, longest-nickname-prefix matching, and nickname entries realigned to the current
@@ -98,7 +103,7 @@ driver import — unit-tested with a fake in `tests/test_stocks.py`) and
 | `/stock TCS` | `stock_prices`, `stock_metrics_daily`, `stock_scores`, `stock_fundamentals`, `headline_*` | symbol or name fragment (bare NSE symbols get `.NS` tried); close, day %, 1m/6m/12m/YTD, 50/200DMA, 52w position, RSI14 (computed in Python — `technical_indicators` covers indices only), factor scores, valuation, 3 headlines |
 | `/valuation PLTR` | `v_latest_valuations` (Schema 25, ADR 0026/0033) | all 15 intrinsic valuation methods (Graham, PEG, DCF, DDM, EPV, residual income, Damodaran FCFF, owner earnings, …), median fair value + upside vs close, practitioner vs academic medians, methods flagged above close; descriptive only — not advice |
 | `/calibration` | `v_latest_calibration` | factor ICs, archetype excess returns, multibagger gate marginal value, shrunk factor weights (classifier loop, ADR 0033) |
-| `/methods` | `v_valuation_methods` | valuation & scientific method catalog — formulas, lens, peer-reviewed sources (Schema 25) |
+| `/methods [name]` | `v_valuation_methods` | bare: the index (key + name per category); `/methods graham` (a key, name or category): lens, formula and source for the matches, 6 per reply. The full catalog is ~3× Telegram's 4096-character limit (v44) |
 | `/news TCS` | `headline_entities` → `raw_headlines`, `news_sentiment`, `headline_events` | last 14 d, sentiment per headline, event tags |
 | `/top growth sp500` | `stock_scores` | best 10 eligible by `value\|quality\|growth\|momentum\|risk\|composite`; default composite / NIFTY500 |
 | `/movers` | `stock_scores` | entered / left the top-20 between the last two FULL runs (≥40 eligible rows — canary runs ignored) |
