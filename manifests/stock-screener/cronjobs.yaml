@@ -12,7 +12,7 @@ metadata:
   namespace: market-data
 spec:
   schedule: "0 9 * * 0"
-  timeZone: America/Los_Angeles   # explicit since 2026-11-19: without it the schedule follows the control plane's clock (UTC on the N100)
+  timeZone: America/Los_Angeles   # explicit since 2026-11-19: without it the schedule follows the control plane's clock (UTC on the N100), which fetched Asian markets pre-open and lost a day
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 21600
   successfulJobsHistoryLimit: 3
@@ -54,7 +54,7 @@ metadata:
   namespace: market-data
 spec:
   schedule: "30 23 * * *"
-  timeZone: America/Los_Angeles   # explicit since 2026-11-19: without it the schedule follows the control plane's clock (UTC on the N100)
+  timeZone: America/Los_Angeles   # explicit since 2026-11-19: without it the schedule follows the control plane's clock (UTC on the N100), which fetched Asian markets pre-open and lost a day
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 3600
   successfulJobsHistoryLimit: 3
@@ -96,7 +96,7 @@ metadata:
   namespace: market-data
 spec:
   schedule: "0 6 * * 6"
-  timeZone: America/Los_Angeles   # explicit since 2026-11-19: without it the schedule follows the control plane's clock (UTC on the N100)
+  timeZone: America/Los_Angeles   # explicit since 2026-11-19: without it the schedule follows the control plane's clock (UTC on the N100), which fetched Asian markets pre-open and lost a day
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 21600
   successfulJobsHistoryLimit: 3
@@ -140,7 +140,7 @@ metadata:
   namespace: market-data
 spec:
   schedule: "0 2 * * *"
-  timeZone: America/Los_Angeles   # explicit since 2026-11-19: without it the schedule follows the control plane's clock (UTC on the N100)
+  timeZone: America/Los_Angeles   # explicit since 2026-11-19: without it the schedule follows the control plane's clock (UTC on the N100), which fetched Asian markets pre-open and lost a day
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 3600
   successfulJobsHistoryLimit: 3
@@ -182,7 +182,7 @@ metadata:
   namespace: market-data
 spec:
   schedule: "15 2 * * *"
-  timeZone: America/Los_Angeles   # explicit since 2026-11-19: without it the schedule follows the control plane's clock (UTC on the N100)
+  timeZone: America/Los_Angeles   # explicit since 2026-11-19: without it the schedule follows the control plane's clock (UTC on the N100), which fetched Asian markets pre-open and lost a day
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 3600
   successfulJobsHistoryLimit: 3
@@ -229,7 +229,7 @@ metadata:
   namespace: market-data
 spec:
   schedule: "30 2 * * *"
-  timeZone: America/Los_Angeles   # explicit since 2026-11-19: without it the schedule follows the control plane's clock (UTC on the N100)
+  timeZone: America/Los_Angeles   # explicit since 2026-11-19: without it the schedule follows the control plane's clock (UTC on the N100), which fetched Asian markets pre-open and lost a day
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 3600
   successfulJobsHistoryLimit: 3
@@ -281,7 +281,7 @@ spec:
   # Both the CronJob and the backfill Job share the job_state cursor.
   suspend: false
   schedule: "0 10 * * 0"
-  timeZone: America/Los_Angeles   # explicit since 2026-11-19: without it the schedule follows the control plane's clock (UTC on the N100)
+  timeZone: America/Los_Angeles   # explicit since 2026-11-19: without it the schedule follows the control plane's clock (UTC on the N100), which fetched Asian markets pre-open and lost a day
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 21600
   successfulJobsHistoryLimit: 3
@@ -330,7 +330,7 @@ metadata:
   namespace: market-data
 spec:
   schedule: "30 11 2 * *"
-  timeZone: America/Los_Angeles   # explicit since 2026-11-19: without it the schedule follows the control plane's clock (UTC on the N100)
+  timeZone: America/Los_Angeles   # explicit since 2026-11-19: without it the schedule follows the control plane's clock (UTC on the N100), which fetched Asian markets pre-open and lost a day
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 3600
   successfulJobsHistoryLimit: 2
@@ -377,7 +377,7 @@ metadata:
   namespace: market-data
 spec:
   schedule: "10 2 * * *"
-  timeZone: America/Los_Angeles   # explicit since 2026-11-19: without it the schedule follows the control plane's clock (UTC on the N100)
+  timeZone: America/Los_Angeles   # explicit since 2026-11-19: without it the schedule follows the control plane's clock (UTC on the N100), which fetched Asian markets pre-open and lost a day
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 3600
   successfulJobsHistoryLimit: 2
@@ -422,7 +422,7 @@ metadata:
   namespace: market-data
 spec:
   schedule: "40 2 * * *"
-  timeZone: America/Los_Angeles   # explicit since 2026-11-19: without it the schedule follows the control plane's clock (UTC on the N100)
+  timeZone: America/Los_Angeles   # explicit since 2026-11-19: without it the schedule follows the control plane's clock (UTC on the N100), which fetched Asian markets pre-open and lost a day
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 3600
   successfulJobsHistoryLimit: 2
@@ -466,7 +466,7 @@ metadata:
   namespace: market-data
 spec:
   schedule: "0 12 * * 0"
-  timeZone: America/Los_Angeles   # explicit since 2026-11-19: without it the schedule follows the control plane's clock (UTC on the N100)
+  timeZone: America/Los_Angeles   # explicit since 2026-11-19: without it the schedule follows the control plane's clock (UTC on the N100), which fetched Asian markets pre-open and lost a day
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 3600
   successfulJobsHistoryLimit: 2
@@ -511,7 +511,7 @@ metadata:
   namespace: market-data
 spec:
   schedule: "30 12 * * 0"
-  timeZone: America/Los_Angeles   # explicit since 2026-11-19: without it the schedule follows the control plane's clock (UTC on the N100)
+  timeZone: America/Los_Angeles   # explicit since 2026-11-19: without it the schedule follows the control plane's clock (UTC on the N100), which fetched Asian markets pre-open and lost a day
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 3600
   successfulJobsHistoryLimit: 2

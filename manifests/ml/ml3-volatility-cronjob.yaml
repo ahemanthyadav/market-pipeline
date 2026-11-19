@@ -12,7 +12,7 @@ metadata:
   namespace: market-data
 spec:
   schedule: "0 3 * * *"
-  timeZone: America/Los_Angeles   # explicit since 2026-11-19: without it the schedule follows the control plane's clock (UTC on the N100)
+  timeZone: America/Los_Angeles   # explicit since 2026-11-19: without it the schedule follows the control plane's clock (UTC on the N100), which fetched Asian markets pre-open and lost a day
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 7200
   successfulJobsHistoryLimit: 3

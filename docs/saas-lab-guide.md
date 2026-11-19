@@ -233,6 +233,8 @@ round trip returned the sentence unchanged.
   Fetch one with `python3 -m piper.download_voices <name> --download-dir <dir>` inside the image.
 - Auth is optional and off until the Secret `voice-api-token` (key `token`) exists; then both services require
   `Authorization: Bearer <token>`. Limits: 2,000 characters per `/speak`, 20 MB per `/transcribe`.
+- The Telegram bot posts voice notes to `stt-service` (read-only turns; `manifests/telegram/voice.py`). Whisper's
+  model is cached on orin1 at `/var/lib/voice/faster-whisper`.
 - Tests: `python3 tests/test_voice.py`.
 
 ---

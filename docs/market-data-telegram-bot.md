@@ -3,6 +3,13 @@
 > **Purpose:** everything about the Marketfredbot Telegram channel — how the
 > deployed digest + alert pipeline is wired, how to operate and change it, and
 > the tiered menu of two-way/next-step upgrades with their real constraints.
+> **Live 2026-11-19 (v45): voice input.** Send the bot a voice note (up to 30 s) and it replies
+> “🎙 Heard: …” and then answers the transcript exactly as if it had been typed — same router, same
+> commands. `voice.py` downloads the note from Telegram and posts it to `stt-service` on orin1
+> (`STT_URL`; unset = voice off). **A voice turn is read-only:** `run_command()` refuses the owner-only
+> commands and any `/watch` argument (“watch tesla” is an add), so a misheard word cannot write anything;
+> a stranger's audio is never downloaded. Replies stay text. Transcription runs on the single poll loop
+> (~1–3 s for a short note). Tests: `tests/test_multiuser.py` `VoiceInputTest`, `VoiceModuleTest`.
 > **Live 2026-11-19 (v44):** review fixes — `/methods` is an index + per-method detail (the catalog was cut at
 > 4096 characters); `/sectors` fits 38 columns; `/scorecard` says what d1 and d10 mean per kind; `/valuation`
 > survives a NULL upside; an AI-routed `/watch` is list-only (it could add a symbol); the facts fallback makes

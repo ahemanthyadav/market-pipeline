@@ -234,6 +234,32 @@ Event date = `filed` (10-Q/10-K or NSE results date, usually after the press rel
 4. India sleeves are partial (no balance sheet or share count in the NSE results feed; PBT
    coverage thin before 2019) — the India quality result is not a test of the screener's sleeve.
 
+## 5d. G-21 re-run after two bug fixes — 2026-11-19 (`out/ev0/report-2026-11-19.md`)
+
+`industry_momentum` and `distress_score` were computed wrongly in every earlier report: the
+sector return was compounded as (2 + r) and one member's missing day blanked the whole sector
+(so the signal existed for only 16–59 months), and the Altman Z read each statement from its
+`period_end`, weeks before it was filed. Fixed in `ev0.py` (`tests/test_ev0.py` `G21Signals`) and
+re-run on the same 2026-11-04 export, so only those two signals changed (all others identical).
+
+| Signal | Universe | Months | IC | NW t | Net /yr | FM t | Before (months, NW t) |
+|---|---|---|---|---|---|---|---|
+| industry_momentum | NIFTY500 | 291 | 0.031 | 3.2 | 7.2% | 2.5 | 16, −0.8 |
+| industry_momentum | NIFTYMICROCAP250 | 252 | 0.048 | 4.6 | 23.0% | 3.3 | no result |
+| industry_momentum | SP500 | 301 | −0.015 | −1.7 | −5.8% | −2.4 | 59, 0.6 |
+| industry_momentum | SP400 | 301 | 0.001 | 0.1 | −0.9% | 0.6 | 49, −1.4 |
+| industry_momentum | SP600 | 301 | −0.004 | −0.5 | −4.9% | −0.3 | 25, 1.1 |
+| distress_score | SP500 | 196 | 0.006 | 0.5 | 1.6% | −0.4 | 207, 0.8 |
+| distress_score | SP400 | 163 | −0.013 | −0.9 | −11.4% | −1.0 | 175, −0.2 |
+| distress_score | SP600 | 179 | −0.008 | −0.8 | −3.5% | −0.3 | 188, −0.8 |
+
+**Verdict: both still FAIL §5.** `distress_score` is noise in all three US universes (and lost
+~10 months of history it should never have had). `industry_momentum` clears the IC, net-spread
+and Fama-MacBeth bars on both Indian universes but has the opposite sign in the S&P 500, so it
+fails the same-sign-in-both-markets rule — the same India-only pattern as 12-1 stock momentum in
+§5a. The Indian figures carry the survivorship bias §5a describes (no historical NSE membership
+yet), which flatters them. No change to any score.
+
 ## 6. Deliberately not adding
 
 - Chart patterns, MACD or Bollinger-band rules as predictors — no robust evidence.

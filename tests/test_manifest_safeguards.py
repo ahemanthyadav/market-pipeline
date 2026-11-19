@@ -50,8 +50,12 @@ class Safeguards(unittest.TestCase):
 
 class ExplicitTimeZone(unittest.TestCase):
     """2026-11-19: a CronJob without spec.timeZone follows the control plane's clock.
-    When the control plane moved to the N100 (UTC) every schedule silently fired 8 h
-    earlier than the docs said, for three days. Every CronJob names its zone."""
+    When the control plane moved from pi2 (America/Los_Angeles) to the N100 (UTC) on
+    2026-11-16 every schedule moved 8 h. The price writers then ran in the Asian
+    pre-open hours, where Yahoo no longer serves the previous session's daily bar:
+    Indian stocks and Asian indices landed a day late, score dates split by market,
+    and the scorecard recorded no Indian names for three days. The schedules are
+    tuned to Pacific time (sessions.py), so each CronJob names that zone itself."""
 
     def test_every_cronjob_names_its_time_zone(self):
         missing = [f"{path}:{doc['metadata']['name']}" for path, doc in cronjobs()

@@ -177,8 +177,9 @@ the workspace `hardware/ROADMAP.md` + `hardware/CONTROL-PLANE-MIGRATION.md`.
   removed an argument faster-whisper 1.2.1 passes; pinned to `av==18.1.0`). The voice (`en_US-lessac-medium.onnx`
   + `.onnx.json`, 63 MB) is a hostPath at `/root/.local/share/piper/voices/` on orin1, not in the image.
   Both services accept an optional bearer token (`VOICE_API_TOKEN` from Secret `voice-api-token`, not created
-  yet — tracker §1) and cap request size. The bot is not wired to them yet. Whisper's model is downloaded into
-  the container at each start (no volume) — a restart needs internet access.
+  yet — tracker §1) and cap request size. **The bot uses `stt-service` for voice notes since `telegram-digest:v45`**
+  (`tts-service` has no caller yet). Whisper's model is cached on the node (`/var/lib/voice/faster-whisper`,
+  hostPath), so a restart needs no download.
 - **Labels/taints (live):** `hardware=orin-cpu`, `tier=saas`, 1× GPU allocatable, taint **`gpu=orin:NoSchedule`**.
 - **Live 2026-11-16:** Ready worker against k3s-cp (`K3S_URL` repointed from pi2 to k3s-cp), v1.37.2+k3s1, up 11 d,
   load 0.02, ~6 GiB available (GUI removed 2026-11-16, freeing ~1.6 GiB). GPU present but idle. **Passwordless SSH +
@@ -215,13 +216,22 @@ the workspace `hardware/ROADMAP.md` + `hardware/CONTROL-PLANE-MIGRATION.md`.
 Two kinds of scheduled work exist: **Kubernetes CronJobs** (36, all in namespace `market-data`) and **host-level cron**
 (on the machines themselves, outside k3s). *Verified live 2026-11-15.*
 
-**Schedule timezone — read this before changing a cron expression.** All schedules except two are **node-local**, i.e. they
-are evaluated in the **control plane's timezone** (`k3s-cp` = **UTC**). The observed offset is **UTC** — `0 23 * * *` fires
-at 23:00 UTC. Because the controller follows UTC, node-local jobs fire at a fixed UTC instant year-round (pi2 previously ran
-`America/Los_Angeles`, so every node-local job shifted an hour across the DST boundary — that shift is gone). **Never assume
-a node-local cron expression is UTC.** The only two jobs with an explicit `timeZone` are
-`telegram-digest` and `llm-narrative` (`Asia/Kolkata`, ADR 0009) — those two are DST-free and hour-stable.
-`status.lastScheduleTime` is always reported in **UTC**.
+**Schedule timezone — read this before changing a cron expression.** Every CronJob names its zone in
+`spec.timeZone` (since 2026-11-19; enforced by `tests/test_manifest_safeguards.py` `ExplicitTimeZone`): 34 use
+**`America/Los_Angeles`** and two (`telegram-digest`, `llm-narrative`) use `Asia/Kolkata` (ADR 0009). So `0 23 * * *`
+fires at 23:00 Pacific — 07:00 UTC in winter, 06:00 UTC in summer; the UTC instant of the 34 shifts an hour at each
+DST change. `status.lastScheduleTime` is always reported in UTC.
+
+**Why the zone is explicit — and why it is Pacific, not UTC.** A CronJob without `timeZone` follows the control
+plane's clock. That was `America/Los_Angeles` on pi2; when the control plane moved to the N100 (2026-11-16) it became
+UTC and all 34 schedules silently moved 8 hours. An earlier version of this section called that harmless. It was
+not: `stock-prices` (23:30) and `yfinance-fetcher` (22:30) then ran in the Asian pre-open hours, where Yahoo no
+longer returned the previous session's daily bar (the `sessions.py` guard drops the placeholder it returns
+instead). From 11-16 to 11-19 Indian stock bars and Asian index closes (^N225, ^HSI, ^KS11) landed a day late; the
+screener stamped Indian scores one day behind US scores, so everything that reads "the latest score date" saw US
+names only — the prediction scorecard recorded **0 Indian snapshots** (662 a day before). The times were tuned for
+Pacific (`manifests/_common/sessions.py`); **do not move a price-writer schedule into another market's pre-open
+without re-testing that market's latest bar.**
 
 **All 36 CronJobs are unsuspended** (`spec.suspend: false` on every one, verified 2026-11-15) — including
 `nse-fundamentals`, whose "suspended until the first backfill completes" note in the ops manual §3 is **stale**.
@@ -317,7 +327,7 @@ scheduled); fixed that day on all five (ADR 0011 amendment).
 - **pi0 down** → LAN DNS gone *and* the out-of-cluster alert path is silent (this is why a second watcher host is an open question — AR-12).
 - **orin2 down** → the 31 floating CronJobs reschedule to pi1/pi3 — **only if those nodes hold the image**; otherwise
   they fail with `ErrImageNeverPull` until the tarball is imported. No pinned workload is lost.
-- **orin1 down** → the voice services (`stt-service`, `tts-service`) are down; nothing depends on them yet (the bot is not wired to voice). pi0's nodewatch reports it.
+- **orin1 down** → the voice services (`stt-service`, `tts-service`) are down: the bot answers a voice note with “transcription is unavailable — send that as text” and keeps working. pi0's nodewatch reports it.
 - **Shared charger:** pi1/pi2/pi3 dropped together on 2026-10-10 while pi0 stayed up — the power supply is a single
   point of failure across all of them (tracker §1).
 - **No registry:** an image missing on a node gives `ErrImageNeverPull`; keep the "which node has which image" list true.
