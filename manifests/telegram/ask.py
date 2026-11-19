@@ -247,10 +247,13 @@ def earnings_facts(q):
 def build_facts(q, question):
     """-> (facts, subject) or (None, None) when the question maps to nothing we store."""
     # "TCS outlook" is a question ABOUT TCS: try the whole phrase, then each word as a symbol.
-    for cand in [question] + question.split():
+    # Only the whole phrase may reach the AI resolver: each word that matches nothing
+    # was a gateway call of up to 20 s, serially, on the bot's single poll loop (a
+    # 10-word sentence could block every other chat for minutes).
+    for k, cand in enumerate([question] + question.split()):
         if cand.lower().strip("?.,") in router_stop_words():
             continue
-        row, _problem, _note = stocks.pick_one_ex(q, cand)
+        row, _problem, _note = stocks.pick_one_ex(q, cand, ai=(k == 0))
         if row and not str(row[0]).startswith("^"):
             return stock_facts(q, row), row[0]
     if TOPICS["screener"].search(question):

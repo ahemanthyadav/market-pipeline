@@ -13,7 +13,10 @@ spec:
   startingDeadlineSeconds: 7200
   jobTemplate:
     spec:
-      activeDeadlineSeconds: 600
+      # 40 symbols x (one gateway call + PAUSE 7 s) does not fit in the old 600 s: the
+      # kill came mid-list every week. The script stops itself at BUDGET_SECONDS (below)
+      # and exits 0 with what it wrote; this deadline is only the backstop above it.
+      activeDeadlineSeconds: 3600
       backoffLimit: 1
       ttlSecondsAfterFinished: 604800
       template:
@@ -53,6 +56,8 @@ spec:
                   value: fast-json
                 - name: MAX_SYMBOLS
                   value: "40"
+                - name: BUDGET_SECONDS      # must stay below activeDeadlineSeconds
+                  value: "3000"
               resources:
                 requests:
                   cpu: "100m"

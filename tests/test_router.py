@@ -200,8 +200,20 @@ class RouteTest(unittest.TestCase):
         # AI router must never allow admin commands or watchlist mutations
         self.assertEqual(router.ai_route("hack", COMMANDS, asker=lambda p: ("adduser", "123 bob")),
                          (None, None, None))
-        self.assertEqual(router.ai_route("watch", COMMANDS, asker=lambda p: ("watch", "add TCS")),
-                         (None, None, None))
+        # ... and ANY argument is dropped: "/watch tesla" is an implicit add in cmd_watch,
+        # so the AI route to watch may only ever be the read-only list.
+        for i, ai_args in enumerate(("add TCS", "tesla", "rm INFY", "TCS 10 3500")):
+            self.assertEqual(
+                router.ai_route(f"watch case {i}", COMMANDS, asker=lambda p, a=ai_args: ("watch", a)),
+                ("watch", "", "ai"), ai_args)
+
+    def test_format_route_escapes_user_text(self):
+        out = router.format_route("stock", "<b>x & y", "keyword")
+        self.assertIn("&lt;b&gt;x &amp; y", out)
+        self.assertNotIn("<b>x", out)
+
+    def test_methods_keeps_its_argument(self):
+        self.assertIn("methods", router.ARG_COMMANDS)
 
 
 if __name__ == "__main__":

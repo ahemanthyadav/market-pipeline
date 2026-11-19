@@ -37,11 +37,15 @@
       // the Deployment is running.
       "telegram": {
         "type": "local",
-        "command": ["uvx", "mcp-telegram-bot"],
+        // Pinned to an exact version and OFF by default: this is third-party code that
+        // gets the production bot token, and an unpinned `uvx` ran whatever was newest
+        // on PyPI. Review a new release before raising the pin; enable only while needed.
+        "command": ["uvx", "mcp-telegram-bot==0.1.0"],
         "environment": {
           "TELEGRAM_BOT_TOKEN": "{env:TELEGRAM_BOT_TOKEN}"
         },
-        "timeout": { "startup": 60000 }
+        "timeout": { "startup": 60000 },
+        "disabled": true
       }
     }
   },

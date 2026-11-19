@@ -144,5 +144,52 @@ class PickOne(unittest.TestCase):
         self.assertEqual((row[0], problem), ("MSFT", None))
 
 
+class NicknameUniverseCheck(unittest.TestCase):
+    """2026-11-19: a nickname row is checked against the live universe."""
+
+    def setUp(self):
+        resolver._universe.update(rows=None, at=0.0)
+        resolver._ai_cache.clear()
+        resolver._nickname_cache.clear()
+        os.environ.pop("BOT_AI_RESOLVE", None)
+
+    def test_stock_nickname_returns_the_real_universe_row(self):
+        row, how = resolver.suggest(q, "reliance")
+        self.assertEqual(how, "nickname")
+        self.assertEqual(row, next(r for r in ROWS if r[0] == "RELIANCE.NS"))
+        self.assertTrue(row[3])                     # universe filled in, not a placeholder
+
+    def test_stock_nickname_that_left_the_universe_is_not_served(self):
+        gone = [r for r in ROWS if r[0] != "RELIANCE.NS"]
+        row, _how = resolver.suggest(lambda sql, args=(): gone, "reliance")
+        self.assertFalse(row and row[0] == "RELIANCE.NS")
+
+    def test_index_and_fx_nicknames_need_no_universe_row(self):
+        self.assertEqual(resolver.suggest(q, "nifty")[0][0], "^NSEI")
+        for sym in ("^NSEI", "USDINR=X", "DX-Y.NYB"):
+            self.assertTrue(resolver.is_market_ticker(sym), sym)
+        self.assertFalse(resolver.is_market_ticker("RELIANCE.NS"))
+
+    def test_db_blip_keeps_the_nickname(self):
+        row, how = resolver.suggest(lambda sql, args=(): [], "reliance")
+        self.assertEqual((row[0], how), ("RELIANCE.NS", "nickname"))
+
+    def test_ai_false_never_calls_the_gateway(self):
+        os.environ.update(BOT_AI_RESOLVE="1", LLM_API_KEY="test")
+        try:
+            calls = []
+
+            def asker(prompt):
+                calls.append(prompt)
+                return "AAPL", "Apple Inc."
+            self.assertIsNone(resolver.suggest(q, "aple", asker, ai=False)[0])
+            self.assertEqual(calls, [])
+            self.assertEqual(resolver.suggest(q, "aple", asker)[0][0], "AAPL")
+            self.assertEqual(len(calls), 1)
+        finally:
+            for k in ("BOT_AI_RESOLVE", "LLM_API_KEY"):
+                os.environ.pop(k, None)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

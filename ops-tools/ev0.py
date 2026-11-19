@@ -223,6 +223,73 @@ def membership_mask(me, symbols, universe):
     return mask
 
 
+def industry_momentum(px, sector_map):
+    """12-month equal-weighted sector return, mapped back to each symbol. Pure.
+
+    The sector's daily return is the mean over the members that HAVE a return that
+    day (one member's NaN must not blank the sector), and the 12-month figure
+    compounds (1 + r) once — it used to add 1 twice and compound (2 + r)."""
+    sym_rets = px.pct_change(fill_method=None)
+    members = {}
+    for sym in px.columns:
+        sec = sector_map.get(sym)
+        if sec:
+            members.setdefault(sec, []).append(sym)
+    sector_panel = pd.DataFrame({sec: sym_rets[syms].mean(axis=1, skipna=True)
+                                 for sec, syms in members.items()}, index=sym_rets.index)
+    sector_mom = sector_panel.rolling(252, min_periods=200).apply(
+        lambda x: np.nanprod(1 + x) - 1, raw=True)
+    out = pd.DataFrame({sym: sector_mom[sector_map[sym]] for sym in px.columns
+                        if sector_map.get(sym) in sector_mom.columns}, index=px.index)
+    return out.reindex(columns=px.columns)
+
+
+Z_METRICS = ("current_assets", "current_liabilities", "total_assets", "shareholder_equity",
+             "operating_income", "total_revenue", "shares_outstanding")
+
+
+def pit_statements(fin_sym):
+    """One symbol's facts -> one row per period_end, usable from `avail` on. Pure.
+
+    Point-in-time: a statement is known only AFTER it is filed, so the key is the
+    filing date (the latest first-filing among the period's metrics), never
+    period_end — joining on period_end read a 10-K ~2 months before it existed.
+    Rows are ordered by `avail`; a late filing for an OLDER period never replaces a
+    newer period already known."""
+    first = fin_sym.sort_values("filed", kind="stable").drop_duplicates(
+        ["metric", "period_end"], keep="first")
+    wide = first.pivot(index="period_end", columns="metric", values="value")
+    wide["avail"] = first.groupby("period_end")["filed"].max()
+    wide = wide.reset_index().sort_values(["avail", "period_end"], kind="stable")
+    wide = wide[wide.period_end >= wide.period_end.cummax()]
+    return wide.reset_index(drop=True)
+
+
+def distress_score(px, fin):
+    """Altman Z per (date, symbol) from statements already FILED before that date."""
+    out = pd.DataFrame(index=px.index, columns=px.columns, dtype=float)
+    fin = fin.dropna(subset=["filed"])
+    left = pd.DataFrame({"d": pd.to_datetime(px.index)})
+    for sym, fin_sym in fin[fin.symbol.isin(px.columns)].groupby("symbol"):
+        st = pit_statements(fin_sym)
+        if st.empty:
+            continue
+        for m in Z_METRICS:
+            if m not in st.columns:
+                st[m] = np.nan
+        st["avail"] = pd.to_datetime(st["avail"])
+        merged = pd.merge_asof(left, st, left_on="d", right_on="avail",
+                               direction="backward", allow_exact_matches=False)
+        ta, se = merged["total_assets"], merged["shareholder_equity"]
+        mve = px[sym].values * merged["shares_outstanding"]  # market value of equity
+        bvl = ta - se                                        # book value of total liabilities
+        wc = merged["current_assets"] - merged["current_liabilities"]
+        z = (1.2 * wc / ta + 1.4 * se / ta + 3.3 * merged["operating_income"] / ta
+             + 0.6 * mve / bvl + 1.0 * merged["total_revenue"] / ta)
+        out[sym] = z.values
+    return out
+
+
 def run(price_cols, start):
     df = pd.read_parquet(f"{OUT}/prices.parquet")
     df = df[df.d >= pd.Timestamp(start) - pd.Timedelta(days=400)]
@@ -236,71 +303,12 @@ def run(price_cols, start):
                 else wide["close"].ffill(limit=5)
             sig = signals(px, wide["volume"], wide["close"])
             # --- G-21: industry momentum (12-month sector return, equal-weighted) ---
-            sector_map = dict(zip(g.symbol, g.sector))
-            sym_rets = px.pct_change(fill_method=None)
-            sector_rets = {}
-            for sym in px.columns:
-                sec = sector_map.get(sym)
-                if sec:
-                    sector_rets.setdefault(sec, []).append(sym_rets[sym])
-            sector_panel = pd.DataFrame({s: np.mean(v, axis=0) for s, v in sector_rets.items()},
-                                        index=sym_rets.index)
-            # 12-month cumulative return per sector
-            sector_mom = (sector_panel + 1).rolling(252, min_periods=200).apply(
-                lambda x: np.prod(x + 1) - 1, raw=True)
-            # Map back to symbols: each symbol gets its sector's momentum
-            sig["industry_momentum"] = pd.DataFrame(
-                {sym: sector_mom[sector_map.get(sym)] for sym in px.columns
-                 if sector_map.get(sym) in sector_mom.columns},
-                index=sector_mom.index)
-            # Align columns to px.columns
-            sig["industry_momentum"] = sig["industry_momentum"].reindex(columns=px.columns)
+            sig["industry_momentum"] = industry_momentum(px, dict(zip(g.symbol, g.sector)))
 
             # --- G-21: distress score (Altman Z-score, point-in-time financials) ---
             fin_path = f"{OUT}/financials.parquet"
             if os.path.exists(fin_path):
-                fin = pd.read_parquet(fin_path)
-                # Pivot to wide: one row per (symbol, period_end) with metrics as columns
-                fin_wide = fin.pivot_table(index=["symbol", "period_end"],
-                                           columns="metric", values="value", aggfunc="first")
-                fin_wide = fin_wide.sort_index(level="period_end")
-                # For each symbol, forward-fill financials across dates (point-in-time)
-                # Build a daily panel: merge_asof per symbol
-                dates = px.index
-                distress = pd.DataFrame(index=dates, columns=px.columns, dtype=float)
-                fin_symbols = set(fin_wide.index.get_level_values("symbol").unique())
-                for sym in px.columns:
-                    if sym not in fin_symbols:
-                        continue
-                    sym_fin = fin_wide.xs(sym, level="symbol", drop_level=False)
-                    if sym_fin.empty:
-                        continue
-                    # Reset index to get period_end as a column for merge_asof
-                    sym_fin = sym_fin.reset_index(level="symbol", drop=True)
-                    sym_fin = sym_fin.sort_values("period_end")
-                    # merge_asof: for each date, get latest financials where period_end <= date
-                    merged = pd.merge_asof(
-                        pd.DataFrame({"d": dates}),
-                        sym_fin,
-                        left_on="d", right_on="period_end",
-                        direction="backward"
-                    )
-                    # Compute Z-score components
-                    ca = merged["current_assets"]
-                    cl = merged["current_liabilities"]
-                    ta = merged["total_assets"]
-                    se = merged["shareholder_equity"]
-                    oi = merged["operating_income"]
-                    rev = merged["total_revenue"]
-                    so = merged["shares_outstanding"]
-                    close_sym = px[sym].reindex(merged["d"]).values
-                    mve = close_sym * so  # market value of equity
-                    bvl = ta - se  # book value of total liabilities
-                    wc = ca - cl  # working capital
-                    z = (1.2 * wc / ta + 1.4 * se / ta + 3.3 * oi / ta
-                         + 0.6 * mve / bvl + 1.0 * rev / ta)
-                    distress[sym] = z.values
-                sig["distress_score"] = distress
+                sig["distress_score"] = distress_score(px, pd.read_parquet(fin_path))
             else:
                 print(f"{uni}: no financials.parquet — skipping distress_score", flush=True)
             me = month_ends(px.index)

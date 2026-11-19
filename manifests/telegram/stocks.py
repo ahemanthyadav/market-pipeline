@@ -617,7 +617,7 @@ def resolve(q, arg):
     )
 
 
-def pick_one_ex(q, arg, asker=None):
+def pick_one_ex(q, arg, asker=None, ai=True):
     """(row, None, note) for a unique match, else (None, message for the user, None).
 
     Exact symbol / name first (resolve); if nothing matches, the forgiving resolver (resolver.py):
@@ -632,7 +632,7 @@ def pick_one_ex(q, arg, asker=None):
     if rows:
         return rows[0], None, None
     import resolver
-    row, how = resolver.suggest(q, arg, asker)
+    row, how = resolver.suggest(q, arg, asker, ai)
     if row:
         via = " (matched by AI)" if how == "ai" else ""
         return row, None, f"🔎 <i>“{esc(arg)}” → <b>{esc(row[0])}</b> {esc(row[1])}{via}</i>"
@@ -1076,10 +1076,15 @@ def valuation_text(q, arg):
     above_close = {col for col, v in vals.items()
                    if v is not None and close and v > close}
 
-    out += ["", f"<b>{num(close)} {esc(currency or '')}</b>  <i>{ts:%d %b} close</i>"]
+    when = f"{ts:%d %b} close" if ts is not None else "close"
+    out += ["", f"<b>{num(close)} {esc(currency or '')}</b>  <i>{when}</i>"]
+    # upside_pct is NULL when the close is missing/zero, and the counts can be NULL on
+    # an old row: say so instead of crashing the handler on a format spec.
+    gap = f"{upside_pct:+.1f}% vs close" if upside_pct is not None else "gap vs close n/a"
     out.append(
-        f"<b>Fair value</b> {num(fair_value)}  ({upside_pct:+.1f}% vs close)  "
-        f"<i>{methods} method(s) produced a value · {methods_above_close} above close</i>")
+        f"<b>Fair value</b> {num(fair_value)}  ({gap})  "
+        f"<i>{methods or 0} method(s) produced a value · "
+        f"{methods_above_close or 0} above close</i>")
     if practitioner_fair_value is not None and academic_fair_value is not None:
         out.append(
             f"Practitioner median <b>{num(practitioner_fair_value)}</b> "
@@ -1167,12 +1172,18 @@ def calibration_text(q):
 
 # ------------------------------------------------------------------ /methods
 
-def methods_text(q):
-    """/methods — valuation & scientific method catalog (Schema 25).
+METHODS_DETAIL_MAX = 6      # full entries per reply: ~250 chars each, well under 4096
 
-    Reads v_valuation_methods. Shows all catalogued metrics with their
-    lens, sub-school, formula and peer-reviewed source. Reference only —
-    descriptive, never advice.
+
+def methods_text(q, arg=""):
+    """/methods [name] — valuation & scientific method catalog (Schema 25).
+
+    Reads v_valuation_methods. Bare `/methods` is the index (one line per
+    method: key + name, grouped by category); `/methods <key, name or
+    category>` shows lens, formula and source for the matches. The full
+    catalog with every formula is ~3x Telegram's 4096-character limit, so one
+    message can never carry it (it used to be cut mid-catalog). Reference
+    only — descriptive, never advice.
     """
     try:
         rows = q(
@@ -1187,25 +1198,44 @@ def methods_text(q):
     if not rows:
         return "No valuation methods catalogued yet."
 
-    by_category = {}
-    for key, name, category, lens, sub_school, source_ref, formula in rows:
-        by_category.setdefault(category, []).append(
-            (key, name, lens, sub_school, source_ref, formula))
+    title = "<b>Valuation &amp; Scientific Method Catalog</b>"
+    foot = "<i>Descriptive only — not advice.</i>"
+    want = " ".join((arg or "").lower().split())
+    if want:
+        hits = [r for r in rows if want == (r[0] or "").lower()]
+        if not hits:
+            hits = [r for r in rows if want == (r[2] or "").lower()]
+        if not hits:
+            hits = [r for r in rows
+                    if want in f"{r[0]} {r[1]} {r[4] or ''}".lower().replace("_", " ")
+                    or want in (r[0] or "").lower()]
+        if not hits:
+            return (f"No method matching <b>{esc(arg)}</b>. "
+                    f"Send <code>/methods</code> for the list.")
+        out = [f"{title}  <i>({len(hits)} match{'es' if len(hits) != 1 else ''})</i>"]
+        for key, name, category, lens, sub_school, source_ref, formula in hits[:METHODS_DETAIL_MAX]:
+            school = f" · {esc(sub_school)}" if sub_school else ""
+            out.append(f"<b>{esc(name)}</b> <code>{esc(key)}</code>")
+            out.append(f"  {esc(category)} · {esc(lens)}{school}")
+            out.append(f"  Formula: {esc(formula)}")
+            if source_ref:
+                out.append(f"  Source: {esc(source_ref)}")
+        if len(hits) > METHODS_DETAIL_MAX:
+            more = ", ".join(esc(r[0]) for r in hits[METHODS_DETAIL_MAX:])
+            out.append(f"<i>{len(hits) - METHODS_DETAIL_MAX} more — ask for one by key: {more}</i>")
+        out.append(foot)
+        return "\n".join(out)
 
-    out = ["<b>Valuation &amp; Scientific Method Catalog</b>  "
-           "<i>(Schema 25, v_valuation_methods)</i>"]
+    by_category = {}
+    for key, name, category, *_rest in rows:
+        by_category.setdefault(category, []).append((key, name))
+    out = [f"{title}  <i>({len(rows)} methods)</i>"]
     for category in sorted(by_category):
         out.append(f"<b>{esc(category)}</b>")
-        for key, name, lens, sub_school, source_ref, formula in by_category[category]:
-            src = f" — {esc(source_ref)}" if source_ref else ""
-            out.append(f"  • {esc(name)} [{esc(lens)}]{src}")
-            out.append(f"    {esc(formula)}")
-    out += [
-        "",
-        "<i>Catalogued metrics span valuations, scientific diagnostics, factor "
-        "pillars, composites, archetype taxonomies and multibagger screens. "
-        "Descriptive only — not advice.</i>"]
-    return "\n".join(line for i, line in enumerate(out) if line or i == 2)
+        out += [f"  • <code>{esc(key)}</code> {esc(name)}" for key, name in by_category[category]]
+    out += ["<i>Formula + source for one: <code>/methods graham</code> "
+            "(a key, a name or a category).</i>", foot]
+    return "\n".join(out)
 
 
 def stock_card(q, row):
@@ -2435,6 +2465,9 @@ def alert_valuation(q, now=None):
     return lines
 
 
+SECTORS_WIDTH = 38      # = PHONE_WIDTH: the widest <pre> line a phone shows unwrapped
+
+
 def sectors_card(q, text=""):
     """/sectors [universe] — latest sector aggregates, cheapest first.
     Any UNIVERSES alias works (v28: 'sp' in text matched sp600 to SP500)."""
@@ -2454,12 +2487,15 @@ def sectors_card(q, text=""):
         "ORDER BY m.median_upside_pct DESC NULLS LAST", (universe,))
     if not rows:
         return f"No sector data for {universe} yet."
-    width = max(len(s) for s, *_ in rows)
-    body = [f"{'Sector':<{width}}  {'n':>3}  {'P/E':>6}  {'Upside':>7}"]
+    # 38 columns in all (PHONE_WIDTH): the sector name gets what the three number
+    # columns leave, and a longer name is clipped — "Telecommunication Services"
+    # alone pushed every row to 48 and wrapped the table on a phone.
+    width = min(max(len(s) for s, *_ in rows), SECTORS_WIDTH - 18)
+    body = [f"{'Sector':<{width}} {'n':>3} {'P/E':>6} {'Upside':>6}"]
     for sector, n, pe, up, _note in rows:
-        body.append(f"{sector:<{width}}  {n:>3}  "
-                    f"{num(pe, 1) if pe is not None else '–':>6}  "
-                    f"{f'{up:+.0f}%' if up is not None else '–':>7}")
+        body.append(f"{clip(sector, width):<{width}} {n:>3} "
+                    f"{'–' if pe is None else num(pe, 1 if abs(pe) < 1000 else 0):>6} "
+                    f"{f'{up:+.0f}%' if up is not None else '–':>6}")
     return (f"<b>Sectors — {universe}</b>  <i>median fair-value gap, ADR 0026</i>\n"
             f"<pre>{esc(chr(10).join(body))}</pre>\n"
             f"<i>Practitioner vs Academic lens: table ranks by Practitioner intrinsic upside "
@@ -2652,6 +2688,14 @@ def earnings_text(q, chat_id=None, days=14):
     return "\n".join(lines)
 
 
+# What each end of the decile sort means per snapshot kind. ntile() orders by the
+# snapshot value ascending: a rank of 1 is the best name, an upside of -40 % the worst.
+DECILE_ENDS = {
+    "screener_rank": ("best-ranked 10%", "worst-ranked 10%"),
+    "valuation_upside": ("least fair-value upside", "most fair-value upside"),
+}
+
+
 def scorecard_text(q):
     """/scorecard — prediction scorecard summary (ADR 0028): snapshot counts,
     and top-vs-bottom decile excess once outcomes accrue."""
@@ -2688,8 +2732,12 @@ def scorecard_text(q):
     for kind, horizon, top, bottom, n in deciles:
         t = f"{top * 100:+.1f}%" if top is not None else "–"
         b = f"{bottom * 100:+.1f}%" if bottom is not None else "–"
-        lines.append(f"• {esc(kind)} @ {horizon}d: d1 {t} vs d10 {b} (n={n:,})")
-    lines.append("<i>Not advice; deciles ranked within each universe.</i>")
+        d1, d10 = DECILE_ENDS.get(kind, ("lowest value", "highest value"))
+        lines.append(f"• {esc(kind)} @ {horizon}d: d1 {t} vs d10 {b} (n={n:,})\n"
+                     f"   <i>d1 = {d1}, d10 = {d10}</i>")
+    lines.append("<i>Deciles sort each snapshot's value ascending within its universe, "
+                 "so d1 is the smallest value — the BEST rank, but the LEAST upside. "
+                 "Excess = realized return − benchmark return, averaged. Not advice.</i>")
     return "\n".join(lines)
 
 

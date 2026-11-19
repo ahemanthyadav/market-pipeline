@@ -2,11 +2,12 @@
 # Union of: sentiment-fetcher (TX2 only).
 # torch from the PyTorch CPU index; FinBERT baked at build time.
 # Re-freeze after any rebuild.
+huggingface_hub==1.33.0
 numpy==2.4.6
 psycopg-binary==3.3.6
 psycopg==3.3.6
 safetensors==0.8.0
 tokenizers==0.23.2
 transformers==5.17.0
-# torch installed separately from PyTorch CPU index in Dockerfile
-# model=ProsusAI/finbert (baked at build time in Dockerfile)
+# torch==2.15.0 (+cpu) is installed separately from the PyTorch CPU index (Dockerfile ARG)
+# model=ProsusAI/finbert @ 0bc2ac10dda6929bcb1f77ccc43c7ec5c424f031 (baked at build time)

@@ -26,7 +26,7 @@ spec:
           effect: NoSchedule
       containers:
         - name: tts
-          image: local/tts-service:v1
+          image: local/tts-service:v2
           imagePullPolicy: Never
           ports:
             - containerPort: 8001
@@ -38,6 +38,16 @@ spec:
               memory: "1Gi"
               cpu: "1"
           env:
+            # Optional shared token: once the Secret `voice-api-token` (key `token`) exists,
+            # /transcribe and /speak require `Authorization: Bearer <token>`. Until then the
+            # services are open to in-cluster callers (ClusterIP only). Owner-run, see
+            # docs/pending-tasks.md.
+            - name: VOICE_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: voice-api-token
+                  key: token
+                  optional: true
             - name: PIPER_MODEL
               value: "en_US-lessac-medium.onnx"
             - name: PIPER_VOICE_DIR

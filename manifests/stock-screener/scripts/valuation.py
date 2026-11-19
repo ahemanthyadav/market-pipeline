@@ -325,7 +325,9 @@ def value_one(d, hist, medians, styles, weights, rates):
     # 13. Easton (2004) / Ohlson-Juettner (2005) Abnormal Earnings Growth / Modified PEG (Research-Backed)
     # Replaces Lynch's magic 100 (which hardcodes r=10%, d=0) with 1/r^2 + dividend reinvestment.
     dps0 = (d0 / shares) if (d0 and d0 > 0 and shares) else 0.0
-    out["easton_mpeg"] = ((eps * ge + r * dps0 * ge) / (r ** 2)
+    # P = (eps_2 + r*dps_1 - eps_1) / r^2 = (eps*g + r*dps) / r^2: the dividend term is
+    # r*dps (reinvested dividends earn r), NOT scaled by g (fixed 2026-11-19).
+    out["easton_mpeg"] = ((eps * ge + r * dps0) / (r ** 2)
                           if eps and eps > 0 and ge is not None and r > 0 else None)
 
     # 14. Peters & Taylor (2017) Intangible-Adjusted Residual Income / Total q (Research-Backed)
@@ -430,7 +432,7 @@ VALUATION_CATALOG = (
     ("intangible_ri", "Intangible-Adjusted RI (Total q)", "valuation", "Research-Backed", "Clean-Surplus & Intangibles",
      "Peters & Taylor (2017, JFE); Eisfeldt & Papanikolaou (2013, JF); Arnott et al. (2021, FAJ)", "min((ROE_adj - g_T) / (r - g_T), 8.0) * ((Equity + 1.5 * (GP - EBIT)) / shares)", "stock_valuations", 10),
     ("easton_mpeg", "Easton Modified PEG (MPEG)", "valuation", "Research-Backed", "Abnormal Earnings Growth",
-     "Easton (2004, The Accounting Review); Ohlson & Juettner-Nauroth (2005, RAST)", "(EPS_0 * g_eps + r * DPS_0 * g_eps) / (r^2)", "stock_valuations", 11),
+     "Easton (2004, The Accounting Review); Ohlson & Juettner-Nauroth (2005, RAST)", "(EPS_0 * g_eps + r * DPS_0) / (r^2)", "stock_valuations", 11),
     ("damodaran_fcff", "Damodaran FCFF (g/ROC)", "valuation", "Research-Backed", "Corporate Finance",
      "Modigliani & Miller (1958, AER); Damodaran (2012, Investment Valuation)", "(PV(5y NOPAT * (1 - g/ROC) + terminal at WACC) - total_debt) / shares", "stock_valuations", 12),
     ("epv", "Greenwald 5y EPV", "valuation", "Research-Backed", "Corporate Finance",

@@ -332,5 +332,47 @@ class Anomalies(unittest.TestCase):
         self.assertEqual(sp.find_anomalies({self.D[0]: 10.04}, 10.0, fetched), [])
 
 
+class PhantomFirstBar(unittest.TestCase):
+    """2026-11-19: the oldest bar of a window is phantom-checked against the DB."""
+
+    @staticmethod
+    def conn(prev_close):
+        class Cur(FakeCursor):
+            def fetchone(s):
+                last = s.log[-1][0] if s.log else ""
+                if last.startswith("SELECT close FROM stock_prices"):
+                    return None if prev_close is None else (prev_close,)
+                return None
+
+        class C(FakeConn):
+            def cursor(s):
+                return Cur(s.log)
+        return C()
+
+    def frame(self):
+        df = bars(["2026-10-02", "2026-10-03"], tz="Asia/Kolkata")
+        df["Close"] = [448.4, 452.0]
+        df["Volume"] = [0, 900]                       # first bar: zero-volume carry-forward
+        return df
+
+    def test_first_bar_repeating_the_stored_close_is_skipped(self):
+        conn = self.conn(448.4)
+        self.assertEqual(sp.write_symbol(conn, "AADHARHFC.NS", self.frame(), "j"), 1)
+        ins = {p[1].day for qy, p in conn.log if qy.startswith("INSERT INTO stock_prices")}
+        self.assertEqual(ins, {3})
+
+    def test_first_bar_is_kept_when_the_price_moved_or_nothing_is_stored(self):
+        for prev in (440.0, None):
+            conn = self.conn(prev)
+            self.assertEqual(sp.write_symbol(conn, "AADHARHFC.NS", self.frame(), "j"), 2, prev)
+
+    def test_seed_lookup_is_time_bounded(self):
+        conn = self.conn(448.4)
+        sp.write_symbol(conn, "AADHARHFC.NS", self.frame(), "j")
+        seed = next(qy for qy, _p in conn.log if qy.startswith("SELECT close FROM stock_prices"))
+        self.assertIn("ts >=", seed)                  # house rule 9
+        self.assertIn("ts <", seed)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

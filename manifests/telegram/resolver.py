@@ -21,7 +21,7 @@ import re
 import time
 from difflib import SequenceMatcher
 
-from nicknames import NICKNAMES
+from nicknames import NICKNAMES, NON_UNIVERSE_TICKERS
 
 AUTO = 0.84          # fuzzy score needed to pick without asking
 MARGIN = 0.06        # ... and lead over the runner-up
@@ -86,6 +86,11 @@ def nickname(query):
         row = (sym, key.title(), "", "", "")
     _nickname_cache[key] = row
     return row
+
+
+def is_market_ticker(sym):
+    """Index / FX / futures tickers are legitimately absent from universe_constituents."""
+    return sym.startswith("^") or "=" in sym or sym in NON_UNIVERSE_TICKERS
 
 
 def initials(text):
@@ -154,21 +159,28 @@ def _ask(prompt):
         return None, None
 
 
-def suggest(q, query, asker=None):
+def suggest(q, query, asker=None, ai=True):
     """-> (row, note) to show a stock, or (None, message) with suggestions / no match.
 
     Layers, cheapest first:
       1. Nickname map (zero network)
       2. Fuzzy match against universe
-      3. AI gateway pick (if BOT_AI_RESOLVE=1)
+      3. AI gateway pick (if BOT_AI_RESOLVE=1 and `ai`; callers that try many
+         candidates pass ai=False — each miss is a gateway call of up to 20 s)
     """
-    # 1. Nickname map
+    rows = universe(q)
+    # 1. Nickname map — checked against the live universe: a stock nickname returns the
+    # REAL row (name, sector, universe, currency), and one whose symbol has left the
+    # universe (delisted, renamed) falls through instead of producing a dead card.
     nick = nickname(query)
     if nick:
-        return nick, "nickname"
+        real = next((r for r in rows if r[0] == nick[0]), None)
+        if real:
+            return real, "nickname"
+        if not rows or is_market_ticker(nick[0]):   # DB blip, or an index/FX/commodity
+            return nick, "nickname"
 
     # 2. Fuzzy match
-    rows = universe(q)
     cands = fuzzy(rows, query)
     top = cands[0][0] if cands else 0.0
     second = cands[1][0] if len(cands) > 1 else 0.0
@@ -177,7 +189,7 @@ def suggest(q, query, asker=None):
         return cands[0][1], "fuzzy"
 
     # 3. AI gateway pick
-    hit = ai_pick(query, cands, rows, asker)
+    hit = ai_pick(query, cands, rows, asker) if ai else None
     if hit:
         return hit, "ai"
 

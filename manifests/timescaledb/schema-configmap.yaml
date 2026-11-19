@@ -1036,7 +1036,7 @@ data:
       ('intangible_ri', 'Intangible-Adjusted RI (Total q)', 'valuation', 'Research-Backed', 'Clean-Surplus & Intangibles',
        'Peters & Taylor (2017, JFE); Eisfeldt & Papanikolaou (2013, JF); Arnott et al. (2021, FAJ)', 'min((ROE_adj - g_T) / (r - g_T), 8.0) * ((Equity + 1.5 * (GP - EBIT)) / shares)', 'stock_valuations', 10),
       ('easton_mpeg', 'Easton Modified PEG (MPEG)', 'valuation', 'Research-Backed', 'Abnormal Earnings Growth',
-       'Easton (2004, The Accounting Review); Ohlson & Juettner-Nauroth (2005, RAST)', '(EPS_0 * g_eps + r * DPS_0 * g_eps) / (r^2)', 'stock_valuations', 11),
+       'Easton (2004, The Accounting Review); Ohlson & Juettner-Nauroth (2005, RAST)', '(EPS_0 * g_eps + r * DPS_0) / (r^2)', 'stock_valuations', 11),
       ('damodaran_fcff', 'Damodaran FCFF (g/ROC)', 'valuation', 'Research-Backed', 'Corporate Finance',
        'Modigliani & Miller (1958, AER); Damodaran (2012, Investment Valuation)', '(PV(5y NOPAT * (1 - g/ROC) + terminal at WACC) - total_debt) / shares', 'stock_valuations', 12),
       ('epv', 'Greenwald 5y EPV', 'valuation', 'Research-Backed', 'Corporate Finance',

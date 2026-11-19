@@ -204,9 +204,19 @@ def phantom_bar(volume, close, prev_close):
 def write_symbol(conn, symbol, df, job):
     """Atomic per-symbol write + job_state cursor. Returns rows written."""
     written = 0
-    prev_close = None
     with conn.transaction():
         with conn.cursor() as cur:
+            # Seed from the DB so the OLDEST bar of the window is phantom-checked too
+            # (with prev_close=None a holiday carry-forward landing first in the 5-day
+            # window was stored). Bounded lookback: house rule 9.
+            prev_close = None
+            if len(df):
+                start = trade_ts(df.index[0])
+                cur.execute("SELECT close FROM stock_prices WHERE symbol=%s AND ts < %s "
+                            "AND ts >= %s::timestamptz - interval '45 days' "
+                            "ORDER BY ts DESC LIMIT 1", (symbol, start, start))
+                row = cur.fetchone()
+                prev_close = float(row[0]) if row and row[0] is not None else None
             for ts, bar in df.iterrows():
                 if pd.isna(bar.get("Close")):
                     continue

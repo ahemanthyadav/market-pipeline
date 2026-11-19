@@ -25,6 +25,7 @@ from __future__ import annotations
 from difflib import SequenceMatcher
 import json
 import os
+import html
 import re
 from typing import Callable, Optional, Tuple
 
@@ -37,7 +38,7 @@ import nicknames
 ARG_COMMANDS = frozenset({
     "stock", "news", "ask", "watch", "top", "scores", "screener",
     "multibagger", "mb", "sectors", "sector", "world", "index", "fx",
-    "usdinr", "route", "adduser", "rmuser", "valuation",
+    "usdinr", "route", "adduser", "rmuser", "valuation", "methods",
 })
 
 # Words that are never a symbol lookup on their own (command/filler words).
@@ -183,9 +184,11 @@ def ai_route(text: str, commands=None, asker=None) -> Tuple[Optional[str], Optio
     if commands and resolved not in commands:
         return None, None, None
     clean_args = _strip(str(args or ""))
-    # Never allow AI routing to trigger a watchlist write without explicit user command
-    if resolved == "watch" and clean_args.lower().startswith(("add", "rm", "remove", "del", "delete")):
-        return None, None, None
+    # An AI route never writes a watchlist. Dropping only "add …"/"rm …" was not enough:
+    # "/watch tesla" is an implicit add in cmd_watch, so ANY argument could write. The
+    # AI route to watch is the read-only list — arguments are discarded.
+    if resolved == "watch":
+        clean_args = ""
     return resolved, clean_args, "ai"
 
 
@@ -361,8 +364,9 @@ def format_route(command: str, args: str, confidence: str) -> str:
         "lookup": "universe lookup",
         "ai": "AI router",
     }.get(confidence, confidence)
-    arg_part = f" with args <code>{args}</code>" if args else ""
-    return f"Routed to <b>/{command}</b>{arg_part} ({conf_word})."
+    # args are user text: escape them, or "<b" in a message breaks the HTML send
+    arg_part = f" with args <code>{html.escape(str(args))}</code>" if args else ""
+    return f"Routed to <b>/{html.escape(str(command))}</b>{arg_part} ({html.escape(str(conf_word))})."
 
 
 if __name__ == "__main__":

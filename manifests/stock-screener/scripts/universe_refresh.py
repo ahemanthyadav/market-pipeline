@@ -45,10 +45,17 @@ def sec_cik_map():
     """{ticker: zero-unpadded cik str} from the SEC's official map (cached)."""
     global _sec_map
     if _sec_map is None:
-        resp = requests.get(SEC_TICKERS_URL, headers=UA, timeout=60)
-        resp.raise_for_status()
-        _sec_map = {v["ticker"].upper(): str(v["cik_str"])
-                    for v in resp.json().values()}
+        # The map only FILLS a CIK the Wikipedia row lacks. If the SEC is down the
+        # constituent refresh must still run (it used to fail the whole SP400/SP600
+        # refresh); the upsert keeps the stored CIK when the new one is empty.
+        try:
+            resp = requests.get(SEC_TICKERS_URL, headers=UA, timeout=60)
+            resp.raise_for_status()
+            _sec_map = {v["ticker"].upper(): str(v["cik_str"])
+                        for v in resp.json().values()}
+        except Exception as exc:  # noqa: BLE001
+            print(f"WARN SEC CIK map unavailable ({exc}); keeping stored CIKs", flush=True)
+            _sec_map = {}
     return _sec_map
 
 
@@ -154,7 +161,8 @@ def main() -> int:
                            VALUES (%s,%s,%s,%s,%s,%s,%s,%s, TRUE, now(), now())
                            ON CONFLICT (universe, symbol) DO UPDATE SET
                              name=EXCLUDED.name, sector=EXCLUDED.sector,
-                             isin=EXCLUDED.isin, cik=EXCLUDED.cik,
+                             isin=EXCLUDED.isin,
+                             cik=COALESCE(NULLIF(EXCLUDED.cik, ''), universe_constituents.cik),
                              exchange=EXCLUDED.exchange, currency=EXCLUDED.currency,
                              active=TRUE, last_seen=now()""",
                         (uni, sym, name, sector, isin, cik, exch, ccy))

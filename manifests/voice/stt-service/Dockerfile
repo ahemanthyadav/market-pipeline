@@ -1,30 +1,24 @@
-# STT service — faster-whisper HTTP server for Orin Nano (JetPack 7 / CUDA 13)
-# Build on Orin Nano (ARM64). CUDA libraries mounted at runtime from host.
+# STT service — faster-whisper HTTP server for Orin Nano (CPU int8 by default)
+# Build ON an Orin (arm64; the TX2 cannot build this), no registry (ADR 0004):
+#   sudo docker build -t local/stt-service:vN .          # N = the tag in stt-service-deployment.yaml
+#   sudo docker save local/stt-service:vN | sudo k3s ctr -n k8s.io images import -
 FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install system dependencies including python3-av (avoids PyAV compilation)
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libsndfile1 \
     ca-certificates \
-    python3-av \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies (excluding av which is from apt)
-RUN pip3 install --no-cache-dir --break-system-packages \
-    faster-whisper \
-    fastapi \
-    uvicorn \
-    python-multipart
+# Pinned: the 2026-11-17 build installed whatever was newest and ignored this file.
+COPY requirements.txt .
+RUN pip3 install --no-cache-dir -r requirements.txt
 
-# Copy application
 COPY stt_server.py .
 
 EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-  CMD curl -f http://localhost:8000/healthz || exit 1
-
+# Health is checked by the kubelet probes in the Deployment (no curl in this image).
 CMD ["python3", "stt_server.py"]

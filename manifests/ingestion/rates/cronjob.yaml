@@ -24,7 +24,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: fetcher
-              image: local/marketdata-data:v9
+              image: local/marketdata-data:v11
               imagePullPolicy: Never
               command: ["python", "rates-fetcher.py"]
               env:

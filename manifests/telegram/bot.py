@@ -171,7 +171,7 @@ def _help_text() -> str:
         "/sp500 — S&P 500: close, trend, median P/E/P/B, market cap\n"
         "/valuation PLTR — all 15 intrinsic valuation methods, fair value + upside\n"
         "/calibration — factor ICs, archetype excess returns, MB gate margins, shrunk weights\n"
-        "/methods — valuation & scientific method catalog (formulas + sources)\n"
+        "/methods — method catalog; /methods graham for formula + source\n"
         "/fx — USD/INR and the other pairs\n"
         "/macro — gold in INR, yield spreads, FII vs Nifty\n"
         "/digest — your daily digest on demand\n"
@@ -240,9 +240,9 @@ def cmd_calibration(_text: str) -> str:
     return stocks.calibration_text(query)
 
 
-def cmd_methods(_text: str) -> str:
+def cmd_methods(text: str) -> str:
     """Valuation & scientific method catalog (Schema 25 reference)."""
-    return stocks.methods_text(query)
+    return stocks.methods_text(query, _arg(text))
 
 
 def cmd_fii(_text: str) -> str:

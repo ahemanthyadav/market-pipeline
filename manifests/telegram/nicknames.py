@@ -255,6 +255,10 @@ COMMAND_ALIASES = {
 
 # Keyword → command for routing. Single keywords map to a command;
 # multi-word phrases need the full phrase to match.
+# Nickname targets that are not stocks and carry no "^" / "=" marker: they are never in
+# universe_constituents, so the resolver must not treat their absence as a dead symbol.
+NON_UNIVERSE_TICKERS = frozenset({"DX-Y.NYB", "NIFTYSMLCAP250.NS"})
+
 KEYWORD_COMMANDS = {
     "stock": "stock",
     "quote": "stock",

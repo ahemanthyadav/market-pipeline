@@ -1340,6 +1340,18 @@ class SectorsCardTest(unittest.TestCase):
         db = FakeDB([("FROM sector_metrics", self.ROWS)])
         self.assertIn("NIFTY500", stocks.sectors_card(db, "/sectors"))
 
+    def test_table_fits_the_phone_with_long_sector_names(self):
+        rows = self.ROWS + [("Telecommunication Services", 104, 1234.5, 215.0, None),
+                            ("Consumer Discretionary", 9, None, None, None)]
+        text = stocks.sectors_card(FakeDB([("FROM sector_metrics", rows)]), "/sectors sp500")
+        table = html.unescape(text.split("<pre>")[1].split("</pre>")[0]).splitlines()
+        self.assertEqual(len(table), 1 + len(rows))
+        for line in table:
+            self.assertLessEqual(len(line), PHONE_WIDTH, line)
+        self.assertIn("Telecommunication S…", text)      # clipped, not wrapped
+        self.assertIn(" 1,234 ", text)                   # a 4-digit P/E drops its decimal
+        self.assertIn("+215%", text)
+
     def test_empty_table_says_so(self):
         db = FakeDB([("FROM sector_metrics", [])])
         self.assertIn("No sector data", stocks.sectors_card(db, "/sectors sp500"))
@@ -1409,6 +1421,17 @@ class ScorecardCommandTest(unittest.TestCase):
                      ("prediction_outcomes", [("screener_rank", 30, 0.042, -0.013, 900)])])
         text = stocks.scorecard_text(db)
         self.assertIn("d1 +4.2% vs d10 -1.3%", text)
+        self.assertIn("d1 = best-ranked 10%, d10 = worst-ranked 10%", text)
+
+    def test_decile_direction_is_labelled_per_kind(self):
+        """d1 is the smallest VALUE: the best rank, but the least upside."""
+        from datetime import date as _date
+        db = FakeDB([("FROM prediction_snapshots GROUP BY kind",
+                      [("valuation_upside", 100, _date(2026, 10, 1), _date(2026, 10, 27))]),
+                     ("prediction_outcomes", [("valuation_upside", 91, -0.02, 0.05, 400)])])
+        text = stocks.scorecard_text(db)
+        self.assertIn("d1 = least fair-value upside, d10 = most fair-value upside", text)
+        self.assertIn("Excess = realized return − benchmark return", text)
         line = stocks.scorecard_line(FakeDB([
             ("prediction_outcomes", [("screener_rank", 30, 0.042, -0.013, 900)])
         ]))
@@ -1466,6 +1489,17 @@ class ValuationCommandTest(unittest.TestCase):
         self.assertIn("Damodaran FCFF: 102.00 ↑above close", text)
         self.assertIn("Buyback + Div DDM: 104.00 ↑above close", text)
         self.assertIn("not advice", text.lower())
+
+    def test_null_upside_and_counts_do_not_crash(self):
+        """upside_pct is NULL when the close is missing: the handler used to raise."""
+        row = list(self.db().answers[1][1][0])
+        row[13] = None      # upside_pct
+        row[17] = None      # methods_above_close
+        db = FakeDB([("upper(symbol) = ANY", [self.ROW]),
+                     ("FROM v_latest_valuations", [tuple(row)])])
+        text = stocks.valuation_text(db, "pltr")
+        self.assertIn("<b>Fair value</b> 108.00  (gap vs close n/a)", text)
+        self.assertIn("0 above close", text)
 
     def test_no_rows_says_so(self):
         db = FakeDB([("upper(symbol) = ANY", [self.ROW]),
@@ -1547,10 +1581,42 @@ class MethodsCommandTest(unittest.TestCase):
         self.assertIn("<b>valuation</b>", text)
         self.assertIn("<b>scientific</b>", text)
         self.assertIn("<b>composite</b>", text)
-        self.assertIn("Graham sqrt(22.5×EPS×BVPS) [Practitioner]", text)
-        self.assertIn("sqrt(22.5 * EPS * BVPS)", text)
-        self.assertIn("Graham (1949, The Intelligent Investor)", text)
+        self.assertIn("<code>graham</code> Graham sqrt(22.5×EPS×BVPS)", text)
+        self.assertIn("/methods graham", text)          # how to get one method's detail
+        self.assertNotIn("sqrt(22.5 * EPS * BVPS)", text)   # formulas live in the detail view
         self.assertIn("not advice", text.lower())
+
+    def test_detail_by_key_shows_formula_and_source(self):
+        text = stocks.methods_text(self.db(), "graham")
+        self.assertIn("<b>Graham sqrt(22.5×EPS×BVPS)</b> <code>graham</code>", text)
+        self.assertIn("valuation · Practitioner · Graham", text)
+        self.assertIn("Formula: sqrt(22.5 * EPS * BVPS)", text)
+        self.assertIn("Source: Graham (1949, The Intelligent Investor)", text)
+        self.assertNotIn("Lynch", text)                 # exact key wins over a substring
+
+    def test_detail_by_category_and_by_name_words(self):
+        self.assertIn("Piotroski F-Score", stocks.methods_text(self.db(), "scientific"))
+        self.assertIn("EPS * 100", stocks.methods_text(self.db(), "lynch peg"))
+
+    def test_no_match_points_back_to_the_list(self):
+        text = stocks.methods_text(self.db(), "<zzz>")
+        self.assertIn("No method matching <b>&lt;zzz&gt;</b>", text)
+
+    def test_real_size_catalog_fits_one_telegram_message(self):
+        """34 rows with real-length formulas + sources overflowed 4096 and were cut."""
+        rows = [(f"method_key_number_{i}", f"A Realistic Method Display Name {i}",
+                 ("valuation", "scientific", "factor", "composite")[i % 4], "Research-Backed",
+                 "Clean-Surplus & Intangibles",
+                 "Peters & Taylor (2017, JFE); Eisfeldt & Papanikolaou (2013, JF); Arnott (2021)",
+                 "min((ROE_adj - g_T) / (r - g_T), 8.0) * ((Equity + 1.5 * (GP - EBIT)) / shares)")
+                for i in range(34)]
+        db = FakeDB([("FROM v_valuation_methods", rows)])
+        index = stocks.methods_text(db)
+        self.assertLessEqual(len(index), 4096)
+        self.assertEqual(index.count("•"), 34)           # every method is listed
+        detail = stocks.methods_text(db, "valuation")    # 9 matches > METHODS_DETAIL_MAX
+        self.assertLessEqual(len(detail), 4096)
+        self.assertIn("3 more — ask for one by key", detail)
 
     def test_missing_table_degrades(self):
         class UndefinedTable(Exception):

@@ -22,6 +22,9 @@ import psycopg
 from transformers import pipeline
 
 MODEL = "ProsusAI/finbert"
+# The commit baked into the image (images/ml/Dockerfile FINBERT_REVISION — keep equal).
+# Unpinned, a rebuild could silently change the weights behind every sentiment score.
+MODEL_REVISION = "0bc2ac10dda6929bcb1f77ccc43c7ec5c424f031"
 BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "16"))
 MAX_ROWS = 1000
 
@@ -83,6 +86,7 @@ def main() -> int:
         "sentiment-analysis",
         model=MODEL,
         tokenizer=MODEL,
+        revision=MODEL_REVISION,
         truncation=True,
         max_length=512,
     )

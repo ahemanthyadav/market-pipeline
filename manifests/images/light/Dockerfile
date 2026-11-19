@@ -3,9 +3,9 @@
 # Profile: psycopg + requests + feedparser + lxml (light DB/HTTP fetchers, no pandas).
 #
 # Build natively on the TX2 (no registry, imagePullPolicy: Never):
-#   docker build -t local/marketdata-light:v1 .
-#   docker save local/marketdata-light:v1 | gzip > marketdata-light-v1.tar.gz
-#   k3s ctr -n k8s.io images import marketdata-light-v1.tar.gz  # on pi1/pi3 (+ pi2 detached)
+#   docker build -t local/marketdata-light:vN .   # N = the tag in the CronJob manifests
+#   docker save local/marketdata-light:vN | gzip > marketdata-light-vN.tar.gz
+#   k3s ctr -n k8s.io images import marketdata-light-vN.tar.gz  # pi1, pi2, pi3 + orin2 (see images/data/Dockerfile)
 #
 # CronJobs using this image pass their script via `command:`:
 #   command: ["python", "pipeline-health.py"]

@@ -293,5 +293,60 @@ class PointInTimeFacts(unittest.TestCase):
         self.assertEqual(v, "PASS")
 
 
+class G21Signals(unittest.TestCase):
+    """2026-11-19: industry momentum compounding/NaN and the distress-score filing-date join."""
+
+    def test_industry_momentum_compounds_one_plus_r_once(self):
+        idx = pd.bdate_range("2020-01-01", periods=260)
+        r = 0.001
+        px = pd.DataFrame({"A": 100 * (1 + r) ** np.arange(260),
+                           "B": 50 * (1 + r) ** np.arange(260)}, idx)
+        mom = ev0.industry_momentum(px, {"A": "Tech", "B": "Tech"})
+        self.assertAlmostEqual(mom["A"].iloc[-1], (1 + r) ** 252 - 1, places=9)   # ~28.6 %
+        self.assertLess(mom["A"].iloc[-1], 1.0)        # the (2 + r) bug gave ~1e76
+        self.assertAlmostEqual(mom["B"].iloc[-1], mom["A"].iloc[-1], places=12)
+
+    def test_one_members_gap_does_not_blank_the_sector(self):
+        idx = pd.bdate_range("2020-01-01", periods=260)
+        px = pd.DataFrame({"A": 100 * 1.001 ** np.arange(260),
+                           "B": 50 * 1.001 ** np.arange(260),
+                           "C": 10.0}, idx)
+        px.loc[idx[100:140], "B"] = np.nan             # a suspended member
+        mom = ev0.industry_momentum(px, {"A": "Tech", "B": "Tech"})
+        self.assertFalse(np.isnan(mom["A"].iloc[-1]))
+        self.assertAlmostEqual(mom["A"].iloc[-1], 1.001 ** 252 - 1, places=6)
+        self.assertTrue(mom["C"].isna().all())         # no sector -> no signal
+        self.assertEqual(list(mom.columns), ["A", "B", "C"])
+
+    @staticmethod
+    def facts(period_end, filed, ta):
+        vals = {"current_assets": 100, "current_liabilities": 40, "total_assets": ta,
+                "shareholder_equity": 300, "operating_income": 50, "total_revenue": 400,
+                "shares_outstanding": 10}
+        return [{"symbol": "A", "source": "edgar", "metric": m, "period_end": D(period_end),
+                 "filed": D(filed), "value": float(v)} for m, v in vals.items()]
+
+    def test_distress_score_waits_for_the_filing(self):
+        """FY2020 ends 12-31 but is filed 02-25: the Z-score must not exist before 02-26."""
+        idx = pd.bdate_range("2021-01-04", "2021-03-31")
+        px = pd.DataFrame({"A": 50.0, "B": 20.0}, idx)
+        z = ev0.distress_score(px, pd.DataFrame(self.facts("2020-12-31", "2021-02-25", 500)))
+        self.assertTrue(z.loc[:"2021-02-25", "A"].isna().all())    # incl. the filing day itself
+        self.assertFalse(np.isnan(z.loc["2021-02-26", "A"]))
+        expect = 1.2 * 60 / 500 + 1.4 * 300 / 500 + 3.3 * 50 / 500 + 0.6 * 500 / 200 + 400 / 500
+        self.assertAlmostEqual(z.loc["2021-03-31", "A"], expect, places=9)
+        self.assertTrue(z["B"].isna().all())                       # no facts for B
+
+    def test_restatement_and_late_old_period_do_not_leak(self):
+        fin = pd.DataFrame(
+            self.facts("2020-12-31", "2021-02-25", 500)
+            + self.facts("2020-12-31", "2021-06-01", 9999)     # restated later: ignored
+            + self.facts("2019-12-31", "2021-03-10", 7777))    # old period filed late: ignored
+        st = ev0.pit_statements(fin)
+        self.assertEqual(len(st), 1)
+        self.assertEqual(st.total_assets.iloc[0], 500.0)
+        self.assertEqual(st.avail.iloc[0], D("2021-02-25"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

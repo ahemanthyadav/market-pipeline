@@ -238,7 +238,7 @@ class ExtendedMethodsTest(unittest.TestCase):
         out = run_one(d, hist)
         ge = (5.0 / 3.0) ** 0.25 - 1
         dps0 = 1100.0 / 1000.0
-        expect_mpeg = (5.0 * ge + 0.095 * dps0 * ge) / (0.095 ** 2)
+        expect_mpeg = (5.0 * ge + 0.095 * dps0) / (0.095 ** 2)
         self.assertAlmostEqual(out["easton_mpeg"], expect_mpeg, places=6)
         self.assertIsNotNone(out["intangible_ri"])
         self.assertGreater(out["intangible_ri"], out["residual_income"])

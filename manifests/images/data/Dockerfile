@@ -7,7 +7,9 @@
 #   docker build -t local/marketdata-data:vN .     # N = the tag in the CronJob manifests
 #   docker save local/marketdata-data:vN | gzip > marketdata-data-vN.tar.gz
 #   k3s ctr -n k8s.io images import marketdata-data-vN.tar.gz  # on every node that runs floating jobs:
-#                                                              # pi1, pi3, orin2 (pi2 is cordoned)
+#                                                              # pi1, pi2, pi3 — AND orin2 for as long as
+#                                                              # its taint is only PreferNoSchedule (jobs
+#                                                              # still land there; verified 2026-11-19)
 #
 # CronJobs using this image pass their script via `command:`:
 #   command: ["python", "fx-fetcher.py"]

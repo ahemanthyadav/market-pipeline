@@ -46,9 +46,12 @@ def ewma_forecast(
         var[0] = r2[0]  # initialize with first squared return
         for t in range(1, n):
             var[t] = lambda_ * var[t - 1] + (1 - lambda_) * r2[t - 1]
-        sigma = np.sqrt(var)
-        # horizon-step forecast: for EWMA, constant = latest variance
-        forecast = math.sqrt(var[-1]) * math.sqrt(horizon)
+        # var[-1] is the variance OF the last observed day (built from returns up to
+        # the day before). The forecast for the NEXT day takes one more step so the
+        # newest return counts — without it the forecast was one day stale.
+        var_next = lambda_ * var[-1] + (1 - lambda_) * r2[-1]
+        # horizon-step forecast: for EWMA, constant = next-day variance
+        forecast = math.sqrt(var_next) * math.sqrt(horizon)
         results.append(
             {
                 "symbol": sym,

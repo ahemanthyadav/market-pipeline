@@ -35,6 +35,7 @@ BAD_BAR_PCT = 0.40        # |1-day return| threshold
 ROW_DROP_PCT = 0.30       # row count < 70% of trailing median
 ROW_WINDOW = 20           # trailing days for rolling median
 SCRAPER_WINDOW_DAYS = 7   # was producing within this window
+ROW_COUNT_EXTRA_DAYS = 10  # row_count_drop scans (and so owns) this much more than --days
 SCRAPER_SILENCE_DAYS = 2  # but silent for at least this many days
 # OS-1 additions
 DUPLICATE_KEY_SCORE = 1.0
@@ -397,7 +398,7 @@ def run(days=90):
         print(f"feed_drop: {n_fd} anomalies, scraper_drop: {n_sd} anomalies", flush=True)
 
     # row_count_drop
-    counts = fetch_daily_row_counts(days=days + 10)
+    counts = fetch_daily_row_counts(days=days + ROW_COUNT_EXTRA_DAYS)
     if not counts.empty:
         all_anomalies.extend(detect_row_count_drops(counts))
         n_rc = len([a for a in all_anomalies if a["kind"] == "row_count_drop"])
@@ -412,8 +413,13 @@ def run(days=90):
 
     # Own the window (house rule 4): every run recomputes the scanned window, so a
     # rule fix or a repaired bar clears stale rows instead of leaving them forever.
-    psql(f"DELETE FROM app.data_anomalies WHERE kind IN ('bad_bar','row_count_drop','duplicate_key',"
-         f"'ohlc_volume_sanity') AND ts >= NOW() - INTERVAL '{days + 10} days'")
+    # Each DELETE spans exactly what its rule re-scanned: the price rules read `days`,
+    # row_count_drop reads `days + 10`. Deleting the wider window for all four wiped
+    # 10 days of price-rule rows per run that nothing rewrote.
+    psql(f"DELETE FROM app.data_anomalies WHERE kind IN ('bad_bar','duplicate_key',"
+         f"'ohlc_volume_sanity') AND ts >= NOW() - INTERVAL '{days} days'")
+    psql(f"DELETE FROM app.data_anomalies WHERE kind = 'row_count_drop' "
+         f"AND ts >= NOW() - INTERVAL '{days + ROW_COUNT_EXTRA_DAYS} days'")
     psql("DELETE FROM app.data_anomalies WHERE kind IN ('feed_drop','scraper_drop','coverage')")
     n = write_anomalies(all_anomalies)
     print(f"ML-1: {len(all_anomalies)} detected, {n} written to app.data_anomalies", flush=True)

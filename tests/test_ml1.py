@@ -243,5 +243,33 @@ class OS1NewRules(unittest.TestCase):
         self.assertEqual(ml1.detect_expected_vs_received(df, {"AAA", "BBB", "CCC"}), [])
 
 
+class OwnsExactlyItsWindow(unittest.TestCase):
+    """2026-11-19: each DELETE spans what its rule re-scanned — no wider (house rule 4)."""
+
+    def test_delete_windows_equal_scan_windows(self):
+        scanned, sql = {}, []
+        empty = pd.DataFrame()
+        saved = {n: getattr(ml1, n) for n in (
+            "fetch_prices", "fetch_daily_row_counts", "fetch_heartbeat",
+            "fetch_universe_symbols", "write_anomalies", "psql")}
+        ml1.fetch_prices = lambda days=90: scanned.setdefault("prices", days) and empty
+        ml1.fetch_daily_row_counts = lambda days=45: scanned.setdefault("counts", days) and empty
+        ml1.fetch_heartbeat = lambda: empty
+        ml1.fetch_universe_symbols = lambda: []
+        ml1.write_anomalies = lambda rows: len(rows)
+        ml1.psql = lambda q, *a, **k: sql.append(q) or ""
+        try:
+            ml1.run(days=90)
+        finally:
+            for n, f in saved.items():
+                setattr(ml1, n, f)
+        price = next(q for q in sql if "'bad_bar'" in q)
+        counts = next(q for q in sql if "'row_count_drop'" in q)
+        self.assertIn(f"INTERVAL '{scanned['prices']} days'", price)
+        self.assertNotIn("row_count_drop", price)
+        self.assertIn(f"INTERVAL '{scanned['counts']} days'", counts)
+        self.assertEqual(scanned, {"prices": 90, "counts": 100})
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

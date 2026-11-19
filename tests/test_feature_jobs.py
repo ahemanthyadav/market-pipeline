@@ -172,5 +172,59 @@ class NseUniverseDummyFilter(unittest.TestCase):
         self.assertEqual([r[1] for r in rows], ["HEG.NS"])
 
 
+class PredictionRebase(unittest.TestCase):
+    """2026-11-19: the return base is re-read on today's adjustment basis."""
+
+    class Cur:
+        def __init__(self, answers):
+            self.answers, self.sql, self.last = answers, [], None
+
+        def execute(self, sql, params=()):
+            self.sql.append(" ".join(sql.split()))
+            self.last = self.answers.get(params)
+
+        def fetchone(self):
+            return self.last
+
+    def test_split_after_the_snapshot_is_not_booked_as_a_return(self):
+        ts = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        # snapshot stored 200.0; a later 2:1 split restated that day's adj_close to 100.0
+        cur = self.Cur({("AAPL", ts, ts): (100.0,)})
+        base = predictions.rebased(cur, {}, "AAPL", ts, 200.0)
+        self.assertEqual(base, 100.0)
+        self.assertAlmostEqual(110.0 / base - 1.0, 0.10)      # not 110/200 - 1 = -45 %
+        self.assertIn("ts >=", cur.sql[0])                    # rule 9
+
+    def test_falls_back_to_the_stored_close_and_caches(self):
+        ts = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        cur, cache = self.Cur({}), {}
+        self.assertEqual(predictions.rebased(cur, cache, "GONE", ts, 55.0), 55.0)
+        predictions.rebased(cur, cache, "GONE", ts, 55.0)
+        self.assertEqual(len(cur.sql), 1)
+
+
+class SecMapOutage(unittest.TestCase):
+    """2026-11-19: an SEC outage must not fail the S&P constituent refresh."""
+
+    def test_map_failure_degrades_to_empty(self):
+        import universe_refresh as ur
+
+        def down(*a, **k):
+            raise ConnectionError("sec.gov down")
+        real, ur._sec_map = ur.requests.get, None
+        ur.requests.get = down
+        try:
+            self.assertEqual(ur.sec_cik_map(), {})
+            self.assertEqual(ur.sec_cik_map(), {})        # cached: one attempt per run
+        finally:
+            ur.requests.get, ur._sec_map = real, None
+
+    def test_upsert_keeps_the_stored_cik_when_the_new_one_is_empty(self):
+        import inspect
+        import universe_refresh as ur
+        self.assertIn("COALESCE(NULLIF(EXCLUDED.cik, ''), universe_constituents.cik)",
+                      inspect.getsource(ur.main))
+
+
 if __name__ == "__main__":
     unittest.main()

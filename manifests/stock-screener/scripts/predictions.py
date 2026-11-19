@@ -5,11 +5,17 @@ Two passes in one run:
    today's rows): kind 'screener_rank' (value=rank, aux=composite) for every
    eligible scored symbol, and kind 'valuation_upside' (value=upside_pct,
    aux=fair_value) for every valued symbol. `close` stores the ADJUSTED close
-   at snapshot so later returns are total-return and split-safe.
+   at snapshot (a record of what was seen; NOT the return base — see RESOLVE).
 2. RESOLVE: for every snapshot whose horizon (30/91/182 calendar days) has
    elapsed and that has no outcome row yet, compute the realized adjusted
    forward return and the universe benchmark's return over the same window,
    then INSERT ... ON CONFLICT DO NOTHING (outcomes are write-once).
+   The base price is re-read from stock_prices at the snapshot date, NOT taken
+   from the snapshot row: adj_close is rewritten backwards on every later split
+   or dividend, so a stored absolute level is on a different basis from the
+   target bar and would book the adjustment itself as a return (a 2:1 split
+   = a fake -50 %). Base and target read in the same run share one basis. The
+   stored snapshot close is only the fallback when the base bar is gone.
 
 Prices: stock_prices.adj_close at the latest bar <= the target date (markets
 close on weekends; the nearest prior bar is the correct fill). Benchmarks:
@@ -104,6 +110,17 @@ def snapshot(conn):
     return len(rows)
 
 
+def rebased(cur, px_cache, sym, ts, stored):
+    """The snapshot-date adj_close on TODAY's adjustment basis (stored value only
+    as the fallback when no bar survives near the snapshot date)."""
+    key = (sym, ts)
+    if key not in px_cache:
+        cur.execute(PX_AT_SQL, (sym, ts, ts))
+        row = cur.fetchone()
+        px_cache[key] = row[0] if row else None
+    return px_cache[key] if px_cache[key] else stored
+
+
 def resolve(conn, today):
     with conn.cursor() as cur:
         cur.execute(DUE_SQL, (list(HORIZONS), today))
@@ -122,6 +139,9 @@ def resolve(conn, today):
             px = px_cache[key]
             if px is None:
                 continue  # delisted or no bar yet near the target; retry tomorrow
+            base = rebased(cur, px_cache, sym, ts, base)
+            if not base or base <= 0:
+                continue
             bench = BENCH.get(uni)
             bkey = (bench, ts, target)
             if bkey not in bench_cache:

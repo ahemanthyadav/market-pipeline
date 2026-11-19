@@ -139,5 +139,25 @@ class Gate(unittest.TestCase):
         self.assertEqual(bad, "")
 
 
+class FactsFallbackGatewayCalls(unittest.TestCase):
+    """2026-11-19: only the whole phrase may reach the AI resolver — each unmatched word
+    used to be its own gateway call (up to 20 s) on the bot's single poll loop."""
+
+    def test_only_the_whole_phrase_is_ai_eligible(self):
+        seen = []
+        real = ask.stocks.pick_one_ex
+
+        def spy(q, arg, asker=None, ai=True):
+            seen.append((arg, ai))
+            return None, "No stock matching", None
+        ask.stocks.pick_one_ex = spy
+        try:
+            ask.build_facts(lambda sql, args=(): [], "zorblat frimble quux wibble")
+        finally:
+            ask.stocks.pick_one_ex = real
+        self.assertEqual(seen[0], ("zorblat frimble quux wibble", True))
+        self.assertEqual([ai for _arg, ai in seen[1:]], [False] * 4)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

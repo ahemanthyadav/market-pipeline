@@ -34,6 +34,19 @@ SYSTEM = ("You write a one-sentence market note for a single Indian stock. Use O
 
 MAX_SYMBOLS = int(os.environ.get("MAX_SYMBOLS", "10"))
 PAUSE = float(os.environ.get("PAUSE", "7"))
+# Wall-clock budget for the whole run. Worst case per symbol is 2 attempts x 180 s, so
+# 40 symbols can need 4 h — far past any sane Job deadline. The loop stops cleanly
+# before the budget instead (rows are committed per symbol; the cache skips them on
+# the next run), so the Job ends Succeeded rather than being killed mid-symbol.
+BUDGET_SECONDS = float(os.environ.get("BUDGET_SECONDS", "3000"))
+WORST_SYMBOL_SECONDS = 2 * 180 + PAUSE
+
+
+def out_of_budget(elapsed, budget=None, worst=None):
+    """Pure. True when another symbol's worst case no longer fits in the budget."""
+    budget = BUDGET_SECONDS if budget is None else budget
+    worst = WORST_SYMBOL_SECONDS if worst is None else worst
+    return elapsed + worst > budget
 
 
 def connect():
@@ -134,6 +147,7 @@ def main() -> int:
     day = datetime.now(IST).date()
     conn = connect()
     processed = skipped = failed = 0
+    started = time.monotonic()
     try:
         cur = conn.cursor()
         print(f"ML7B-START day={day} max_symbols={MAX_SYMBOLS}", flush=True)
@@ -151,6 +165,11 @@ def main() -> int:
             if not facts.get("close"):
                 failed += 1
                 continue
+            if out_of_budget(time.monotonic() - started):
+                left = len(symbols) - processed - skipped - failed
+                print(f"ML7B-BUDGET stopped after {time.monotonic() - started:.0f}s, "
+                      f"{left} symbols left for the next run", flush=True)
+                break
             status, summary, model, attempts, detail = narrate(facts)
             if status == "ok":
                 summary_tagged = f"[{symbol}#{ch}] {summary}"

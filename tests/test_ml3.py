@@ -191,5 +191,27 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("gjr_garch", ml3.MODELS)
 
 
+class EwmaUsesTheNewestReturn(unittest.TestCase):
+    """2026-11-19: the forecast is for the NEXT day, so the last return must count."""
+
+    @staticmethod
+    def frame(rets):
+        return pd.DataFrame({"symbol": "AAA", "ret": rets,
+                             "ts": pd.date_range("2026-01-01", periods=len(rets), freq="D")})
+
+    def test_hand_computed_three_points(self):
+        fc = ml3c.ewma_forecast(self.frame([0.01, 0.02, 0.03]), lambda_=0.94)
+        v1 = 0.94 * 0.01 ** 2 + 0.06 * 0.01 ** 2           # variance of day 2
+        v2 = 0.94 * v1 + 0.06 * 0.02 ** 2                  # variance of day 3
+        v3 = 0.94 * v2 + 0.06 * 0.03 ** 2                  # forecast for day 4
+        self.assertAlmostEqual(fc.forecast.iloc[0], np.sqrt(v3), places=12)
+
+    def test_a_shock_on_the_last_day_moves_the_forecast(self):
+        calm = [0.01] * 60
+        base = ml3c.ewma_forecast(self.frame(calm)).forecast.iloc[0]
+        shocked = ml3c.ewma_forecast(self.frame(calm[:-1] + [0.10])).forecast.iloc[0]
+        self.assertGreater(shocked, base * 2)              # was identical before the fix
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
