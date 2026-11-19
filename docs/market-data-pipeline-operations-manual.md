@@ -336,7 +336,7 @@ adj_close is NOT continuous across these dates; returns/momentum spanning them a
 names. No source gives us the cost-split ratio, so nothing is invented — revisit if NSE's corporate-action
 feed is ever wired in. **NSE `DUMMY*` rows** are placeholders NSE parks in index CSVs after a demerger;
 `universe_refresh.py` skips them since 2026-11-12. **Delisted names still in Wikipedia's S&P 400/600 lists**
-(QRVO, BLFS, LEG, HLX, CWEN-A, ACA, RAMP, INDV, LXP on 2026-11-13) stay `active` until Wikipedia updates;
+(QRVO, BLFS, LEG, HLX, CWEN-A, ACA, RAMP, INDV, LXP on 2026-11-13; NWE from 2026-11-19) stay `active` until Wikipedia updates;
 they are never scored (no fresh price), so this is a few wasted Yahoo calls, not a data error.
 
 ## 5. Database reference
