@@ -15,11 +15,12 @@
 > **Corrections to the 11-15/11-16 text below:** the voice manifests are NOT blocked (fixed 11-17, working 11-19);
 > orin2 no longer runs floating jobs (both Orins are tainted `gpu=orin:NoSchedule`, verified live) — the image
 > obligation is **pi1 + pi2 + pi3**.
-> **Earlier 2026-11-15** (live cluster check + doc refresh): **6 k3s nodes** (pi1, pi2 cordoned, pi3, tx2,
+> **Earlier 2026-11-15** (live cluster check at that time): **6 k3s nodes** (pi1, pi2 cordoned as control plane, pi3, tx2,
 > orin1, orin2) + pi0 (non-cluster DNS) — all Ready; **36 CronJobs, none suspended**; 30 of the 31 jobs started in the
 > last 26 h `Succeeded` (0 failures; `nse-fundamentals` still `Running` at the check — long weekly job);
 > `pipeline_heartbeat` **16/16 feeds fresh**; pi3 dump `marketdata-2026-11-15.dump` (539 MiB) present.
-> **orin2 now runs all 31 floating CronJobs** (image obligation is now pi1 + pi3 + orin2). **New items opened:
+> **After the 2026-11-16 control-plane move:** pi2 is **uncordoned** and is a plain worker; k3s-cp (minipc/N100) is the control plane.
+> Floating CronJobs land on **pi1 + pi2 + pi3** (image obligation is **pi1 + pi2 + pi3**; orin2 is GPU-only, no market-data images).
 > ~~TX2 SSH credential stale~~ (false alarm: wrong SSH user, corrected below), Orin nodes unmonitored (no nodewatch/host-cron/SSH alias), workstation clock
 > skew.** **Node-local schedules are America/Los_Angeles — UTC−7 summer / UTC−8 winter**, so every node-local job's
 > UTC instant shifts by an hour at the DST boundary (only `telegram-digest` + `llm-narrative` are explicit IST).

@@ -1,5 +1,6 @@
 # ML-1 anomaly detection — data quality + node health flags.
-# Runs after pipeline-health (01:45 UTC), at 02:00 UTC.
+# Runs after pipeline-health (13:00 PST), at 14:00 PST.
+# Uses rule-based detection (MAD z-scores, freshness drops) — no model.
 # Uses rule-based detection (MAD z-scores, freshness drops) — no model.
 # Writes to app.data_anomalies table (schema 23).
 # Image: marketdata-data (ml1.py + pgcompat.py: in-cluster psycopg instead of the workstation
@@ -13,7 +14,7 @@ metadata:
   name: ml1-anomalies
   namespace: market-data
 spec:
-  schedule: "0 2 * * *"
+  schedule: "0 14 * * *"
   timeZone: America/Los_Angeles   # explicit since 2026-11-19: without it the schedule follows the control plane's clock (UTC on the N100), which fetched Asian markets pre-open and lost a day
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 3600

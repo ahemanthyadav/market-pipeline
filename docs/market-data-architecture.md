@@ -1,10 +1,11 @@
 # Market Data Pipeline — System Architecture
 
-> **Status:** live in production on the home k3s cluster. Updated 2026-10-18 (screener v12, health v5, roles,
-> chunk merge, data foundations — plan: `engineering-plan-2026-10-18.md`). Reconciled with `manifests/` 2026-10-10
+> **Status:** live in production on the home k3s cluster. Updated 2026-11-24 (control plane on k3s-cp/N100,
+> pi2 now a worker, both Orins GPU-only for voice/robotics). Reconciled with `manifests/` 2026-11-24
 > (36 CronJobs since 2026-10-26; `ops-tools/workloads.py --check` keeps the tables honest). **Live state re-verified
-> 2026-10-17: all 4 k8s nodes Ready (pi2 control-plane cordoned), every CronJob then deployed (23) active, TimescaleDB,
-> Grafana, and Telegram bot all Running.** (see ops manual §8 and pending-tasks for known gaps).
+> 2026-11-24: all 7 k3s nodes Ready (1 control plane minipc + 6 workers pi1/pi2/pi3/tx2/orin1/orin2),
+> every CronJob then deployed (36) active, TimescaleDB, Grafana, and Telegram bot all Running.** (see ops manual §8
+> and pending-tasks for known gaps).
 > Doc map: this file = **architecture** (what the system is);
 > `market-data-pipeline-plan.md` = design history + build log;
 > `market-data-pipeline-operations-manual.md` = runbooks + copy-paste commands;
@@ -57,8 +58,8 @@ headline_entities · headline_events · screener layer (§5.7)
 2. No container registry (CGNAT homelab): images are built natively on the TX2,
    distributed as tarballs, pulled with `imagePullPolicy: Never`.
 3. CronJob history limits kept tiny (`successfulJobsHistoryLimit: 3`,
-   `failedJobsHistoryLimit: 1`) to spare pi2's etcd.
-4. Nothing memory-heavy on pi2 (1 GB control-plane); the TX2 (7.7 GB) hosts the DB.
+   `failedJobsHistoryLimit: 1`) to spare worker RAM.
+4. Nothing memory-heavy on any 1 GB Pi worker (pi1/pi2/pi3); the TX2 (7.7 GB) hosts the DB.
 
 ### 1.1 System context (Mermaid)
 
@@ -117,24 +118,32 @@ flowchart TB
         subgraph PI0["pi0 · <pi0-ip> — DNS only (not in k8s, not on tailnet)"]
             DNS["Pi-hole v6.4.3 + unbound"]
         end
-        subgraph PI2["pi2 · <pi2-ip> — CONTROL-PLANE · 1 GB · fragile (§9)"]
-            API["k3s-server v1.36.4+k3s1 · kine/sqlite<br/>CronJob scheduling"]
+        subgraph CP["k3s-cp · <minipc-ip> — CONTROL PLANE · N100 bare metal · 4 cores / 16 GB · amd64 (§9)"]
+            API["k3s-server v1.36.4+k3s1 · kine/sqlite<br/>CronJob scheduling · tainted CriticalAddonsOnly"]
         end
         subgraph PI1["pi1 · <pi1-ip> — worker · 1 GB + 233 GB SSD"]
             W1["daily fetchers · ta-compute<br/>telegram listener + digest (pinned)"]
+        end
+        subgraph PI2["pi2 · <pi2-ip> — worker · 1 GB (was control plane)"]
+            W2["floating CronJobs fallback · CPU ingestion"]
         end
         subgraph PI3["pi3 · <pi3-ip> — worker · 1 GB + USB SSD"]
             W3["Grafana (sqlite on hostPath)<br/>pg-backup dumps · 7-day retention"]
         end
         subgraph TX2N["ahytx2-desktop · <tx2-ip> — tainted GPU worker · 7.7 GB"]
-            W2["sentiment-scorer (FinBERT CPU) · headline-ner"]
+            W2b["sentiment-scorer (FinBERT CPU) · headline-ner"]
             TSDB[("TimescaleDB StatefulSet<br/>hostPath /mnt/tx2-ssd/pgdata<br/>PV 30 Gi · Retain")]
+        end
+        subgraph ORIN["orin1 · orin2 · tainted GPU workers · 8 GB each"]
+            VS["stt-service (Whisper) · tts-service (Piper)<br/>voice layer only — no market-data CronJobs"]
         end
     end
     ADMIN -. "SSH (paramiko) + kubectl via tailnet" .-> API
     W1 -- "k3s agent (direct 6443)" --> API
     W3 -- "k3s agent (direct 6443)" --> API
-    W2 -- "k3s agent (pinned v1.35.3, cgroup v1)" --> API
+    W2 -- "k3s agent (direct 6443)" --> API
+    W2b -- "k3s agent (pinned v1.35.3, cgroup v1)" --> API
+    VS -. "k3s agent (tainted gpu=orin)" .-> API
 ```
 
 ### 1.3 Data pipeline topology (Mermaid)
@@ -219,17 +228,18 @@ whole DB via `pg_dump`.*
 
 ## 2. Infrastructure
 
-### 2.1 Nodes (all k3s Ready, verified 2026-11-15)
+### 2.1 Nodes (all k3s Ready, verified 2026-11-24)
 
 | Node | Hardware | LAN IP | Tailscale IP | k3s | Role |
 |---|---|---|---|---|---|
 | pi0 | Pi 1 B+, 512 MB | <pi0-ip> | — (not on tailnet) | — | Pi-hole v6.4.3 + unbound (DNS) — not a k8s node |
 | pi1 | Pi 3 B, 1 GB, 233 GB SSD | <pi1-ip> | <pi1-tailnet-ip> | agent v1.36.4 | Worker — Telegram bot + marketview (pinned) |
-| pi2 | Pi 3 B+, 1 GB | <pi2-ip> | <pi2-tailnet-ip> | server v1.36.4+k3s1 | **Control-plane — fragile + cordoned, see §9** |
+| pi2 | Pi 3 B+, 1 GB | <pi2-ip> | <pi2-tailnet-ip> | agent v1.36.4 | Worker — CPU ingestion fallback (was control plane, uncordoned 2026-11-16) |
 | pi3 | Pi 3 B, 1 GB | <pi3-ip> | <pi3-tailnet-ip> | agent v1.36.4 | Worker — Grafana + pg-backup pinned here |
+| k3s-cp (minipc) | N100 mini PC, 4 cores / 16 GB, amd64 | <K3S_CP_IP> | <K3S_CP_TS_IP> | server v1.36.4+k3s1 | **Control plane — tainted `CriticalAddonsOnly=true:NoExecute`** |
 | ahytx2-desktop | Jetson TX2, 7.7 GB RAM | <tx2-ip> (DHCP, router-reserved) | <tx2-tailnet-ip> | agent pinned v1.35.3+k3s1 | GPU/tainted worker + DB host + LLM gateway + image build host |
 | orin1 | Jetson Orin Nano, 8 GB, 1× GPU | <orin1-ip> | — | agent v1.37.2 | Worker — tainted `gpu=orin`, runs the STT/TTS voice layer (`stt-service:v3`, `tts-service:v2`, live 2026-11-19) |
-| orin2 | Jetson Orin Nano, 8 GB, 1× GPU | <orin2-ip> | — | agent v1.37.2 | Worker — untainted; **where the floating CronJobs run** (since 2026-11-13) |
+| orin2 | Jetson Orin Nano, 8 GB, 1× GPU | <orin2-ip> | — | agent v1.37.2 | Worker — tainted `gpu=orin`, GPU only: voice (STT/TTS) + robotics; **no market-data CronJobs** |
 
 - Network `<lan-cidr>`, gateway `<gateway-ip>`; LAN DNS = pi0. Admin from `<admin-host>`
   (<admin-tailnet-ip>) via `~/.kube/pi-cluster.yaml`.
@@ -253,7 +263,7 @@ whole DB via `pg_dump`.*
 - Storage: 28 GB eMMC (OS only since 2026-10-10 — images/containerd live on the SSD; it hit
   85% during the sentiment build) + 224 GB USB SSD `sda4` → fixed fstab mount `/mnt/tx2-ssd`
   (by UUID, `nofail`; backup `/etc/fstab.bak-20260929`).
-- Pi agents pi1/pi3 also carry `--disable-apiserver-lb` (direct to pi2:6443, no flaky
+- Pi agents pi1/pi3 also carry `--disable-apiserver-lb` (direct to k3s-cp:6443, no flaky
   local-LB hop). Patched in place; stock k3s reinstalls would revert it.
 
 ### 2.3 Tech stack
@@ -262,7 +272,7 @@ whole DB via `pg_dump`.*
 |---|---|---|
 | Orchestration | k3s (server v1.36.4+k3s1; TX2 agent pinned v1.35.3+k3s1) | Whole cluster |
 | DNS | Pi-hole v6.4.3 + unbound | pi0 |
-| Scheduling | k3s CronJobs (36 live); no workflow engine by design (pi2 RAM) | Pi workers / TX2 |
+| Scheduling | k3s CronJobs (36 live); no workflow engine by design (worker RAM) | Pi workers / TX2 |
 | Storage | TimescaleDB 2.30.1-pg16 (Postgres 16.15) | TX2, sda4 SSD |
 | Ingestion | Python 3.12-slim images: `yfinance`, `pandas`, `psycopg[binary]`, `feedparser`, `fredapi` | Pi workers |
 | Sentiment/NLP | FinBERT on CPU (TX2 inference needs no GPU at this volume) | TX2 only |
@@ -609,7 +619,7 @@ layer (JOINs on ticker/symbol), not in DDL.*
 - Pod spec conventions: `imagePullPolicy: Never`, `PGHOST/PGUSER/PGPASSWORD/PGDATABASE`
   env (password via `secretKeyRef`), `restartPolicy: OnFailure`, `backoffLimit` 1–2,
   requests ~256 Mi/100m, limits ~512 Mi/500m, tiny job-history limits.
-- No node pinning (scheduler balances the workers — pi1, pi3, orin2; pi2 kept light by policy).
+- No node pinning (scheduler balances the workers — pi1, pi2, pi3; pi2 kept light by policy).
 - Idempotency rule (§1.1): DELETE+INSERT own `(key, ts)` rows — safe re-runs.
 - Validate changes with `kubectl create job --from=cronjob/<name>` + log check + DB row check.
 
@@ -656,7 +666,7 @@ layer (JOINs on ticker/symbol), not in DDL.*
 
 **Schedules are node-local, not UTC** (verified 2026-10-04 — the "02:00-02:30"
 screener chain fired at 09:00-09:30 UTC). The controller follows `America/Los_Angeles`
-on pi2, so the offset is **UTC−7 in summer / UTC−8 in winter** — every node-local
+on k3s-cp (minipc), so the offset is **UTC−7 in summer / UTC−8 in winter** — every node-local
 job's UTC instant shifts by an hour at the DST boundary. Functionally fine; see
 ops manual §3.
 
@@ -766,7 +776,7 @@ this; enforced by unique indexes + ADR 0005):
 ```mermaid
 sequenceDiagram
     autonumber
-    participant CRON as k3s CronJob controller (pi2)
+    participant CRON as k3s CronJob controller (k3s-cp/minipc)
     participant POD as fetcher pod (Pi worker)
     participant UP as upstream feed
     participant DB as TimescaleDB (TX2)
@@ -843,14 +853,14 @@ sequenceDiagram
     participant DEV as admin workstation
     participant TX as TX2 (native ARM64 build)
     participant PIS as pi1 + pi2 + pi3 (containerd)
-    participant API as k3s API (pi2)
+    participant API as k3s API (k3s-cp/minipc)
     participant DB as TimescaleDB
 
     DEV->>TX: edit script + Dockerfile
     TX->>TX: docker build -t local/name:vN
     TX->>DEV: ops-tools getfile (image tar.gz)
     DEV->>PIS: ops-tools putfile (image tar.gz)
-    PIS->>PIS: k3s ctr -n k8s.io images import (pi2 detached nohup + poll)
+    PIS->>PIS: k3s ctr -n k8s.io images import (worker detached nohup + poll)
     DEV->>API: kubectl apply (bumped tag)
     DEV->>API: kubectl create job --from=cronjob/name (canary)
     API-->>DEV: job logs — check the OK-marker
@@ -900,7 +910,7 @@ on the admin box).
 
 ## 7. Dashboards (Grafana, Phase 7)
 
-- Deployment ×1 pinned to pi3 (off fragile pi2; TX2 tainted), image `grafana/grafana:12.2.0`,
+- Deployment ×1 pinned to pi3 (off the 1 GB workers; TX2 tainted), image `grafana/grafana:12.2.0`,
   128 Mi/100m request, 512 Mi/500m limit, hostPath `/var/lib/market-data/grafana` for data.
 - Configuration-provisioned with persistent local state on pi3 (hostPath
   `/var/lib/market-data/grafana` holds Grafana's own sqlite: dashboard versions,
@@ -943,10 +953,11 @@ on the admin box).
 
 ## 9. Operational constraints (learned the hard way)
 
-1. **pi2 is the fragile heart** (1 GB RAM, swap-thrashes under API bursts; `k3s-server`
-   died once under peak storm load and self-restarted). Mutations: one at a time, on
-   load <2. Agent (re)starts: stop all → cool pi2 → start one-by-one (pi3 → pi1 → TX2),
-   verifying each; retries against a hot server never break through, they sustain the storm.
+1. **k3s-cp (minipc) is the fragile heart** (1 control-plane node, sqlite/kine, no quorum;
+   swap-thrashes under API bursts; `k3s-server` died once under peak storm load and
+   self-restarted). Mutations: one at a time, on load <2. Agent (re)starts: stop all
+   → cool k3s-cp → start one-by-one (pi3 → pi1 → TX2), verifying each; retries against
+   a hot server never break through, they sustain the storm.
 2. **TX2 agent pinned** at v1.35.3+k3s1 (cgroup-v1 kernel; v1.36+ kubelets drop the escape
    hatch) → control-plane upgrades cap ~v1.38 (kubelet skew n-3). Never upgrade past v1.35
    without a JetPack 5 reflash (recovery-mode, full revalidation — kept in the icebox).
@@ -957,7 +968,7 @@ on the admin box).
    (2026-10-10, ops manual §2) — the eMMC holds only the OS + CUDA libs. Consequence:
    the TX2 cannot run any pod without the USB SSD. Alert above 85% still stands; sda4
    has 145 G free. Backup freshness = today's dump on pi3.
-5. **Deliberately declined:** Longhorn/OpenEBS + Loki (pi2 RAM ceiling), Argo/Tekton
+5. **Deliberately declined:** Longhorn/OpenEBS + Loki (worker RAM ceiling), Argo/Tekton
    (API-watch load; staggered CronJobs instead).
 
 ---
@@ -987,15 +998,15 @@ on the admin box).
    after schema/backup changes.
 3. **No HA anywhere.** DB ×1, Grafana ×1, single control-plane node (sqlite/kine, so no
    quorum to lose — but also no failover). Any node loss = degraded until fixed.
-4. **pi2 fragility.** 1 GB control-plane that swap-thrashes under API bursts and has died
-   once under peak storm load. One mutation at a time on load <2; no API-watch-heavy
-   controllers — Argo/Tekton, Loki, Longhorn all deliberately declined.
+4. **k3s-cp fragility.** Single control-plane node (sqlite/kine, so no quorum to lose
+   — but also no failover). 1 GB Pi workers swap-thrash under API bursts but are not
+   the control plane anymore. Any node loss = degraded until fixed.
 5. **Version ceilings.** TX2 k3s pinned ≤1.35 (cgroup-v1 kernel) → control-plane ≤~v1.38;
    JetPack 4.6.1 era pins the ML stack (CUDA 10.2, host Python 3.6, torch 1.10–1.12).
    Lifting either needs a JetPack 5 reflash (recovery-mode, full revalidation).
 6. **No-registry tax.** Every image update = native build + tarball + per-node
-   `ctr import` (pi2's import is slow; run detached). The ongoing operational cost of
-   the CGNAT design decision.
+   `ctr import` (worker import is slow on 1 GB Pis; run detached). The ongoing operational
+   cost of the CGNAT design decision.
 7. **Tailscale dependency.** The control plane of remote access is a third party on a
    free tier. LAN keeps working without it; remote access doesn't. No fallback VPN.
 8. **Homelab-grade security.** Stock Pi passwords, Pi-hole admin default, tailnet-only as
@@ -1048,7 +1059,7 @@ marketdata/
     └── screenshots/      Playwright captures from the 2026-10-03 dashboard passes
 ```
 
-Also on the admin box: `~/.kube/pi-cluster.yaml` (kubeconfig, server `<pi2-ip>`) and
+Also on the admin box: `~/.kube/pi-cluster.yaml` (kubeconfig, server `<k3s-cp-ip>`) and
 `~/.local/bin/kubectl` (v1.36.5).
 
 ### 11.2 Cluster host file systems (where things actually live)
@@ -1076,7 +1087,9 @@ Also on the admin box: `~/.kube/pi-cluster.yaml` (kubeconfig, server `<pi2-ip>`)
 
 **pi1 (<pi1-ip>):** worker only — containerd images, nothing persistent of its own (233 GB SSD is mostly spare).
 
-**pi2 (<pi2-ip>):** control-plane — `/var/lib/rancher/k3s/server` (kine/sqlite `state.db` ~8 MB, node-token, certs); containerd images (same set as pi3 — it's schedulable). Fragile: see §9.
+**pi2 (<pi2-ip>):** worker only — containerd images (same set as pi3 — schedulable). Was the control plane until 2026-11-16; `state.db` + certs moved to k3s-cp. Not fragile anymore — a regular ingestion fallback worker.
+
+**k3s-cp / minipc (<K3S_CP_IP>):** control plane — `/var/lib/rancher/k3s/server` (kine/sqlite `state.db` ~8 MB, node-token, certs); containerd images (none — tainted, no workloads schedule here). Fragile: see §9.
 
 **pi0 (<pi0-ip>):** Pi-hole + unbound; not part of k8s, not on the tailnet.
 
