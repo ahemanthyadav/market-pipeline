@@ -530,6 +530,9 @@ light/ml/litellm tarballs above; older data v1–v3 and telegram v37–v41 tarba
 verifying their checksums, and `SHA256SUMS.pi-only-images` went with them). Historical tags are no longer kept: the repo +
 `requirements.lock` can rebuild any of them, and the live-image tarballs are what a store loss actually needs.
 
+**Live set 2026-11-26:** `marketdata-data:v12`, `marketdata-light:v2` (archived, `SHA256SUMS.all` regenerated; data v11 and light v1 stay
+as rollbacks, on the nodes too). Both images now record every run in `job_runs` (`mdjob.run_main`).
+
 **Live set 2026-11-19:** `marketdata-data:v11`, `telegram-digest:v45`, `marketdata-ml:v2` (archived with `SHA256SUMS.all`
 regenerated); data v9/v10, telegram v43/v44 and ml v1 stay as rollbacks. The voice images (`stt-service:v3`, `tts-service:v2`) are built ON
 orin1 and exist only in its docker + containerd stores — they are not in this archive (rebuild from

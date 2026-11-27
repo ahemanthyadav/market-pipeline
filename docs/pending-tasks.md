@@ -120,7 +120,7 @@ Detail stays with each item; this is the decision view — keep it in sync when 
 |---|---|---|
 | ~~Staged manifest hardening apply~~ | ✅ applied 2026-10-26 (netpol: TX2 kernel lacks ipset — documented no-op for the DB) | done |
 | ~~Telegram v24 rebuild~~ | ✅ live 2026-10-26 incl. probe + non-root canary | done |
-| AR-8 PGUSER flip | after the owner runs the two §1 commands (Secret + role) | ~30 min |
+| ~~AR-8 PGUSER flip~~ | ✅ done 2026-10-30 (Secret `pipeline-db-rw`, role `pipeline_rw`; write path verified 11-03) — this row was stale | done |
 
 **Owner hands/decision first — then mostly minutes, not sessions:**
 | Item | What it takes from the owner | Agent part after |
@@ -222,8 +222,9 @@ Both wired into bot.py COMMANDS + MENU, router SAFE_AI_COMMANDS, and nicknames.
   run late. Prices self-heal through the 5-day window; **derived rows do not**: `stock-metrics` writes only at each
   symbol's newest bar, so a symbol that is a day late gets no metric/score row for the day it skipped (11-25 has
   22,912 metric rows against ~26,660). 11-20 and 11-23 were complete, so this started after the 11-24 NSE holiday
-  and may clear by itself. **Check on 11-28:** India counts for 11-26 and 11-27. If it persists: a second India-only
-  price run after ~18:00 IST, or an as-of mode in `stock-metrics` — both are code changes (next data rebuild).
+  and may clear by itself. **Check on 11-28:** India counts for 11-26 and 11-27. ✅ **Derived rows are fixed** (data v12, same evening: `stock-metrics`
+  fills skipped days — 11-25 is complete). Still open only if Yahoo keeps doing it: prices arrive a run late; a
+  second India-only price run after ~18:00 IST would close that.
 - [x] ✅ 2026-11-26 **`docs/backup-restore-runbook.md` rewritten for k3s-cp.** The duplicated node table and the full
   job schedule are gone (they point at `node-roles.md` §1 and ops manual §3, which are checked); the TimescaleDB restore
   now shows the real `pre_restore`/`post_restore` procedure instead of `pg_restore -c` into the live database; the
@@ -263,6 +264,37 @@ Both wired into bot.py COMMANDS + MENU, router SAFE_AI_COMMANDS, and nicknames.
   (11-24 … 11-26) and only printed the alert. Needs a Secret in the `llm` namespace — owner-run, llm-gateway TASKS #25.
 - [x] ✅ 2026-11-26 **`bakeoff.py`: an empty reply is no longer a first-try pass** — written by the llm-gateway session
   (its TASKS #29), committed here; shipped in the same ConfigMap apply.
+
+- [x] ✅ 2026-11-26 **`marketdata-data:v12` + `marketdata-light:v2` LIVE** (owner: "implement still open tasks"). Built on
+  the TX2 from commit `c796a5f`; every script in both images md5-checked against the commit (28 + 9 files);
+  tarballs in the TX2 archive with `SHA256SUMS.all` regenerated; imported on pi1, pi2 (detached), pi3, and light on the
+  TX2's own store; staged tarballs removed. Live: 21 CronJobs on data v12, 11 on light v2. Canaries all green, on
+  pi2, pi3 and the TX2: `fiidii-fetcher`, `headline-ner` (`NER-OK`), `fx-fetcher` (10/10), `stock-metrics`,
+  `news-fetcher`, `yields-fetcher`. Finished at ~21:05 PT, before the 22:30 nightly window. What it carries:
+  - **Per-job heartbeat v2 — every job now writes a `job_runs` row** (`mdjob.run_main`, 20 scripts; status `ok`/`fail`
+    from the return code or exception, end time, error text). Verified live: six `ok` rows from the canaries.
+    `rows_written` stays 0 for these scripts (they do not report a count). Closes the "Per-job heartbeat v2" item and
+    the recording half of AR-2/AR-3. **Not done, on purpose:** rewriting the 20 working writers onto
+    `mdjob.write_window` — that would replace tested SQL in every feed for uniformity only. New jobs use it.
+    Next step (no rebuild): point the Grafana stale-feed rule and `/health` at `job_runs`.
+  - **`stock-metrics` fills skipped days.** It now also writes a row for any of a symbol's five newest bars that has
+    none (`bars_to_write`, `tests/test_stock_metrics.py`, 7 tests). First run: `healed_days=468`; 2026-11-25 went from
+    22,912 metric rows to 26,658 (2,233 symbols — complete).
+  - **F401 cleanups** (12 unused imports; `ops-tools/ml5.py`'s `import ev0` left, it may be deliberate).
+  - `stocks.py series()` onto the facts path: already shipped in an earlier telegram build — the rider line was stale.
+  - **Rollback:** re-apply the manifests at `2eec086` (data v11 / light v1 are still in every node's store).
+- [x] ✅ 2026-11-26 **Old headline embeddings are being replaced** (owner: "implement"). `news_embed.py` gained
+  `REEMBED_FROM=<retired model>`; three chained Jobs (`news-reembed-{1,2,3}-20261126`, 50 batches each, 45 s apart)
+  replace the 4,705 rows of `nemotron-3-embed-1b`. Running at the time of this entry (2,039 rows on the new model at 21:05 PT); result recorded when the chain finishes.
+- 🔑 **Owner-run, refused to the agent again on 2026-11-26** (the permission system denies secret-store writes and
+  network exposure — not worked around):
+  1. Voice token — the block under "OWNER-RUN: voice service token" below. Add
+     `kubectl -n market-data rollout restart deploy/telegram-bot` so the bot picks the token up too.
+  2. `model-watch` Telegram alerts — `cd ../llm-gateway && ops/model-watch.sh install` (copies the two Telegram
+     fields from `market-data/telegram-bot` into `llm/llm-gateway-alerts`, never printed).
+  3. Tailnet exposure of marketview + Grafana — the block under "OWNER-RUN: tailnet exposure" below.
+  4. OS-8 backup role — needs a new role + Secret; no commands written yet (design first).
+  Phone checks (bot commands, one real voice note) are also yours.
 
 ### 2026-11-15 open-source roadmap review (`market-pipeline-github-improvement-roadmap.md`)
 
@@ -923,7 +955,7 @@ each with a regression test that fails on the old code. **Deploy is still pendin
   truncate to mid-April) — `nse_range()` paginates with a truncation-resume guard, tested. AR-5 rider:
   the nse Dockerfile now installs from requirements.lock. v5/v6 were burned on the way (tz-mix bug,
   the 70-cap) — tags bumped per rule, broken images removed from the Pis, tarball store holds v7 only.
-- [ ] 🔶 Per-job heartbeat v2 + fetcher-internal upstream guards — lands with
+- [x] ✅ 2026-11-26 (heartbeat half: every job writes a `job_runs` row since data v12 / light v2 — "2026-11-26 pass" in §1; fetcher-internal upstream guards remain per-fetcher work) Per-job heartbeat v2 + fetcher-internal upstream guards — lands with
   the next NATURAL image rebuilds (don't rebuild 9 working images just for
   this). NEW jobs start on the v2 pattern directly (rbi-fetcher already writes
   its own 'rbi' row). ✅ 2026-10-18 `pipeline-health:v5` adopted `rbi` into its FEEDS (checks `max(ts)` of the
