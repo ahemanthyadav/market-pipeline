@@ -206,30 +206,36 @@ Both wired into bot.py COMMANDS + MENU, router SAFE_AI_COMMANDS, and nicknames.
   repointed (previous crontab saved as `out/logs/crontab.bak-20261126`), quoting fixed, both jobs run by hand:
   `K3S-BACKUP-OK k3s-cp-backup-2026-11-27.tar.gz rows=1879` (+ pi3 copy verified), dumps for 11-25 and 11-26 pulled,
   sha256 ok. **First scheduled proof: the 03:00/03:30 runs on 2026-11-27** — check both logs.
-- [ ] 🔶 **Nothing alerts when the workstation pulls stop.** `pull-backups.py --max-age-hours` only speaks when the
-  cron job itself runs, which is how two weeks went by silently. Options: have pi3 (which already receives the
-  control-plane copy) report the age of the newest `~/k3s-cp-backups` archive into `pipeline-health`, or a nodewatch
-  check on pi0. Rides the next `marketdata-light` rebuild or a pi0 nodewatch edit — owner picks.
+- [x] ✅ 2026-11-26 **The workstation pulls are now watched from pi0.** Each pull, on success, touches a stamp on pi0
+  (`ops-tools/backup-stamp.sh` → `/var/lib/nodewatch-stamps/{pg-dumps,k3s-backup}`, key-auth SSH); `nodewatch.sh`
+  reports `backup-pull:<name>` as down when a stamp is missing or older than 36 h, with the same one-message-per-change
+  and 6-hourly reminder logic as a dead node. Installed on pi0 (md5 = repo, previous script kept as
+  `nodewatch.sh.bak-20261126`), dry run `down=[none]`, both stamps written by hand after today's pulls.
+  `tests/test-nodewatch.sh` 14 → 22 checks. No image rebuild, no new secret.
 - [x] ✅ 2026-11-26 **Control-plane restore rehearsed** — §0 projects row; steps and timings in ops manual §9.
 - [x] ✅ 2026-11-26 **Price audit clean; weekly audit retired** (§0 time-gated table, §5).
-- [ ] 🟡 **315 of 743 Indian symbols have no `stock_prices` bar for 2026-11-25** (found 11-26; spread across the
-  alphabet, e.g. ABBOTINDIA.NS, ACC.NS, ALKEM.NS; US complete at 1,490). The 11-25 23:30 PT run finished
-  `PRICES-OK … warn=11` with no error. Yahoo serves those bars now; it is today returning `Close = NaN` with a real
-  volume on the newest NSE bar for some names, and the writer skips a NaN close, so the likely cause is the same
-  lag one day earlier (not proven — the run's raw response is gone). The 5-day window should fill them on the
-  11-26 23:30 PT run. **Check on 11-27:** India count for 11-25 = 743, and that `stock_metrics_daily` / scores for
-  11-25 were recomputed (11-25 has 22,912 metric rows against ~26,660 on a full day); re-run `stock-metrics` →
-  `stock-valuation` → `stock-screener` if not. 11-24 has no Indian bars by design (NSE holiday).
-- [ ] 🔶 **`docs/backup-restore-runbook.md` still describes pi2 as the control plane** (hardware matrix, DR
-  scenarios, schedule summary, quick reference, the script walkthrough with its pi2 load gate). Banner added and the
-  restore procedure corrected 2026-11-26; the rest needs a rewrite against `node-roles.md` §1. Docs only.
-- [ ] 🟡 **Two Job objects still `Failed` from Sat 2026-11-21** (`intraday-fetcher-29921170` 06:10 PT,
-  `rbi-fetcher-29921220` 07:00 PT). Pods are gone, cause unknown; every later run succeeded and the heartbeat is
-  16/16 fresh. They age out with the CronJob history limit.
+- [ ] 🟡 **Yahoo is serving the newest NSE bar with `Close = NaN` for ~40 % of Indian symbols (seen 11-25 and 11-26).**
+  Found 11-26: 315 of 743 Indian symbols had no `stock_prices` bar for 11-25 after a clean `PRICES-OK` run. ✅ Filled
+  the same evening by an extra idempotent run (`stock-prices-manual-20261126`, `PRICES-OK rows=10690`): 11-25 is now
+  743/743. **But the same run stored only 415/743 for 11-26**, 17 h after the NSE close — Yahoo returns a real volume
+  and an empty close for the rest, and the writer rightly skips a NaN close. So each day's missing bars arrive one
+  run late. Prices self-heal through the 5-day window; **derived rows do not**: `stock-metrics` writes only at each
+  symbol's newest bar, so a symbol that is a day late gets no metric/score row for the day it skipped (11-25 has
+  22,912 metric rows against ~26,660). 11-20 and 11-23 were complete, so this started after the 11-24 NSE holiday
+  and may clear by itself. **Check on 11-28:** India counts for 11-26 and 11-27. If it persists: a second India-only
+  price run after ~18:00 IST, or an as-of mode in `stock-metrics` — both are code changes (next data rebuild).
+- [x] ✅ 2026-11-26 **`docs/backup-restore-runbook.md` rewritten for k3s-cp.** The duplicated node table and the full
+  job schedule are gone (they point at `node-roles.md` §1 and ops manual §3, which are checked); the TimescaleDB restore
+  now shows the real `pre_restore`/`post_restore` procedure instead of `pg_restore -c` into the live database; the
+  `ranched` path typos are fixed.
+- [x] ✅ 2026-11-26 **Two `Failed` Job objects from Sat 2026-11-21 deleted** (`intraday-fetcher-29921170`,
+  `rbi-fetcher-29921220`; pods long gone, cause unknown, every later run succeeded, heartbeat 16/16).
 - 🤔 **Left for the owner (unchanged):** k3s server upgrade to v1.37 (restore now rehearsed, so it is unblocked —
-  not done unasked: a control-plane upgrade on the host that also runs Coolify is not reversible by a manifest
-  revert); the pre-commit `LLM_PROVIDER` false positive (the item itself asks for an owner decision); voice token
-  Secret; AR-8 Secret + role.
+  owner said go ahead the same evening, see the entry below); voice token Secret; AR-8 Secret + role; OS-8 backup
+  role (needs a Secret). The per-rebuild riders (mdjob adoption in the 23 remaining writers, per-job heartbeat v2,
+  `stocks.py series()`, F401) were deliberately NOT done in this pass: they change code inside the shared images and
+  the tracker rule is never to rebuild for them alone. The `securityContext` and lock-install riders are already
+  complete (every workload manifest has a `securityContext`; all three shared images install from `requirements.lock`).
 
 ### 2026-11-15 open-source roadmap review (`market-pipeline-github-improvement-roadmap.md`)
 
@@ -273,9 +279,10 @@ The ids **OS-n** are stable; cite them when picking one up. Legend as in the hea
   - verifies TimescaleDB extension version, hypertable count and chunk counts after restore;
   - spot-checks representative rows per key table (stock_prices, fx_rates, bond_yields, interest_rates, news_sentiment);
   - logs `RESTORE-DRILL-OK rto= rpo=` for the backup runbook.
-- [ ] 🔶 **OS-7: TX2-loss restore rehearsal.** Restore the latest dump onto a non-TX2 host (a Vostro once AR-11
-  lands, or the workstation's `timescale/timescaledb:2.30.1-pg16` container) as if the TX2 were gone, and time the
-  full path: fetch the dump, restore, point clients at it. Doc §3.3 scenario 2. Medium. (Blocked: no Vostro yet — AR-11.)
+- [x] ✅ 2026-11-26 **OS-7: TX2-loss restore rehearsal — done on the workstation.** The 11-26 dump (578 MB) restored
+  into a network-less `timescale/timescaledb:2.30.1-pg16` container in 80 s (pg_restore 72 s); 19 hypertables, 642
+  chunks; seven tables compared with live, all identical. Only errors: 714 GRANTs to roles a bare server lacks.
+  Not rehearsed: pointing the cluster's clients at the copy. Record: `docs/backup-restore-runbook.md` §3.
 - [ ] 🔶 **OS-8: Backup credential separation** (doc §5 security). `pg-backup`/`restore-drill` use the `postgres`
   superuser. Consider a dedicated backup role (`pg_read_all_data`, PG14+) for the dump side, with restore staying
   superuser. Needs a Secret, so the owner runs the secret step (tracker §1 pattern). Small.
@@ -503,7 +510,7 @@ each with a regression test that fails on the old code. **Deploy is still pendin
   never against the local workstation clock. Worth a `timedatectl show -p NTPSynchronized` sanity check at the start
   of a health run.
 
-- [ ] 🟡 **Pre-commit guard false-positives on the LLM provider name (found 2026-11-15).** `LLM_PROVIDER` in the
+- [x] ✅ 2026-11-26 (owner: "complete all" — fixed with an explicit `NON_SECRET_KEYS = {"LLM_PROVIDER"}` list in the hook: that one value is no longer matched, every other entry stays a strong secret; 2 new hook tests, 21 total) **Pre-commit guard false-positives on the LLM provider name (found 2026-11-15).** `LLM_PROVIDER` in the
   gitignored `.secrets.env` is a **vendor identifier, not a credential**, but the guard treats every non-`WEAK_KEYS`
   entry as a strong secret — so **any newly added line containing that literal is blocked**, even in documentation
   ("the NVIDIA device plugin", the GPU resource key, the GPU RuntimeClass). The 2026-11-15 doc refresh had to reword

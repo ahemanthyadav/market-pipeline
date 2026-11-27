@@ -122,3 +122,4 @@ ls -1 "$DEST"/k3s-cp-backup-????-??-??.tar.gz 2>/dev/null | sort -r | tail -n +$
   rm -f "$old" "$old.sha256"; echo "$(stamp) pruned $(basename "$old")"
 done
 echo "$(stamp) K3S-BACKUP-OK $(basename "$f") rows=${integrity#* } sha256=${got:0:12}"
+bash ops-tools/backup-stamp.sh k3s-backup || true   # dead-man's stamp for pi0's nodewatch

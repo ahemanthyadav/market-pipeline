@@ -25,6 +25,11 @@ SECRETS = Path(os.environ.get("HOOK_SECRETS_FILE", ROOT / ".secrets.env"))
 HOSTS = Path(os.environ.get("HOOK_HOSTS_FILE", ROOT / ".hosts.env"))
 WEAK_KEYS = {"PI_PASS", "TX2_PASS"}  # short/common words: match only in credential context
 # The guard's own source and its test fixtures necessarily contain the bad patterns.
+# Identifiers kept in the local credentials file for convenience that are NOT secrets (a vendor
+# name, not a key). Their values are never matched: before 2026-11-26 any added line that merely
+# named the LLM vendor was blocked, even in documentation. Add a key here only if publishing its
+# value would be harmless — everything else in that file stays a strong secret.
+NON_SECRET_KEYS = {"LLM_PROVIDER"}
 PATTERN_EXEMPT = {".githooks/pre-commit", "tests/test-precommit-hook.sh"}
 
 FORBIDDEN = re.compile(
@@ -72,7 +77,8 @@ def main() -> int:
             problems.append((n, 0, "forbidden-path"))
 
     secrets = load_env(SECRETS)
-    strong = {k: v for k, v in secrets.items() if k not in WEAK_KEYS and len(v) >= 6}
+    strong = {k: v for k, v in secrets.items()
+              if k not in WEAK_KEYS and k not in NON_SECRET_KEYS and len(v) >= 6}
     weak_rx = [re.compile(r"(?i)(['\"]%s['\"]|(pass(word)?|pw)\s*[=:]\s*['\"]?%s\b|echo\s+%s\s*\||-p\s+%s\b)"
                           % ((re.escape(secrets[k]),) * 4)) for k in WEAK_KEYS if secrets.get(k)]
     hosts = [v.split("/")[0] for v in load_env(HOSTS).values() if v]

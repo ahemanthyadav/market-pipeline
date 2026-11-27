@@ -34,6 +34,22 @@ out=$(NODEWATCH_HOSTS_FILE="$NODEWATCH_HOSTS_FILE.short" run); rc=$?
 check "missing ORIN2_IP -> exit 2"             "$rc" 2
 check "missing ORIN2_IP -> says which node"    "$(has "$out" 'no address for orin2')" 1
 
+echo "== backup-pull stamps (dead-man's switch for the workstation pulls)"
+export NODEWATCH_STAMP_DIR="$NODEWATCH_STATE_DIR/stamps"
+out=$(run);                                    check "no stamp dir -> says pulls are not watched" "$(has "$out" 'backup pulls not watched')" 1
+check "no stamp dir -> no message"             "$(has "$out" '^message:')" 0
+mkdir -p "$NODEWATCH_STAMP_DIR"; touch "$NODEWATCH_STAMP_DIR/pg-dumps" "$NODEWATCH_STAMP_DIR/k3s-backup"
+out=$(run);                                    check "fresh stamps -> silent"                  "$(has "$out" '^message:')" 0
+touch -d '40 hours ago' "$NODEWATCH_STAMP_DIR/k3s-backup"
+out=$(run);                                    check "stamp older than 36 h -> DOWN message"   "$(has "$out" 'DOWN → backup-pull:k3s-backup')" 1
+out=$(run);                                    check "still stale -> suppressed"               "$(has "$out" '^message:')" 0
+rm "$NODEWATCH_STAMP_DIR/pg-dumps"
+out=$(run);                                    check "missing stamp counts as stale"           "$(has "$out" 'DOWN → backup-pull:pg-dumps backup-pull:k3s-backup')" 1
+touch "$NODEWATCH_STAMP_DIR/pg-dumps" "$NODEWATCH_STAMP_DIR/k3s-backup"
+out=$(run);                                    check "stamps fresh again -> recovered message" "$(has "$out" 'backup pulls fresh')" 1
+out=$(bash ops-tools/backup-stamp.sh nonsense 2>&1); check "backup-stamp rejects unknown names" "$?" 2
+unset NODEWATCH_STAMP_DIR
+
 echo "== safety"
 out=$(NODEWATCH_TEST_DOWN="tx2" run --dry-run); check "dry-run never claims it sent"          "$(has "$out" '^sent')" 0
 out=$(NODEWATCH_TEST_DOWN="tx2" run);           check "no credentials -> prints, does not send" "$(has "$out" 'no Telegram credentials')" 1

@@ -111,6 +111,10 @@ def main() -> int:
     if newest_age_h > a.max_age_hours:
         print("STALE: newest verified dump is older than the limit")
         return rc or 2
+    if rc == 0:   # dead-man's stamp for pi0's nodewatch — only a clean, fresh pull counts
+        import subprocess
+        subprocess.run(["bash", os.path.join(os.path.dirname(os.path.abspath(__file__)), "backup-stamp.sh"),
+                        "pg-dumps"], check=False)
     return rc
 
 

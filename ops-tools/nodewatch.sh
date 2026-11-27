@@ -5,7 +5,8 @@
 # Telegram bot, heartbeat) lives INSIDE the cluster it watches. This runs from a host
 # OUTSIDE k3s (pi0 is ideal; any box with bash + ping works) and needs no kubectl.
 #
-# Checks each node by ping and the control-plane API port by TCP, keeps a small state
+# Checks each node by ping, the control-plane API port by TCP, and the age of the workstation
+# backup-pull stamps (NODEWATCH_STAMP_DIR, default /var/lib/nodewatch-stamps), keeps a small state
 # file, and sends ONE Telegram message on each change (down / recovered), plus a
 # reminder every 6 h while anything is down. Messages use node names only — no IPs.
 #
@@ -50,15 +51,30 @@ for n in $NODES; do
 done
 if is_down_test api || { [ "${NODEWATCH_TEST_ONLY:-0}" != 1 ] && ! timeout 4 bash -c "</dev/tcp/${IP[k3s-cp]}/6443" 2>/dev/null; }; then down+=("k3s-api"); fi
 
+# Backup dead-man's stamps: the workstation's pull scripts touch one file per job here on success
+# (ops-tools/backup-stamp.sh). A stamp that is missing or older than 36 h means the pull has stopped —
+# from 2026-11-12 to 2026-11-26 both pulls were dead and nothing said so. No stamp directory on this
+# host = the check is off, and the status line says so.
+STAMPS="${NODEWATCH_STAMP_DIR:-/var/lib/nodewatch-stamps}"; STAMP_MAX="${NODEWATCH_STAMP_MAX_AGE:-129600}"
+stamps_note=""
+if [ -d "$STAMPS" ]; then
+  for s in pg-dumps k3s-backup; do
+    m="$(stat -c %Y "$STAMPS/$s" 2>/dev/null || echo 0)"
+    if is_down_test "backup-pull:$s" || [ $(( $(date +%s) - m )) -gt "$STAMP_MAX" ]; then down+=("backup-pull:$s"); fi
+  done
+else
+  stamps_note=" (backup pulls not watched: no $STAMPS)"
+fi
+
 now="$(date +%s)"; cur="${down[*]:-}"; prev="$(cat "$STATE/last" 2>/dev/null || true)"; lastsent="$(cat "$STATE/sent" 2>/dev/null || echo 0)"
 msg=""
 if [ "$cur" != "$prev" ]; then
-  if [ -n "$cur" ]; then msg="⚠️ nodewatch: DOWN → $cur"; else msg="✅ nodewatch: all nodes + k3s API reachable again"; fi
+  if [ -n "$cur" ]; then msg="⚠️ nodewatch: DOWN → $cur"; else msg="✅ nodewatch: all nodes + k3s API reachable again, backup pulls fresh"; fi
 elif [ -n "$cur" ] && [ $((now - lastsent)) -ge 21600 ]; then
   msg="⚠️ nodewatch (reminder, still down): $cur"
 fi
 
-echo "nodewatch $(date -u +%FT%TZ): down=[${cur:-none}]"
+echo "nodewatch $(date -u +%FT%TZ): down=[${cur:-none}]$stamps_note"
 if [ -n "$msg" ]; then
   echo "message: $msg"
   TOKEN="$(get "$SECRETS" TELEGRAM_BOT_TOKEN)"; CHAT="$(get "$SECRETS" TELEGRAM_CHAT_ID)"

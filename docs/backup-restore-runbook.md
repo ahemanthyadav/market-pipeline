@@ -1,11 +1,7 @@
 # Backup & Restore Runbook
 
-> ⚠ **Partly stale (noted 2026-11-26):** the control plane moved from pi2 to k3s-cp (the N100, node `minipc`) on
-> 2026-11-16. §2's restore procedure is corrected; the hardware matrix, DR table, schedule summary and quick-reference
-> commands below still name pi2 as the control plane. Until they are rewritten, ops manual §9 is authoritative.
-
 > **Single source of truth for every backup in the cluster:** k3s control-plane datastore (`state.db`) and TimescaleDB (`pg_dump`).
-> **Last verified: 2026-11-15.** Commands are copy-paste ready. No IP addresses — node names only (real values in gitignored `.hosts.env`).
+> **Last verified: 2026-11-26** (rewritten for the k3s-cp control plane; both restores rehearsed that day). Commands are copy-paste ready. No IP addresses — node names only (real values in gitignored `.hosts.env`).
 > Secrets never enter tracked files or chat output; use `@@PW@@` token via `runcmd.py` / `putfile.py`.
 
 ## 1. Backup overview
@@ -14,40 +10,43 @@ Two independent backups run on different schedules to different destinations:
 
 | Backup | What it protects | Source | Schedule | Destination | Retention |
 |---|---|---|---|---|---|
-| **k3s control-plane** (`pull-k3s-backup.sh`) | Cluster config: 36 CronJobs, secrets, ConfigMaps, Deployments, node join tokens, TLS certs | pi2 `state.db` (~8 MB SQLite) | Workstation cron 03:30 local | Workstation `out/backups/k3s/` (primary DR) + pi3 `~/k3s-cp-backups/` (fast-path) | 14 (workstation) / 7 (pi3) |
-| **TimescaleDB** (`pg-backup` CronJob) | Market data: all prices, fundamentals, sentiment, scores, etc. | TimescaleDB on tx2 (`sda4` SSD) | 01:30 UTC node-local | pi3 `/var/lib/market-data/backups/` + workstation via `pull-backups.py` | 7 daily |
+| **k3s control-plane** (`pull-k3s-backup.sh`) | Cluster config: 36 CronJobs, secrets, ConfigMaps, Deployments, node join tokens, TLS certs | k3s-cp (node `minipc`) `state.db` (SQLite via kine; archive ~1.5 MB) | Workstation cron 03:30 local | Workstation `out/backups/k3s/` (primary DR) + pi3 `~/k3s-cp-backups/` (fast-path) | 14 (workstation) / 7 (pi3) |
+| **TimescaleDB** (`pg-backup` CronJob) | Market data: all prices, fundamentals, sentiment, scores, etc. | TimescaleDB on tx2 (`sda4` SSD) | 01:30 America/Los_Angeles | pi3 `/var/lib/market-data/backups/` + workstation via `pull-backups.py` | 7 daily |
 
-The control-plane backup is **tiny** (~8 MB + keys) because it holds cluster *configuration*, not market data. The TimescaleDB dump is **~539 MB** because it holds all market data.
+The control-plane backup is **tiny** (~1.5 MB compressed, keys included) because it holds cluster *configuration*, not market data. The TimescaleDB dump is **~578 MB** (2026-11-26) because it holds all market data.
+
+**Both workstation pulls are watched from outside the workstation** (since 2026-11-26): each successful pull touches a stamp on pi0 (`ops-tools/backup-stamp.sh`), and pi0's `nodewatch.sh` sends a Telegram alert when a stamp is missing or older than 36 h. Before that, both pulls were dead from 2026-11-12 to 2026-11-26 without anyone noticing (cron ran them from a folder that no longer existed, and the k3s script had a quoting bug).
 
 **Failure domains covered:**
-- pi2 disk/datastore loss → control-plane backup restores cluster config
+- k3s-cp (N100) disk/datastore loss → control-plane backup restores cluster config
 - pi3 disk loss → TimescaleDB dump on pi3 SSD lost, but workstation copy survives
 - Site-wide power loss → all nodes down together; workstation copy is the off-cluster DR copy (pi0 watcher also goes down — see §7)
 - TX2 SSD failure → TimescaleDB data lost unless pg-backup copy on pi3/workstation exists
 
 ---
 
-## 2. k3s control-plane backup (pi2 → workstation + pi3)
+## 2. k3s control-plane backup (k3s-cp → workstation + pi3)
 
 ### What's backed up
-`/var/lib/rancher/k3s/server/db/state.db` (~8 MB SQLite via kine), plus:
-- `/var/lib/ranched/k3s/server/token` — node join token
-- `/var/lib/ranched/k3s/server/tls` — cluster CA + keys
-- `/var/lib/ranched/k3s/server/cred` — credentials
+`/var/lib/rancher/k3s/server/db/state.db` (SQLite via kine), plus:
+- `/var/lib/rancher/k3s/server/token` — node join token
+- `/var/lib/rancher/k3s/server/tls` — cluster CA + keys
+- `/var/lib/rancher/k3s/server/cred` — credentials
 
 **Mode 600.** This archive holds the cluster's root keys — anyone who can read it has full admin over the cluster.
 
 ### How it runs
 `ops-tools/pull-k3s-backup.sh` (workstation cron 03:30 local):
 
-1. Checks pi2 load1; skips if > 3 (AGENTS.md rule 2 — never add load to a busy control plane)
-2. On pi2: Python `sqlite3` online-backup API → consistent `state.db` copy (pi2 has no `sqlite3` CLI)
-3. `PRAGMA integrity_check` + row count verification
-4. Copies `token`, `tls`, `cred`; tars + gzips to `/tmp/k3s-cp-backup.tar.gz` on pi2, mode 600
-5. `getfile.py` pulls tarball + `.sha256` to workstation `out/backups/k3s/k3s-cp-backup-<date>.tar.gz`
-6. Remote `/tmp` copy deleted from pi2
-7. **NEW 2026-11-15:** `putfile.py` pushes the same archive to pi3 at `~/k3s-cp-backups/k3s-cp-backup-<date>.tar.gz` (dir 700 + files 600 owned by the pi3 user, sha256 re-verified on pi3, keeps newest 7) as in-cluster fast-path copy. **Fixed 2026-11-15:** the first version targeted `/var/lib/market-data/backups/k3s/` — that is the root-owned hostPath mounted (as root) into `pg-backup`/`restore-drill`, so the token/CA keys would have been readable from those pods, and the copy never actually landed (mkdir failed silently). The home directory is outside every hostPath; first verified copy 2026-11-15.
-8. Workstation keeps 14; pi3 keeps 7; rotation deletes older
+1. Key-auth SSH to k3s-cp as `minipc` (no password, no `runcmd.py`); the address comes from `K3S_CP_IP` in `.hosts.env`. There is no load gate any more — that protected the 1 GB pi2.
+2. On k3s-cp: Python `sqlite3` online-backup API → consistent `state.db` copy while k3s keeps running
+3. `PRAGMA integrity_check` + row count
+4. Copies `token`, `tls`, `cred`; tars + gzips to `/tmp/k3s-cp-backup.tar.gz` on k3s-cp, readable only by `minipc`
+5. `scp` to the workstation `out/backups/k3s/k3s-cp-backup-<UTC date>.tar.gz`, sha256 compared with the remote value
+6. Remote `/tmp` copy deleted
+7. `putfile.py` pushes the same archive to pi3 at `~/k3s-cp-backups/` (dir 700, files 600, sha256 re-verified on pi3, keeps 7). It lives in the pi3 user's home, never under `/var/lib/market-data` — that tree is mounted as root into `pg-backup`/`restore-drill`, so the token and CA keys would be readable from those pods.
+8. Workstation keeps 14; rotation deletes older
+9. `backup-stamp.sh k3s-backup` → stamp on pi0 for nodewatch
 
 ### Where copies live
 | Copy | Location | Mode | Retention | Purpose |
@@ -69,7 +68,7 @@ python3 ops-tools/runcmd.py pi3 pi3 'ls -lh ~/k3s-cp-backups/ | tail -5'
 
 **Prerequisites:** quiet window. The control plane is k3s-cp (the N100, node `minipc`) since 2026-11-16; it is
 reached by key-auth SSH. The copy-paste steps live in one place — ops manual §9 "Control-plane datastore" — so they
-cannot drift again (this section still described pi2 until 2026-11-26).
+cannot drift again.
 
 > ✅ **Rehearsed 2026-11-26** on a throwaway container: 2 s from start to a serving API, all objects present, CA
 > matches the live cluster. Record and the two gotchas (no default route; `dynamic-cert.json` on a new address):
@@ -83,7 +82,7 @@ cannot drift again (this section still described pi2 until 2026-11-26).
 Full TimescaleDB (`index_prices`, `fx_rates`, `bond_yields`, `interest_rates`, `news_sentiment`, `technical_indicators`, `capital_flows`, `intraday_prices`, `raw_headlines`, `pipeline_heartbeat`, `ticker_names`, screener layer, bot layer, data foundations, etc.) plus the `litellm` DB (best effort).
 
 ### How it runs
-CronJob `pg-backup` (01:30 UTC node-local, pinned to pi3):
+CronJob `pg-backup` (01:30 America/Los_Angeles, pinned to pi3):
 - `pg_dump -h timescaledb -U postgres -d postgres -Fc` (custom format)
 - Writes to pi3 USB SSD at `/var/lib/market-data/backups/` (hostPath)
 - Verifies before finalizing: size floor (half previous dump), `pg_restore -l` readable TOC, ≥100 entries, `index_prices` table data present
@@ -100,7 +99,7 @@ CronJob `pg-backup` (01:30 UTC node-local, pinned to pi3):
 
 ### Verify it ran
 ```bash
-# Pi3 backup directory (should show today's dump, ~539 MB; 0-byte file = failed run)
+# Pi3 backup directory (should show today's dump, ~578 MB; 0-byte file = failed run)
 python3 ops-tools/runcmd.py pi3 pi3 'ls -lh /var/lib/market-data/backups/ | tail -5'
 
 # Workstation copy
@@ -110,38 +109,49 @@ cat out/logs/pull-backups.log | tail -5
 
 ### Restore procedure (TimescaleDB)
 
-```bash
-# From any pod with the timescale image + Secret (restore-drill pattern)
-kubectl -n market-data run restore-pod --rm -i --restart=Never \
-  --image=timescale/timescaledb:2.30.1-pg16 \
-  --env-from=secretRef/timescaledb-auth \
-  -- sh -c 'pg_restore -h timescaledb -U postgres -d postgres -c /backups/marketdata-<date>.dump'
+`pg_dump -Fc` of a TimescaleDB database must be restored between `timescaledb_pre_restore()` and
+`timescaledb_post_restore()`, serially (`-j` fails on the catalog foreign keys). A plain `pg_restore -c` into the live
+database is **not** the procedure.
 
-# Or from pi3 host directly:
-python3 ops-tools/runcmd.py pi3 pi3 'echo @@PW@@ | sudo -S pg_restore -h timescaledb -U postgres -d postgres -c /var/lib/market-data/backups/marketdata-<date>.dump'
+```bash
+# Into an EMPTY database on any host that has the same image (timescale/timescaledb:2.30.1-pg16):
+psql -U postgres -c "CREATE DATABASE restored"
+psql -U postgres -d restored -c "CREATE EXTENSION IF NOT EXISTS timescaledb" -c "SELECT timescaledb_pre_restore()"
+pg_restore -U postgres -d restored /backups/marketdata-<date>.dump      # serial; GRANT errors for missing roles are expected
+psql -U postgres -d restored -c "SELECT timescaledb_post_restore()"
+# then re-create the roles (schema-configmap creates them) and re-run the schema Job under a new name.
 ```
 
-> Restore drill done 2026-10-12 (off-cluster) and re-run 2026-10-17 (in-cluster): 171 MB dump restored in 30 s / 289 s, row counts matched. RTO ≈ 5 min at current size.
+In-cluster, `manifests/timescaledb/restore-drill-job.yaml` does exactly this into a throwaway `drill_restore` database
+and logs `RESTORE-DRILL-OK rto= rpo=` (quarterly check, ops manual §9).
+
+> **TX2-loss rehearsal, 2026-11-26 (OS-7):** `marketdata-2026-11-26.dump` (578 MB, sha256 verified) restored on the
+> workstation into a fresh `timescale/timescaledb:2.30.1-pg16` container with no network, as if the TX2 were gone.
+> Container up and database prepared in 8 s, `pg_restore` 72 s, **80 s in total**; 19 hypertables, 642 chunks, 3.7 GB
+> on disk. Seven tables compared with live, all identical (`stock_prices` 495,303 rows and `index_prices` 9,300 for
+> 2026-01-01…11-19, `fx_rates` 9,544, `raw_headlines` 5,151, `stock_fundamentals` 1,209,175, `universe_constituents`
+> 2,264, `bot_users` 3). The only errors were 714 `GRANT`s to roles a bare server does not have (`grafana_ro` 710,
+> `pipeline_rw` 4) — expected: roles are not in a `-Fc` dump. **Not rehearsed:** pointing the cluster at the copy
+> (the `timescaledb` Service would need to resolve to the new host, and that host needs the role passwords from the
+> existing Secrets). The pull from pi3 to the workstation is the nightly 03:00 job (~578 MB over the LAN).
+> Earlier drills: 2026-10-12 off-cluster (171 MB, 30 s) and 2026-10-17 in-cluster on pi3 (289 s).
 
 ---
 
-## 4. Full cluster hardware & roles
+## 4. Where each backup-relevant piece lives
 
-| Node | Hardware | In k3s? | Role | Pinned workloads | If it dies |
-|---|---|---|---|---|---|
-| **pi0** | Pi 1 B+, 512 MB, SD | **No** | LAN DNS (Pi-hole + unbound), out-of-cluster watcher | none (not a k8s node) | LAN DNS gone; dead-man's switch silent; nodewatch alerts stop |
-| **pi1** | Pi 3 B, 1 GB, 233 GB SSD | Worker | Telegram bot + marketview host; ingestion fallback | `telegram-bot`, `marketview`, `telegram-digest`, `telegram-alerts` | Bot stops answering; digest/alerts not sent; floating jobs land on pi3/orin2 |
-| **pi2** | Pi 3 B+, 1 GB | **Control plane** | k3s server (API, scheduler, kine/state.db, CoreDNS, Traefik, metrics) | none (**cordoned**) | Whole cluster loses API; nothing new schedules; running pods survive |
-| **pi3** | Pi 3 B, 1 GB, SSD | Worker | Grafana, backups (pg + k3s control-plane copy) | `grafana`, `pg-backup`, `restore-drill` | No dashboards; no nightly TimescaleDB dump; no k3s fast-path copy |
-| **tx2** (`ahytx2-desktop`) | Jetson TX2, 7.7 GB, eMMC + 224 GB SSD | Worker (tainted `gpu=true`) | **The database**, NLP jobs, LLM gateway, image build host | `timescaledb-0`, `llm-gateway` (ns `llm`), `sentiment-scorer`, `headline-ner` | **Every pipeline write fails** (DB down); data safe on Retain PV |
-| **orin1** | Jetson Orin Nano, 8 GB, 932 GB SSD, 1×GPU | Worker (tainted `gpu=orin`) | **STT/TTS voice layer only** — reserved, not deployed | `stt-service`, `tts-service` (manifests exist, not applied) | Voice I/O stays silent; text commands and marketview still work |
-| **orin2** | Jetson Orin Nano, 8 GB, 476 GB SSD, 1×GPU | Worker (untainted) | **General ingestion pool** — runs all 31 floating CronJobs | none | Floating jobs reschedule to pi1/pi3 (images exist on both); no pinned workload lost |
+The full per-node table (hardware, pinned workloads, blast radius) is `docs/node-roles.md` §1 — not repeated here,
+because the copy that used to be here went stale at the 2026-11-16 control-plane move.
 
-**k3s versions:** server pi2 v1.36.4+k3s1; agents pi1/pi3 v1.36.4; orin1/orin2 v1.37.2; tx2 pinned v1.35.3+k3s1 (cgroup v1 ceiling).
-
-**Labels/taints drift:** both Orins labelled `hardware=orin-cpu` (not `hardware=orin`); taint key is `gpu=orin` (not `hardware=orin`). Voice manifests select `hardware: orin` — **they will not schedule as written** (pending-tasks §1).
-
-**TX2 GPU:** not exposed to Kubernetes (no GPU allocatable; device plugin only on orin1/orin2). TX2 GPU reached via GPU RuntimeClass only (smoke test path).
+| Piece | Host | Notes |
+|---|---|---|
+| k3s server + `state.db` | **k3s-cp** (N100, node `minipc`, amd64, bare metal) | Tainted `CriticalAddonsOnly`; shares the host with an experiments-only Coolify |
+| TimescaleDB data | **tx2**, Retain PV on the SSD | Deleting the PVC keeps the data; the StatefulSet is never deleted casually |
+| Nightly dump | **pi3** SSD, `/var/lib/market-data/backups/` | `pg-backup` and `restore-drill` are pinned here |
+| Control-plane fast-path copy | **pi3**, `~/k3s-cp-backups/` | Outside every hostPath |
+| Second copies of both | **workstation**, `out/backups/` and `out/backups/k3s/` | Needs the workstation on at 03:00–03:30 |
+| Pull watchdog + node watchdog | **pi0** (`nodewatch.sh`, every 5 min) | Out of cluster; goes dark with a site-wide power loss |
+| Off-site copy | **none** | AR-11, owner decision |
 
 ---
 
@@ -149,11 +159,12 @@ python3 ops-tools/runcmd.py pi3 pi3 'echo @@PW@@ | sudo -S pg_restore -h timesca
 
 | Scenario | What fails | Recovery order |
 |---|---|---|
-| **pi2 dies (control plane)** | No API, no scheduling, CoreDNS gone | 1. Restore k3s state.db from pi3/workstation copy (§2) 2. Agents reconnect 3. Verify all 36 CronJobs |
+| **k3s-cp dies (control plane)** | No API, no scheduling; running pods keep running | 1. Reinstall k3s server (same version, same address and flags) 2. Restore `state.db` + token + tls + cred from the workstation or pi3 copy (ops manual §9, rehearsed 2026-11-26: 2 s to a serving API) 3. Agents reconnect 4. Verify all 36 CronJobs |
 | **TX2 SSD dies (DB host)** | All pipeline writes fail; market data at risk | 1. Replace SSD 2. Re-deploy timescaledb-0 on tx2 3. Restore TimescaleDB from pi3/workstation pg-dump (§3) 4. Re-run fetchers to backfill |
 | **pi3 dies (Grafana + backups)** | No dashboards, no nightly dump, no k3s fast-path copy | 1. Workstation copy still valid for k3s restore 2. TimescaleDB workstation copy still valid 3. Replace pi3, re-deploy grafana + pg-backup |
 | **Site-wide power loss** | All nodes down together; pi0 watcher silent | 1. Wait for mains 2. Nodes auto-recover (verified 2026-10-18) 3. Verify all CronJobs ran; check `pipeline_heartbeat` freshness |
-| **orin2 dies (floating jobs)** | Floating CronJobs stop | None needed — scheduler reschedules to pi1/pi3 (images present on both) |
+| **A Pi worker dies** | Its pinned workloads stop (see `node-roles.md`) | Floating CronJobs reschedule onto the other Pis (images are on pi1 + pi2 + pi3). The Orins run no market-data jobs |
+| **Workstation off or its cron broken** | No second copies | pi0 alerts after 36 h (`backup-pull:pg-dumps` / `backup-pull:k3s-backup`); the pi3 dump keeps being written regardless |
 
 **Critical order:** Always restore control plane (k3s) **before** TimescaleDB, because fetchers need the API server to schedule, and TimescaleDB needs the cluster network to be reachable.
 
@@ -165,50 +176,24 @@ python3 ops-tools/runcmd.py pi3 pi3 'echo @@PW@@ | sudo -S pg_restore -h timesca
 |---|---|---|
 | Control-plane restore rehearsal | ✅ Done 2026-11-26 (ops manual §9) | Repeat after a k3s minor upgrade |
 | Off-site backup copy | Open | No rclone/restic/aws/b2 on workstation; pick destination + encryption (AR-11) |
-| ~~TX2 SSH credential stale~~ | None: false alarm 2026-11-15 (wrong SSH user) | Use `runcmd.py tx2 ahytx2` (user `ahytx2`, not the hostname `ahytx2-desktop`) |
-| Orin nodes unmonitored | Open | Not in nodewatch, no node-stats-log, no SSH alias (AR-12 pattern never applied) |
-| pi2 persistent journald | Open | pi2 has no persistent journal; reboots leave no trace (proposed, owner's call) |
-| Voice layer not deployed | Open | orin1 reserved but manifests won't schedule (label/taint mismatch) |
-| Workstation clock skew | Observed | Was ~10 h 50 m behind UTC mid-session; compute freshness against cluster/DB clock, not workstation |
+| TX2-loss database restore (OS-7) | ✅ Rehearsed 2026-11-26 on the workstation (§3: 80 s, counts identical); client cut-over not rehearsed | Repeat after a TimescaleDB version change |
+| Workstation pulls unwatched | ✅ Fixed 2026-11-26 (stamps on pi0 + nodewatch) | — |
+| Backup role separation (OS-8) | Open | `pg-backup` still dumps as `postgres`; needs an owner-created Secret |
+| Roles are not in the dump | Known | `pg_dump -Fc` carries no roles; they come back from the schema ConfigMap |
 
 ---
 
-## 7. Schedule summary (node-local, America/Los_Angeles on pi2)
+## 7. Backup schedule (America/Los_Angeles)
 
-| Time (node-local) | Job | Node | What it does |
+| Time | Job | Where it runs | What it does |
 |---|---|---|---|
-| 01:30 | pg-backup | pi3 | TimescaleDB dump → pi3 SSD |
-| 03:00 | pull-backups.py | workstation | Pull pg-dump to workstation |
-| 03:30 | pull-k3s-backup.sh | workstation | Pull k3s state.db from pi2 → workstation + pi3 |
-| 07:00 | rbi-fetcher | orin2 | India G-Secs / RBI rates |
-| 08:00 IST | telegram-digest | pi1 | Daily digest (Asia/Kolkata, explicit TZ) |
-| 11:15 | nse-fetcher | orin2 | NSE indices + FII/DII |
-| 14:00 | fiidii-fetcher | orin2 | FII/DII flows |
-| 22:30 | yfinance-fetcher | orin2 | US indices, stocks, FX |
-| 23:00 | fx-fetcher | orin2 | FX pairs |
-| 23:15 | yields-fetcher | orin2 | Bond yields |
-| 23:20 | rates-fetcher | orin2 | FED funds (FRED) |
-| 23:45 | news-fetcher | orin2 | RSS headlines → raw_headlines |
-| :10 hourly | intraday-fetcher | orin2 | Intraday candles |
-| 00:15 | sentiment-scorer | tx2 | FinBERT on today's headlines |
-| 00:30 | ta-compute | orin2 | RSI/MACD/SMA/Bollinger |
-| 00:45 | headline-ner | tx2 | Gazetteer entity extraction |
-| 01:00 | news-embed | orin2 | Headline embeddings |
-| 02:00 | ml1-anomalies + stock-metrics | orin2 | Anomaly detection + per-symbol metrics |
-| 02:10 | stock-valuation | orin2 | 10-method fair-value panel |
-| 02:15 | stock-screener | orin2 | Scores + ranks |
-| 02:30 | stock-report | orin2 | Rendered markdown reports |
-| 02:40 | prediction-tracker | orin2 | Write-once snapshots |
-| 02:45 | telegram-alerts | pi1 | Grafana alert fan-out |
-| 02:45 (Sat) | ml7b-per-symbol | orin2 | Per-symbol ML narration |
-| 03:00 | ml3-volatility | orin2 | EWMA + GARCH volatility forecasts |
-| 06:00 (Sat) | stock-fundamentals | orin2 | EDGAR/NSE fundamentals |
-| 09:00 (Sun) | universe-refresh | orin2 | Wikipedia/NSE universe rebuild |
-| 10:00 (Sun) | nse-fundamentals | orin2 | India results filings |
-| 12:00 (Sun) | earnings-calendar | orin2 | Weekly earnings calendar |
-| 12:30 (Sun) | accuracy-check | orin2 | Data-accuracy audit |
+| 01:30 | `pg-backup` (CronJob, explicit `timeZone`) | pi3 | TimescaleDB dump → pi3 SSD, verified, sha256 sidecar |
+| 03:00 | `pull-backups.py --prune-local 7` | workstation cron | Newest 2 verified dumps → `out/backups/`; stamp `pg-dumps` on pi0 |
+| 03:30 | `pull-k3s-backup.sh` | workstation cron | k3s-cp datastore → `out/backups/k3s/` + pi3; stamp `k3s-backup` on pi0 |
+| every 5 min | `nodewatch.sh` | pi0 root cron | Nodes, API port, and both stamps (alert at > 36 h) |
 
-> Node-local schedules follow `America/Los_Angeles` on pi2: UTC−7 in summer / UTC−8 in winter. Every node-local job's UTC instant shifts an hour at the DST boundary (early November, early March). Only `telegram-digest` and `llm-narrative` use explicit `Asia/Kolkata` timeZone (DST-free).
+Every other job's schedule is in ops manual §3 (checked against the manifests by `ops-tools/workloads.py --check`).
+The workstation cron lines must point at this repo's current path — `crontab -l | grep marketdata`.
 
 ---
 
@@ -233,15 +218,12 @@ PW=$(kubectl -n market-data get secret timescaledb-auth -o jsonpath='{.data.pass
 kubectl -n market-data exec timescaledb-0 -- env PGPASSWORD="$PW" \
   psql -U postgres -d postgres -c "SELECT feed, last_check, fresh FROM pipeline_heartbeat ORDER BY feed;"
 
-# Restore k3s from pi3 copy
-python3 ops-tools/runcmd.py pi3 pi3 'cat ~/k3s-cp-backups/k3s-cp-backup-<date>.tar.gz' > /tmp/k3s-cp-backup.tar.gz
-python3 ops-tools/putfile.py pi2 pi2 /tmp/k3s-cp-backup.tar.gz /tmp/k3s-cp-backup.tar.gz
-# ... then follow §2 restore steps
+# Are the workstation pulls alive? (stamps on pi0, and the logs)
+ssh pi0@<pi0> 'ls -l --time-style=long-iso /var/lib/nodewatch-stamps/'
+tail -3 out/logs/pull-backups.log out/logs/k3s-backup.log
 
-# Restore TimescaleDB
-kubectl -n market-data run restore-pod --rm -i --restart=Never \
-  --image=timescale/timescaledb:2.30.1-pg16 \
-  -- sh -c 'pg_restore -h timescaledb -U postgres -d postgres -c /backups/marketdata-<date>.dump'
+# Restore k3s:        ops manual §9 "Control-plane datastore"
+# Restore TimescaleDB: §3 above
 ```
 
 ---
@@ -251,7 +233,8 @@ kubectl -n market-data run restore-pod --rm -i --restart=Never \
 - `docs/node-roles.md` — per-node roles, pinned workloads, blast radius
 - `docs/market-data-pipeline-operations-manual.md` — full operations manual (§9 backup & restore, §8 failure runbook)
 - `docs/pending-tasks.md` — single task tracker (AR-10, AR-11, AR-12 items)
-- `docs/AGENTS.md` — agent ground rules (no secrets/IPs in tracked files, no `crictl rmi --prune`, etc.)
+- `AGENTS.md` (repo root) — agent ground rules (no secrets/IPs in tracked files, no `crictl rmi --prune`, etc.)
 - `ops-tools/pull-k3s-backup.sh` — control-plane backup script
 - `ops-tools/pull-backups.py` — TimescaleDB dump pull to workstation
+- `ops-tools/backup-stamp.sh` + `ops-tools/nodewatch.sh` — the pull watchdog
 - `manifests/backup/cronjob.yaml` — pg-backup CronJob manifest

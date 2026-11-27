@@ -52,6 +52,11 @@ if command -v gitleaks >/dev/null 2>&1; then
 else echo "  skip  gitleaks token shape (gitleaks not installed — the hook skips it too; CI installs it)"; fi
 
 echo "== must PASS"
+printf 'LLM_PROVIDER=fakevendorname\nGRAFANA_ADMIN_PASSWORD=zq9-fake-local-secret-value\n' > "$FAKEENV"
+echo "the fakevendorname device plugin" > "$SCRATCH/a.md"
+HOOK_SECRETS_FILE="$FAKEENV" expect passes "vendor identifier (LLM_PROVIDER) is not a secret"
+echo "fakevendorname key zq9-fake-local-secret-value" > "$SCRATCH/a.md"
+HOOK_SECRETS_FILE="$FAKEENV" expect blocked "a real secret on the same line is still blocked"
 echo "# runbook: use placeholders like <pi2-ip> and the @@PW@@ token" > "$SCRATCH/a.md"; expect passes "placeholders + @@PW@@ token"
 echo "cuDNN 8.2.1.32 and TensorRT 8.2.1.9, localhost 127.0.0.1" > "$SCRATCH/a.md";       expect passes "version numbers / loopback"
 echo "ssh pi2@<pi2-ip>   # alias: runcmd.py pi2 pi2 'uptime'" > "$SCRATCH/a.md";        expect passes "aliases in commands"
