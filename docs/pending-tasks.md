@@ -242,18 +242,27 @@ Both wired into bot.py COMMANDS + MENU, router SAFE_AI_COMMANDS, and nicknames.
   rows, also on pi3), binary sha256 checked against the release file, old binary kept as `/usr/local/bin/k3s.v1.36.4`,
   `systemctl restart k3s`. API back in ~20 s; all 7 nodes Ready; `CriticalAddonsOnly` taint intact; 36 CronJobs; the 6
   always-on pods never restarted; `intraday-fetcher` canary wrote 486 rows; no error-level lines in the k3s journal;
-  Coolify containers untouched. This ends the Orin (v1.37.2) > server skew. **Still open:** the Pi agents are on
-  v1.36.4 (runbook §1b — one at a time; supported skew, no urgency); TX2 stays pinned at v1.35.3. Delete the rollback
-  binary after ~2026-12-10. Re-run the control-plane restore rehearsal on the v1.37 image at the next opportunity.
-- [ ] 🔴 **Headline embeddings have stopped: the provider retired both embedding models (HTTP 410 Gone).**
-  Found 2026-11-26 while checking pods after the upgrade; it predates it. `model-watch` (namespace `llm`) has ended
-  `MODEL-WATCH-FAIL` on its last three runs (11-24 … 11-26): `embed` and `embed.2` return 410, and so does
-  `fast-json.3`. It could not alert — it prints "no Telegram credentials — alert printed only". Effect here:
-  `news-embed` logs `EMBED-UNAVAILABLE` and then **`NEWS-EMBED-OK embedded=0`**, exits 0, and the `llm_gateway`
-  heartbeat stays fresh, so nothing flags it — no new `headline_embeddings`, no story grouping in the digest.
-  Fix is in the `llm-gateway` repo (new embedding model in the gateway config; ADR 0023 stores the answering model
-  per row, so a model change needs a decision on re-embedding vs. mixing). Two follow-ups here: `news-embed` should
-  not report OK with 0 embedded when headlines exist, and `model-watch` needs its Telegram credentials.
+  Coolify containers untouched. This ends the Orin (v1.37.2) > server skew. ✅ **Pi agents upgraded the same evening** (runbook §1b: pi2 → pi3 → pi1, one at a time, sha256-checked arm64
+  binary, old one kept as `k3s.v1.36.4` on each; Grafana, the bot and marketview never restarted; canary job ran on
+  pi2). Whole cluster is v1.37.2 except the TX2, which stays pinned at v1.35.3. Delete the rollback binaries (k3s-cp
+  + 3 Pis) after ~2026-12-10. Re-run the control-plane restore rehearsal on the v1.37 image at the next opportunity.
+- [x] ✅ 2026-11-26 **Headline embeddings had stopped (provider retired both embedding models, HTTP 410) — restored.**
+  From 11-23 to 11-26 `news-embed` logged `EMBED-UNAVAILABLE`, then `NEWS-EMBED-OK embedded=0`, exit 0, and nothing
+  flagged it. The gateway side was fixed the same evening by the `llm-gateway` session (its TASKS #30: `embed` →
+  `nemotron-3.5-embed-1b`, still 2048-dim, so `headline_embeddings.embedding vector(2048)` is unchanged). Here:
+  `news_embed.py` now (1) waits out the gateway's rate limit instead of abandoning the backlog on the third batch,
+  (2) reports the headlines it really embedded when it stops early, (3) ends `NEWS-EMBED-FAIL`, exit 1, when it could
+  embed nothing (2 new tests, 5 total). Shipped with `apply-llm.sh` (ConfigMap, md5 = repo; no image change).
+  Catch-up: two manual runs embedded 144 + 1,031 headlines on the new model (8 rate-limit waits in the
+  second, none fatal); **0 headlines left un-embedded**, `NEWS-EMBED-OK embedded=1031 grouped=1031`.
+- [ ] 🤔 **Old headline embeddings carry the retired model's name** (4,705 rows, `nemotron-3-embed-1b`). Story grouping
+  and semantic search compare within one model only, so headlines before 11-23 are invisible to new ones. Re-embed
+  them with the new model (~100 batches at 2 per minute, about an hour) or let them age out of the 72 h story window
+  — owner decision (ADR 0023; llm-gateway TASKS #31).
+- [ ] 🔑 **`model-watch` (namespace `llm`) cannot alert: no Telegram credentials.** It failed three nights running
+  (11-24 … 11-26) and only printed the alert. Needs a Secret in the `llm` namespace — owner-run, llm-gateway TASKS #25.
+- [x] ✅ 2026-11-26 **`bakeoff.py`: an empty reply is no longer a first-try pass** — written by the llm-gateway session
+  (its TASKS #29), committed here; shipped in the same ConfigMap apply.
 
 ### 2026-11-15 open-source roadmap review (`market-pipeline-github-improvement-roadmap.md`)
 

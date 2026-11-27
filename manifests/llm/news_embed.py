@@ -54,7 +54,35 @@ def vec_literal(v):
     return "[" + ",".join(f"{x:.6g}" for x in v) + "]"
 
 
-def embed_pending(conn, embedder=embed, batch=48, pause=35.0, max_batches=60):
+class EmbedStopped(RuntimeError):
+    """The gateway stopped answering part-way. `.done` = headlines embedded (and committed) before that."""
+
+    def __init__(self, msg, done):
+        super().__init__(msg)
+        self.done = done
+
+
+def rate_limited(exc):
+    """Pure. True for the gateway's own rpm limit (worth waiting out), not for a dead or retired model."""
+    m = str(exc)
+    return "RateLimitError" in m or "No deployments available" in m or "429" in m
+
+
+def embed_with_retry(embedder, texts, waits=(65.0, 65.0, 65.0), sleep=time.sleep):
+    """The `embed` group is rpm-limited at the gateway (2/min, 2026-11-26): a backlog run hit the limit on
+    its third batch and gave up with most of the backlog left. Wait out a rate limit; raise anything else."""
+    for w in waits:
+        try:
+            return embedder(texts)
+        except RuntimeError as exc:
+            if not rate_limited(exc):
+                raise
+            print(f"rate-limited, waiting {w:g}s", flush=True)
+            sleep(w)
+    return embedder(texts)
+
+
+def embed_pending(conn, embedder=embed, batch=48, pause=35.0, max_batches=60, sleep=time.sleep):
     done = 0
     for i in range(max_batches):
         with conn.cursor() as cur:
@@ -66,8 +94,11 @@ def embed_pending(conn, embedder=embed, batch=48, pause=35.0, max_batches=60):
         if not rows:
             break
         if i:
-            time.sleep(pause)
-        model, vecs = embedder([h[:1000] for _id, _ts, h in rows])
+            sleep(pause)
+        try:
+            model, vecs = embed_with_retry(embedder, [h[:1000] for _id, _ts, h in rows], sleep=sleep)
+        except RuntimeError as exc:
+            raise EmbedStopped(str(exc), done) from exc
         with conn.transaction():
             with conn.cursor() as cur:
                 for (hid, ts, _h), v in zip(rows, vecs):
@@ -107,17 +138,23 @@ def main() -> int:
         done = embed_pending(conn, batch=int(os.environ.get("BATCH", "48")),
                              pause=float(os.environ.get("PAUSE", "35")),
                              max_batches=int(os.environ.get("MAX_BATCHES", "60")))
+        failed = False
     except RuntimeError as exc:
         print(f"EMBED-UNAVAILABLE {str(exc)[:200]}", flush=True)
-        done = 0
+        done = getattr(exc, "done", 0)   # batches before the failure are committed — report them
+        failed = True
     grouped = group_stories(conn, float(os.environ.get("STORY_SIM", "0.86")), int(os.environ.get("STORY_HOURS", "72")))
     with conn.cursor() as cur:
         cur.execute("SELECT count(*), count(DISTINCT story_id) FROM headline_embeddings "
                     "WHERE ts >= now() - interval '1 day'")
         last_day, stories = cur.fetchone()
     conn.close()
-    print(f"NEWS-EMBED-OK embedded={done} grouped={grouped} last_24h={last_day} headlines in {stories} stories", flush=True)
-    return 0
+    # From 2026-11-23 to 11-26 both embedding models were retired upstream and this job printed
+    # "NEWS-EMBED-OK embedded=0" every night, exit 0. A run that could embed nothing is a failure.
+    status, rc = ("NEWS-EMBED-FAIL", 1) if failed and done == 0 else ("NEWS-EMBED-OK", 0)
+    print(f"{status} embedded={done} grouped={grouped} last_24h={last_day} headlines in {stories} stories"
+          + (" (stopped early: gateway unavailable)" if failed else ""), flush=True)
+    return rc
 
 
 if __name__ == "__main__":

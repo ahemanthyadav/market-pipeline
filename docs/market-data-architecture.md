@@ -119,7 +119,7 @@ flowchart TB
             DNS["Pi-hole v6.4.3 + unbound"]
         end
         subgraph CP["k3s-cp · <minipc-ip> — CONTROL PLANE · N100 bare metal · 4 cores / 16 GB · amd64 (§9)"]
-            API["k3s-server v1.36.4+k3s1 · kine/sqlite<br/>CronJob scheduling · tainted CriticalAddonsOnly"]
+            API["k3s-server v1.37.2+k3s1 · kine/sqlite<br/>CronJob scheduling · tainted CriticalAddonsOnly"]
         end
         subgraph PI1["pi1 · <pi1-ip> — worker · 1 GB + 233 GB SSD"]
             W1["daily fetchers · ta-compute<br/>telegram listener + digest (pinned)"]
@@ -233,10 +233,10 @@ whole DB via `pg_dump`.*
 | Node | Hardware | LAN IP | Tailscale IP | k3s | Role |
 |---|---|---|---|---|---|
 | pi0 | Pi 1 B+, 512 MB | <pi0-ip> | — (not on tailnet) | — | Pi-hole v6.4.3 + unbound (DNS) — not a k8s node |
-| pi1 | Pi 3 B, 1 GB, 233 GB SSD | <pi1-ip> | <pi1-tailnet-ip> | agent v1.36.4 | Worker — Telegram bot + marketview (pinned) |
-| pi2 | Pi 3 B+, 1 GB | <pi2-ip> | <pi2-tailnet-ip> | agent v1.36.4 | Worker — CPU ingestion fallback (was control plane, uncordoned 2026-11-16) |
-| pi3 | Pi 3 B, 1 GB | <pi3-ip> | <pi3-tailnet-ip> | agent v1.36.4 | Worker — Grafana + pg-backup pinned here |
-| k3s-cp (minipc) | N100 mini PC, 4 cores / 16 GB, amd64 | <K3S_CP_IP> | <K3S_CP_TS_IP> | server v1.36.4+k3s1 | **Control plane — tainted `CriticalAddonsOnly=true:NoExecute`** |
+| pi1 | Pi 3 B, 1 GB, 233 GB SSD | <pi1-ip> | <pi1-tailnet-ip> | agent v1.37.2 | Worker — Telegram bot + marketview (pinned) |
+| pi2 | Pi 3 B+, 1 GB | <pi2-ip> | <pi2-tailnet-ip> | agent v1.37.2 | Worker — CPU ingestion fallback (was control plane, uncordoned 2026-11-16) |
+| pi3 | Pi 3 B, 1 GB | <pi3-ip> | <pi3-tailnet-ip> | agent v1.37.2 | Worker — Grafana + pg-backup pinned here |
+| k3s-cp (minipc) | N100 mini PC, 4 cores / 16 GB, amd64 | <K3S_CP_IP> | <K3S_CP_TS_IP> | server v1.37.2+k3s1 | **Control plane — tainted `CriticalAddonsOnly=true:NoExecute`** |
 | ahytx2-desktop | Jetson TX2, 7.7 GB RAM | <tx2-ip> (DHCP, router-reserved) | <tx2-tailnet-ip> | agent pinned v1.35.3+k3s1 | GPU/tainted worker + DB host + LLM gateway + image build host |
 | orin1 | Jetson Orin Nano, 8 GB, 1× GPU | <orin1-ip> | — | agent v1.37.2 | Worker — tainted `gpu=orin`, runs the STT/TTS voice layer (`stt-service:v3`, `tts-service:v2`, live 2026-11-19) |
 | orin2 | Jetson Orin Nano, 8 GB, 1× GPU | <orin2-ip> | — | agent v1.37.2 | Worker — tainted `gpu=orin`, GPU only: voice (STT/TTS) + robotics; **no market-data CronJobs** |
@@ -270,7 +270,7 @@ whole DB via `pg_dump`.*
 
 | Layer | Tool | Runs on |
 |---|---|---|
-| Orchestration | k3s (server v1.36.4+k3s1; TX2 agent pinned v1.35.3+k3s1) | Whole cluster |
+| Orchestration | k3s (server v1.37.2+k3s1 on minipc/N100; TX2 agent pinned v1.35.3+k3s1) | Whole cluster |
 | DNS | Pi-hole v6.4.3 + unbound | pi0 |
 | Scheduling | k3s CronJobs (36 live); no workflow engine by design (worker RAM) | Pi workers / TX2 |
 | Storage | TimescaleDB 2.30.1-pg16 (Postgres 16.15) | TX2, sda4 SSD |

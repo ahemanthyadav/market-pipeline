@@ -62,8 +62,8 @@ flowchart TB
             DNS["Pi-hole v6.4.3 + unbound"]
         end
 
-        subgraph PI2["pi2 · CONTROL-PLANE · 1 GB · fragile<br/>(cordoned: node.kubernetes.io/unschedulable)"]
-            API["k3s-server v1.36.4+k3s1<br/>kine/sqlite — CronJob scheduling"]
+        subgraph PI2["pi2 · worker · 1 GB · was control plane (moved to minipc/N100 2026-11-16)<br/>(uncordoned)"]
+            W2["floating CronJobs fallback · CPU ingestion"]
         end
 
         subgraph PI1["pi1 · worker · 1 GB + 233 GB SSD"]

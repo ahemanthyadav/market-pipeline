@@ -80,7 +80,7 @@ re-runs and late corrections overwrite cleanly, never duplicate.
 - Per-node jobs, pinned workloads and blast radius: see `node-roles.md` (2026-11-15). Live check 2026-11-15: pi2 is
   **cordoned** (`SchedulingDisabled`) since 2026-10-10 06:11 UTC (taint `timeAdded`; set during the outage recovery — reason
   inferred, not recorded). Keep it cordoned.
-- k3s: server **v1.37.2+k3s1** on k3s-cp/minipc (upgraded 2026-11-26 by binary swap; rollback binary `/usr/local/bin/k3s.v1.36.4` kept until ~2026-12-10); agents v1.36.4 on the Pis, **pinned v1.35.3+k3s1 on TX2**, v1.37.2 on orin1/orin2.
+- k3s: server **v1.37.2+k3s1** on k3s-cp/minipc (upgraded 2026-11-26 by binary swap; rollback binary `/usr/local/bin/k3s.v1.36.4` kept until ~2026-12-10, on the Pis too); agents v1.37.2 on the Pis (same day), **pinned v1.35.3+k3s1 on TX2**, v1.37.2 on orin1/orin2.
 - **Label/taint drift to be aware of (2026-11-15):** both Orin nodes carry `hardware=orin-cpu` (not `hardware=orin`) and the
   Orin taint key is `gpu=orin` (not `hardware=orin`). The voice manifests under `manifests/voice/` select
   `hardware: orin-cpu` and tolerate `gpu=orin` (fixed 2026-11-17); both services run on orin1 (`stt-service:v3`,

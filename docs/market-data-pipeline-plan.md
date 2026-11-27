@@ -13,7 +13,7 @@
 |---|---|---|---|---|
 | pi0 | Pi 1 B+, 512 MB | <pi0-ip> | Pi-hole v6.4.3 + unbound (DNS) | ✅ Running |
 | pi1 | Pi 3 B, 1 GB, 233 GB SSD | <pi1-ip> | k3s worker (agent: --disable-apiserver-lb) | ✅ Ready (restored 2026-09-29) |
-| pi2 | Pi 3 B+, 1 GB | <pi2-ip> | k3s control-plane, v1.36.4+k3s1 | ✅ Ready, but RAM-starved (swap-thrashes under API load) |
+| pi2 | Pi 3 B+, 1 GB | <pi2-ip> | k3s worker (ex-control-plane, moved to minipc/N100 on 2026-11-16), agent v1.37.2+k3s1 | ✅ Ready |
 | pi3 | Pi 3 B, 1 GB | <pi3-ip> | k3s worker (agent: --disable-apiserver-lb) | ✅ Ready |
 | ahytx2-desktop | Jetson TX2, 7.7 GB RAM, 28 GB eMMC | <tx2-ip> (eth1, DHCP — router-reserved) | k3s worker (GPU), agent pinned v1.35.3+k3s1 | ✅ Ready |
 
@@ -51,7 +51,7 @@
 
 | Layer | Tool | Runs on |
 |---|---|---|
-| Orchestration | k3s (server v1.36.4+k3s1 on pi2; TX2 agent pinned v1.35.3+k3s1) | Whole cluster |
+| Orchestration | k3s (server v1.37.2+k3s1 on minipc/N100; TX2 agent pinned v1.35.3+k3s1) | Whole cluster |
 | DNS | Pi-hole v6.4.3 + unbound | pi0 |
 | Scheduling | k3s `CronJob`s (Argo/Tekton optional — but see the pi2 RAM caution in Phase 6) | Pi workers / TX2 |
 | Ingestion scripts | Python: `yfinance`, `jugaad-data`, `fredapi`, `requests` (NSDL/NSE/RBI/exchangerate.host/goldapi/metals-api) | Pi workers |
