@@ -339,7 +339,7 @@ scheduled); fixed that day on all five (ADR 0011 amendment).
 - **Nodes (2026-11-16):** k3s-cp (node `minipc`, N100 bare metal) is the control plane, Ready, tainted `CriticalAddonsOnly=true:NoExecute`;
   all 6 workers (pi1, pi2, pi3, tx2, orin1, orin2) Ready against k3s-cp (`K3S_URL` repointed from pi2 to k3s-cp);
   pi0 up but not a k3s node.
-  Versions: server k3s-cp v1.36.4+k3s1; agents pi1/pi2/pi3 v1.36.4, orin1/orin2 v1.37.2, tx2 pinned v1.35.3+k3s1 (cgroup v1).
+  Versions: server k3s-cp v1.37.2+k3s1 (since 2026-11-26); agents pi1/pi2/pi3 v1.36.4, orin1/orin2 v1.37.2, tx2 pinned v1.35.3+k3s1 (cgroup v1).
 - **CronJobs: all 36 active, none suspended**, no failed or pending pods.
 - **Data freshness:** `pipeline_heartbeat` — **16/16 feeds `fresh`** (fx, yields, fred_rates, fiidii_flows, intraday, rbi,
   news_staging, sentiment, nse_indices, stock_prices, stock_scores, stock_fundamentals, ta_indicators, yfinance_batch,
