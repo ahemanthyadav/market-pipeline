@@ -48,13 +48,13 @@ D=/tmp/k3s-cp-backup
 rm -rf "$D"; mkdir -m 700 "$D"
 python3 -c "
 import sqlite3
-src = sqlite3.connect("/var/lib/rancher/k3s/server/db/state.db")
-dst = sqlite3.connect("/tmp/k3s-cp-backup/state.db")
+src = sqlite3.connect('/var/lib/rancher/k3s/server/db/state.db')
+dst = sqlite3.connect('/tmp/k3s-cp-backup/state.db')
 src.backup(dst)
-ok = dst.execute("PRAGMA integrity_check").fetchone()[0]
-n = dst.execute("select count(*) from kine").fetchone()[0]
+ok = dst.execute('PRAGMA integrity_check').fetchone()[0]
+n = dst.execute('select count(*) from kine').fetchone()[0]
 dst.close(); src.close()
-print("INTEGRITY", ok, "ROWS", n)
+print('INTEGRITY', ok, 'ROWS', n)
 "
 cp /var/lib/rancher/k3s/server/token "$D"/token
 cp -a /var/lib/rancher/k3s/server/tls /var/lib/rancher/k3s/server/cred "$D"/

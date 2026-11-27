@@ -4,7 +4,12 @@
 > the linked docs — this file is the index + status. Maintained per AGENTS.md docs
 > discipline: mark items ✅ with a date (and where the completion is recorded) when
 > done; prune ✅ lines into the relevant doc's history at housekeeping time.
-> **Last reviewed: 2026-11-19** (owner: "fix all that can be fixed"): the 2026-11-15 branch-review findings are
+> **Last reviewed: 2026-11-26** (owner: "complete all that can be done"): workstation backup pulls found dead since
+> 11-12 and fixed (cron pointed at the pre-reorg folder; `pull-k3s-backup.sh` had a quoting bug, so the N100 control
+> plane had **no backup at all** from 11-16 to 11-26); control-plane restore **rehearsed** (scratch container, 2 s to a
+> serving API, 36/36 CronJobs, CA matches); price audit clean (0 mismatches); the 11-17/18 failed runs left no gap.
+> New watch item: 315 Indian symbols missing the 11-25 bar. Detail: "2026-11-26 pass" in §1.
+> **Earlier 2026-11-19** (owner: "fix all that can be fixed"): the 2026-11-15 branch-review findings are
 > fixed and LIVE — `marketdata-data:v11` on all 21 data CronJobs (4 canaries green on pi2), `telegram-digest:v44`
 > (bot + digest + alerts), voice `stt-service:v3` + `tts-service:v2` on orin1 (text → speech → text round trip
 > verified; both had been broken since the 11-17 deploy), `ml7b` deadline 600 s → 3600 s with a script-side budget,
@@ -136,7 +141,7 @@ Detail stays with each item; this is the decision view — keep it in sync when 
 | ~~Story-cluster hand-check at 0.82~~ | ✅ done 2026-10-29 — 105 multi-headline groups checked, all genuine merges | ~1 h review |
 | ~~ML-7a narrative watch → ML-7b~~ | ✅ done 2026-11-03 — 17 runs, shortlist notes in out/ml-7b-shortlist-notes.md | review |
 | ~~EV-0 §5 re-run on point-in-time membership~~ | ✅ done 2026-11-04 — SP500 uses point-in-time membership (101,931 symbol-months), nothing new passes §5, composite unchanged | 1 session |
-| ~~Price-audit retirement~~ | ✅ repair done 2026-11-04 — audit now clean (0 mismatches); needs 4 clean weekly runs (~2026-11-25) | remove one cron line + tracker |
+| ~~Price-audit retirement~~ | ✅ retired 2026-11-26 — audit clean again (0 mismatches, 5,413 comparisons, `out/price-audit-2026-11-26.csv`), 22 days after the 11-04 repair; the daily split resync covers it. Tool kept for ad-hoc use | done |
 | Grafana FII/sentiment re-tune | ⏸ time-blocked (~2026-12, needs 60 d of history) | ~1 h with real distributions |
 | Yearly chunk merge | ⏸ time-blocked (2027-01) | ops manual §11 procedure |
 
@@ -177,10 +182,10 @@ Both wired into bot.py COMMANDS + MENU, router SAFE_AI_COMMANDS, and nicknames.
 | ~~ML-7c story summaries~~ | ✅ done 2026-11-04 (`ops-tools/ml7c.py` LLM summaries → `app.llm_outputs` kind=story_summary; `tests/test_ml7c.py` 3 tests) | needs gateway to run live |
 | ML-6 GBM ranker | gated | hard gate: EV-0 + EV-1 + composite v2 pass §5 |
 | v2+ architecture (§4) / icebox (§6) | multi-session | deliberately later / deliberately never |
-| ✅ **Control plane migration → `k3s-cp` on the N100, bare metal (decided 2026-11-15 as a VM, applied 2026-11-16 on bare metal)** | Replace pi2 as the k3s server with k3s server installed directly on the N100 at home (Kubernetes node name `minipc`; whole host, 4 cores / 16 GB): Ubuntu 26.04 bare metal (no Proxmox, no VM), k3s v1.36.4+k3s1, Coolify on the same host. Server tainted `CriticalAddonsOnly=true:NoExecute` (amd64: never runs marketdata pods). pi2's `state.db` + token + TLS restored onto k3s-cp; all 6 agents repointed to k3s-cp and Ready ✅ (pi1, pi3, pi2, tx2, orin1, orin2). Afterwards: retarget `ops-tools/pull-k3s-backup.sh` from pi2 to `k3s-cp` (done ✅, drop the pi2 load gate), point pi0 nodewatch's API probe at k3s-cp (done ✅), upgrade the server to v1.37 (ends the Orin v1.37 > server v1.36 skew), and relax AGENTS.md rule 2 (done ✅). **The restore has never been rehearsed:** do it once (e.g. on a scratch VM/host — there is no VM snapshot to roll back to on bare metal) before relying on it. Runbook: `hardware/CONTROL-PLANE-MIGRATION.md`. | multi-session | N100 → Ubuntu + k3s (Coolify + app DB backups first); calm cluster window |
+| ✅ **Control plane migration → `k3s-cp` on the N100, bare metal (decided 2026-11-15 as a VM, applied 2026-11-16 on bare metal)** | Replace pi2 as the k3s server with k3s server installed directly on the N100 at home (Kubernetes node name `minipc`; whole host, 4 cores / 16 GB): Ubuntu 26.04 bare metal (no Proxmox, no VM), k3s v1.36.4+k3s1, Coolify on the same host. Server tainted `CriticalAddonsOnly=true:NoExecute` (amd64: never runs marketdata pods). pi2's `state.db` + token + TLS restored onto k3s-cp; all 6 agents repointed to k3s-cp and Ready ✅ (pi1, pi3, pi2, tx2, orin1, orin2). Afterwards: retarget `ops-tools/pull-k3s-backup.sh` from pi2 to `k3s-cp` (done ✅, drop the pi2 load gate), point pi0 nodewatch's API probe at k3s-cp (done ✅), upgrade the server to v1.37 (ends the Orin v1.37 > server v1.36 skew), and relax AGENTS.md rule 2 (done ✅). The restore was rehearsed 2026-11-26 (row below). **The retargeted `pull-k3s-backup.sh` never worked until 2026-11-26** (quoting bug, see §1). Runbook: `hardware/CONTROL-PLANE-MIGRATION.md`. | multi-session | N100 → Ubuntu + k3s (Coolify + app DB backups first); calm cluster window |
 | **tx2 workload separation (AR-10)** | **On hold.** TX2 keeps all workloads (TimescaleDB, `llm-gateway`, `sentiment-scorer`, `headline-ner`, image builds). Decision reversed 2026-11-16: GPU/NLP work does NOT move to orin1. Still open: a long-term home for TimescaleDB off the EOL TX2. TX2 fixed config untouched (AGENTS.md rule 3). | multi-session | Orins on Ethernet + monitored first; ops manual §2 re-verification after any tx2 change |
 | **Rust incremental rewrite** | Rewrite CPU-heavy jobs in Rust to save RAM on 1 GB workers: `ta-compute`, `stock-screener`, `ML-3` (GARCH MLE). Keep I/O-bound fetchers (yfinance, fx, news) in Python. Each Rust job = own small image built on TX2, imported via §6 cycle; no registry (ADR 0004). | multi-session | Test parity via `tests/run-all.sh`; measure RAM/runtime before expanding |
-| 🔲 **Rehearse the control-plane restore (added 2026-11-16)** | The N100 control plane is bare metal: no VM snapshot, so `pull-k3s-backup.sh` is the only fallback and it has never been restored. Restore the latest archive onto a scratch amd64 host/VM (not `minipc`, not on the cluster LAN IP), start k3s, confirm `kubectl get nodes` lists the cluster, then destroy it. Write the timings into ops manual §9. Do it before the v1.37 server upgrade. | small session | Fresh `pull-k3s-backup.sh` archive; a scratch amd64 machine |
+| ✅ **Control-plane restore rehearsed 2026-11-26** | Archive `k3s-cp-backup-2026-11-27.tar.gz` (UTC date; 1,879 kine rows, sha256 verified) restored into a throwaway `rancher/k3s:v1.36.4-k3s1` container on the workstation, on a Docker `--internal` network (no route to the LAN), `--disable-agent`. API served 2 s after start; all 7 nodes listed; `market-data` objects equal to live (36 CronJobs, 5 Deployments, 1 StatefulSet, 9 Secrets, 6 ConfigMaps, 1 PVC); server CA fingerprint = the live cluster's. Container, volumes, network and the extracted secrets destroyed afterwards. Lesson: on a host with a **different address**, delete `server/tls/dynamic-cert.json` before starting (the cached serving certificate lists only the old addresses and k3s refuses to start). Steps and timings: ops manual §9. The v1.37 server upgrade is no longer gated on this. | done | — |
 | ✅ **pi2 post-transfer role** | **Decided 2026-11-15: plain worker for CPU jobs.** pi2 is already a Ready worker against k3s-cp (k3s-agent service created, `K3S_URL` repointed from pi2 to k3s-cp, uncordoned). Import `data` + `light` images on pi2 as the next image cycle comes around. | small session | Control plane migration complete ✅ |
 | **Orins GPU-only (decided 2026-11-15)** | **Applied.** Floating CronJobs moved off orin2 back to pi1/pi3/pi2. orin1 and orin2 are GPU-only workers for voice (STT/TTS) + robotics. Both tainted **`gpu=orin:NoSchedule`** (verified live 2026-11-19 — not `PreferNoSchedule`: CPU jobs cannot overflow onto them). nodewatch + node-stats were NOT in place until 2026-11-19 (this row said they were); access is `ssh orin1`/`ssh orin2`, no ops-tools password slot. Keep `data` + `light` NOT imported on orin2 (no market-data jobs run there). Update `docs/node-roles.md` §1/§3 when applied | small session | Orins wired + monitored; pi2 a worker, or the 4th Pi joined, so the Pis have the room |
 | **4th Pi worker (spare Pi 3, 870 EVO boot)** | Added 2026-11-15. 64-bit Pi OS on the 870 EVO over USB (Pi 3 B: check `otp_dump` 17: = `3020000a`), cgroup memory flags, reserved IP; name `pi4` or `pi3b`. **Join it after the control-plane move.** Cordon it until `data` + `light` are imported; every later image cycle imports on it too. Add it to nodewatch/node-stats, `.hosts.env` and `_creds.py`. Prep: workspace `hardware/INVENTORY.md` §3.3 | small session | Control plane on `k3s-cp`; a switch port |
@@ -189,6 +194,42 @@ Both wired into bot.py COMMANDS + MENU, router SAFE_AI_COMMANDS, and nicknames.
 ---
 
 ## 1. Immediate (next checkpoint: tomorrow's `/health`)
+
+### 2026-11-26 pass (owner: "complete all that can be done")
+
+- [x] ✅ 2026-11-26 **Workstation backup pulls were dead from 11-12 to 11-26 — fixed.** Two independent faults:
+  (1) the workstation crontab still ran both jobs from the pre-reorganisation workspace folder, which no longer
+  exists, so neither `pull-backups.py` nor `pull-k3s-backup.sh` had run since 2026-11-12 (cron mails nowhere, the
+  logs simply stopped); (2) the `pull-k3s-backup.sh` retargeted to k3s-cp on 11-16 put double-quoted Python strings
+  inside a double-quoted `python3 -c`, so the remote script died with a bash syntax error — it had **never produced a
+  backup of the N100 control plane**. The newest archive on disk was pi2's from 11-12. Fixed: crontab paths
+  repointed (previous crontab saved as `out/logs/crontab.bak-20261126`), quoting fixed, both jobs run by hand:
+  `K3S-BACKUP-OK k3s-cp-backup-2026-11-27.tar.gz rows=1879` (+ pi3 copy verified), dumps for 11-25 and 11-26 pulled,
+  sha256 ok. **First scheduled proof: the 03:00/03:30 runs on 2026-11-27** — check both logs.
+- [ ] 🔶 **Nothing alerts when the workstation pulls stop.** `pull-backups.py --max-age-hours` only speaks when the
+  cron job itself runs, which is how two weeks went by silently. Options: have pi3 (which already receives the
+  control-plane copy) report the age of the newest `~/k3s-cp-backups` archive into `pipeline-health`, or a nodewatch
+  check on pi0. Rides the next `marketdata-light` rebuild or a pi0 nodewatch edit — owner picks.
+- [x] ✅ 2026-11-26 **Control-plane restore rehearsed** — §0 projects row; steps and timings in ops manual §9.
+- [x] ✅ 2026-11-26 **Price audit clean; weekly audit retired** (§0 time-gated table, §5).
+- [ ] 🟡 **315 of 743 Indian symbols have no `stock_prices` bar for 2026-11-25** (found 11-26; spread across the
+  alphabet, e.g. ABBOTINDIA.NS, ACC.NS, ALKEM.NS; US complete at 1,490). The 11-25 23:30 PT run finished
+  `PRICES-OK … warn=11` with no error. Yahoo serves those bars now; it is today returning `Close = NaN` with a real
+  volume on the newest NSE bar for some names, and the writer skips a NaN close, so the likely cause is the same
+  lag one day earlier (not proven — the run's raw response is gone). The 5-day window should fill them on the
+  11-26 23:30 PT run. **Check on 11-27:** India count for 11-25 = 743, and that `stock_metrics_daily` / scores for
+  11-25 were recomputed (11-25 has 22,912 metric rows against ~26,660 on a full day); re-run `stock-metrics` →
+  `stock-valuation` → `stock-screener` if not. 11-24 has no Indian bars by design (NSE holiday).
+- [ ] 🔶 **`docs/backup-restore-runbook.md` still describes pi2 as the control plane** (hardware matrix, DR
+  scenarios, schedule summary, quick reference, the script walkthrough with its pi2 load gate). Banner added and the
+  restore procedure corrected 2026-11-26; the rest needs a rewrite against `node-roles.md` §1. Docs only.
+- [ ] 🟡 **Two Job objects still `Failed` from Sat 2026-11-21** (`intraday-fetcher-29921170` 06:10 PT,
+  `rbi-fetcher-29921220` 07:00 PT). Pods are gone, cause unknown; every later run succeeded and the heartbeat is
+  16/16 fresh. They age out with the CronJob history limit.
+- 🤔 **Left for the owner (unchanged):** k3s server upgrade to v1.37 (restore now rehearsed, so it is unblocked —
+  not done unasked: a control-plane upgrade on the host that also runs Coolify is not reversible by a manifest
+  revert); the pre-commit `LLM_PROVIDER` false positive (the item itself asks for an owner decision); voice token
+  Secret; AR-8 Secret + role.
 
 ### 2026-11-15 open-source roadmap review (`market-pipeline-github-improvement-roadmap.md`)
 
@@ -395,9 +436,10 @@ each with a regression test that fails on the old code. **Deploy is still pendin
 - [ ] 🟡 **NWE joins the dead-Yahoo-symbol list (2026-11-19).** Yahoo's last bar for NWE is 11-17 ("possibly delisted"); with QRVO, BLFS, LEG, HLX, CWEN-A, ACA, RAMP, INDV, LXP (ops manual §4) that is ten S&P names still `active` because the Wikipedia tables list them. They produce a WARN per run and no bars; they drop out when `universe-refresh` sees the tables change. Nothing to back-fill.
 - [x] ✅ 2026-11-19 **EV-0 re-run for `industry_momentum` and `distress_score`** on the 11-04 export with the fixed code (`out/ev0/report-2026-11-19.md`; every other signal identical). **Both still FAIL §5.** Distress score: noise in all three US universes. Industry momentum now has 250–300 months of history (was 16–59) and clears the IC, net-spread and FM bars on NIFTY500 (t 3.2) and NIFTYMICROCAP250 (t 4.6), but is negative in the S&P 500 (t −1.7), so it fails the same-sign rule. Written up in the evidence roadmap §5d. No score changed.
 - [x] ✅ 2026-11-19 **Whisper model cached on the node** — hostPath `/var/lib/voice/faster-whisper` on orin1 mounted at `/root/.cache/faster-whisper`; applied, model present on disk, transcription re-verified.
-- [ ] 🟡 **Eight CronJob runs failed 2026-11-17 22:30Z → 11-18 03:00Z** (`yfinance-fetcher`, `fx-fetcher`, `yields-fetcher`, `stock-prices`, `stock-metrics`, `ml3-volatility`, `intraday-fetcher`, and `news-fetcher` on 11-15). Their pods are gone, so the cause is not proven; the window starts minutes after the `/tmp` tarball copies below. Every later run succeeded. If a gap shows in those feeds for 11-17, re-run the fetcher (idempotent).
+- [x] ✅ 2026-11-26 **Eight CronJob runs failed 2026-11-17 22:30Z → 11-18 03:00Z — no gap left.** Per-day row counts for 11-16…11-19 are in line with the neighbouring days in `index_prices` (42), `fx_rates` (212), `bond_yields` (11), `stock_prices` (2,235), `intraday_prices` (142) and `raw_headlines` (137); the 11-19 back-fills covered the rest. Cause never proven (pods gone; the window starts minutes after the `/tmp` tarball copies below).
 - [x] ✅ 2026-11-19 **`/tmp` on pi1/pi2/pi3 was 100 % full** with a truncated `marketdata-data-v9.tar` (copied 2026-11-17 22:22–22:37Z; `/tmp` is a 453 MB RAM tmpfs, the tar is ~475 MB). It held ~450 MB of RAM on each 905 MB Pi and broke `kubectl exec` on pi1. Removed on all three (v9 is imported on each node and archived on the TX2 with its checksum). Rule added to the ops manual §6 and the deployment guide: stage tarballs in the home directory.
 - [x] ✅ 2026-11-19 **`.hosts.env` Orin addresses are current** — `ORIN1_IP`/`ORIN2_IP` equal the nodes' IPv4 InternalIP. (A node reports IPv4 and IPv6 together in `.status.addresses`; take the IPv4 when scripting against it.)
+- [x] ✅ 2026-11-24 **Stale-feed false alarm fixed — `pipeline-health` rescheduled after same-day feeders.** Root cause: `pipeline-health` ran at 01:45 PST, before `stock-screener` (02:15 PST) and `nse-fetcher` (11:15 PST) wrote Monday's bars, so Friday data (>96 h old) flagged `nse_indices` and `stock_scores` as `fresh=false`. Data was never stale — both feeds had Nov 23 bars. Fix: `pipeline-health` schedule `45 1 * * *` → `0 13 * * *` PST (after nse-fetcher 11:15), `ml1-anomalies` `0 2 * * *` → `0 14 * * *` PST (after pipeline-health; it reads the heartbeat). Applied to live CronJobs via `kubectl apply`; verified `HEALTH-OK fresh=16/16`, stale count = 0. Docs updated: ops manual §3 schedule table, schema-configmap heartbeat comment, telegram cronjob header.
 
 - [ ] 🤔 **Open Data & Accounting Enhancements (`DG-20`, `EV-19`, `EV-20`):** EV-19/EV-20 ✅ tested (FAIL); DG-20 data half ✅; **remaining = owner decision** on the net-debt bridge (below).
   1. ✅ data half 2026-11-12: `cash_and_equivalents` added to `EDGAR_MAP` + `YF_MAP` in `stock_fundamentals.py` (`marketdata-data:v6`; fills on the Saturday `stock-fundamentals` run). NSE results filings carry no balance sheet, so India cash comes from the yfinance leg only. 🤔 **Owner:** switching `epv`/`damodaran_fcff`/`ev_ebitda_peer`/`owner_earnings` to net debt reverses ADR 0026/0030's deliberate no-cash-credit stance — needs an ADR amendment, not done. **Cash & Short-Term Investments (`cash_and_equivalents`, `DG-20`):** Add `CashAndCashEquivalentsAtCarryingValue` / `CashCashEquivalentsAndShortTermInvestments` to `EDGAR_MAP` in `stock_fundamentals.py` and `nse_fundamentals.py` if exact `net_debt = total_debt - cash` is desired for `ev_ebitda_peer`, `damodaran_fcff`, `epv`, and `owner_earnings` (currently uses gross `total_debt` without cash credit by design per ADR 0026 / ADR 0030).
@@ -454,7 +496,7 @@ each with a regression test that fails on the old code. **Deploy is still pendin
 
 - [x] ✅ 2026-11-19 **Orin nodes are monitored** (was: unmonitored, found 2026-11-15). (a) `nodewatch.sh` now watches `orin1` and `orin2` (keys `ORIN1_IP`/`ORIN2_IP` are required — a missing address is exit 2, not a silent gap); installed on pi0 with `/etc/nodewatch.hosts` extended (previous files kept as `*.bak-20261119`), dry run and the next scheduled run both `down=[none]`, md5 = repo. (b) `node-stats-log.sh` + root cron `*/5` + logrotate installed on both Orins, first samples written; `collect-node-stats.sh` pulls them over `scp`. (c) No `_creds.py` slot: the Orins use key auth and `sudo -n`, so `ssh orin1` / `ssh orin2` is the supported path. (`tests/test-nodewatch.sh`, 14 checks.)
 
-- [ ] 🟡 **Admin-workstation clock skew (observed 2026-11-15).** The workstation clock was ~10 h 50 m behind UTC at the
+- [x] ✅ 2026-11-26 (rule now step 0 of the ops manual §7 checklist; `NTPSynchronized=yes` today) **Admin-workstation clock skew (observed 2026-11-15).** The workstation clock was ~10 h 50 m behind UTC at the
   start of the session and self-corrected mid-session (NTP sync). While skewed, `kubectl get` relative columns
   ("LAST SCHEDULE 94m") and any freshness maths computed against the workstation clock are **wrong by that offset**.
   Always compute freshness against the **cluster/DB** clock (`kubectl` timestamps, `pipeline_heartbeat.last_check`),
@@ -911,7 +953,7 @@ Full evidence and rationale: `architecture-review-2026-10-10.md`. Order = its §
     Archive pulled to `out/backups/k3s/k3s-cp-backup-2026-10-18.tar.gz` (gitignored, mode 600 — **holds the cluster join token**), sha256
     `851c663e…` identical on both ends, removed from pi2 `/tmp`. ✅ **Recurring since 2026-10-18:** `ops-tools/pull-k3s-backup.sh` (adds
     `server/tls` + `server/cred` so a rebuilt pi2 keeps the cluster CA; load gate: skips if pi2 load1 > 3; keeps 14), workstation cron 03:30 local;
-    restore steps in ops manual §9. 🔶 **Restore never rehearsed** — drill it on a spare SSD before relying on it. Cron needs the workstation on at 03:30.
+    restore steps in ops manual §9. ✅ **Restore rehearsed 2026-11-26** (§0 row). Cron needs the workstation on at 03:30.
     - ✅ **2026-11-15 in-cluster fast-path copy added:** `pull-k3s-backup.sh` now also pushes each archive to pi3 at
       `~/k3s-cp-backups/k3s-cp-backup-<date>.tar.gz` (mode 600, keeps 7), so a restore can start from the cluster without waiting
       on the workstation. Workstation copy remains the primary off-cluster DR copy.
@@ -1225,9 +1267,8 @@ practice · ⚪ unproven here · ⚠️ citation not verified.
 
 ## 5. Recurring (never "done" — calendar items)
 
-- [ ] 🔄 Daily: `/health` checklist (ops manual §7). Automatic: 23 CronJobs.
-- [ ] 🔄 Weekly (until the daily split detection ships — DQ-1): `PSQL_CMD=… python3 ops-tools/audit-price-adjustments.py audit`; repair any mismatch with `emit-repair <SYM>`
-  (reviewed SQL, one transaction per symbol). Last run 2026-10-13: only CTVA, repaired.
+- [ ] 🔄 Daily: `/health` checklist (ops manual §7). Automatic: 36 CronJobs.
+- [x] ✅ 2026-11-26 **Weekly price audit retired** — the daily split detection has shipped (v10/v11) and the audit was clean on 11-04 and again on 11-26 (0 mismatches). Run `ops-tools/audit-price-adjustments.py audit` ad hoc after any price-writer change.
 - [ ] 🔄 Monthly (1st): fdi-watch logs DPIIT links → 5-min manual INSERT.
 - [ ] 🔄 Yearly (January): merge the previous year's weekly chunks of `stock_prices`/`index_prices` (ADR 0016;
   `ops-tools/sql/2026-10-18-merge-weekly-chunks.sql`, verified dump first). Due 2027-01 for the 2026 chunks.
@@ -1245,7 +1286,7 @@ practice · ⚪ unproven here · ⚠️ citation not verified.
 
 - JetPack 5 reflash (lifts CUDA/cgroup ceilings; recovery-mode, full revalidation)
 - Longhorn/OpenEBS · Loki · Argo/Tekton · Citus (pi2 1 GB ceiling — ADR 0008)
-- 4th Pi worker · streaming ingestion · public-website/VPS front
+- streaming ingestion · public-website/VPS front (the 4th Pi worker left the icebox 2026-11-15 — §0 projects)
   Detail: roadmap §10; findings icebox; ADRs 0008.
 
 ---

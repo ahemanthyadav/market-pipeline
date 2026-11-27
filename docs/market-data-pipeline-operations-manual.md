@@ -212,7 +212,7 @@ Applied with `kubectl apply` after a `kubectl diff` review; it did not change `s
 | sentiment-scorer | 15 0 * * * | local/marketdata-ml:v2 (TX2 only) | news_sentiment |
 | ta-compute | 30 0 * * * | local/marketdata-data:v11 | technical_indicators |
 | pg-backup | 30 1 * * * | timescale/timescaledb:2.30.1-pg16 (pi3) | /var/lib/market-data/backups on pi3 |
-| pipeline-health | 45 1 * * * | local/marketdata-light:v1 | pipeline_heartbeat (feed freshness, **16 feeds** incl. rbi + llm_narrative + llm_gateway; weekend-safe 96 h on stock prices/scores since v5) |
+| pipeline-health | 0 13 * * * | local/marketdata-light:v1 | pipeline_heartbeat (feed freshness, **16 feeds** incl. rbi + llm_narrative + llm_gateway; weekend-safe 96 h on stock prices/scores since v5; runs after stock-screener 02:15 + nse-fetcher 11:15 PST so Monday data is fresh at eval time) |
 | intraday-fetcher | 10 * * * * | local/marketdata-data:v11 | fx_rates (hourly FX) + intraday_prices (GC/SI/CL/DXY) |
 | universe-refresh | 0 9 * * 0 | local/marketdata-data:v11 | universe_constituents + ticker_names (998 symbols) |
 | stock-prices | 30 23 * * * | local/marketdata-data:v11 | stock_prices (998 symbols, 5d window) |
@@ -679,6 +679,10 @@ kubectl -n market-data exec timescaledb-0 -- env PGPASSWORD="$PW" \
 ```bash
 export KUBECONFIG=~/.kube/pi-cluster.yaml
 
+# 0. Is this workstation's clock right? (2026-11-15: it was ~11 h off; every AGE / LAST SCHEDULE
+#    column and any freshness maths done locally is wrong by the offset. Trust cluster/DB timestamps.)
+timedatectl show -p NTPSynchronized     # want: NTPSynchronized=yes
+
 # 1. Cluster health — all 4 nodes Ready?
 kubectl get nodes
 # Expected: pi0 (not k3s), pi1/pi2/pi3/ahytx2-desktop all Ready
@@ -1045,19 +1049,32 @@ CA private keys**), verifies sha256, deletes the remote copy, keeps 14. Each run
 same archive to pi3 at `~/k3s-cp-backups/k3s-cp-backup-<date>.tar.gz` (mode 600, keeps 7)
 as an in-cluster fast-path restore landing zone; the workstation copy remains the primary off-cluster DR copy.
 Workstation cron 03:30 local → `out/logs/k3s-backup.log`; `pull-backups.py --prune-local 7` at 03:00 → `out/logs/pull-backups.log`.
-**Restore (k3s-cp/minipc disk/datastore lost — untested drill, quiet window, agents stay up):**
+**Restore (k3s-cp/minipc disk/datastore lost — rehearsed 2026-11-26, quiet window, agents stay up):**
 ```bash
 # 1. on k3s-cp/minipc (same hostname/IP; k3s installed):  sudo systemctl stop k3s
-# 2. putfile the archive, then:  tar -xzf k3s-cp-backup-<date>.tar.gz -C /tmp
+# 2. copy the archive over (scp, key auth), then:  tar -xzf k3s-cp-backup-<date>.tar.gz -C /tmp
 # 3. sudo cp /var/lib/rancher/k3s/server/db/state.db /tmp/state.db.broken 2>/dev/null; \
 #    sudo rm -f /var/lib/rancher/k3s/server/db/state.db-{wal,shm}; \
 #    sudo cp /tmp/k3s-cp-backup/state.db /var/lib/rancher/k3s/server/db/state.db
 # 4. same token + certs: sudo cp /tmp/k3s-cp-backup/token /var/lib/rancher/k3s/server/token; \
 #    sudo cp -a /tmp/k3s-cp-backup/tls /var/lib/rancher/k3s/server/tls; \
 #    sudo cp -a /tmp/k3s-cp-backup/cred /var/lib/rancher/k3s/server/cred
+# 4b. ONLY if the host's address differs from the old one:
+#    sudo rm -f /var/lib/rancher/k3s/server/tls/dynamic-cert.json   and add --tls-san <new address>.
+#    The cached serving certificate lists only the old addresses; k3s loops on
+#    "CA cert validation failed … certificate is valid for …, not <new address>" and never serves.
 # 5. sudo systemctl start k3s → kubectl get nodes (agents keep trusting the restored CA and reconnect).
-#    Never rehearsed — do a drill on a spare SSD/SSD image before relying on it.
+#    rm -rf /tmp/k3s-cp-backup* afterwards — it holds the join token and the CA private keys.
 ```
+**Rehearsal record (2026-11-26):** archive `k3s-cp-backup-2026-11-27.tar.gz` (1.5 MB, 1,879 kine rows) restored into a
+throwaway `rancher/k3s:v1.36.4-k3s1` container on the workstation — Docker `--internal` network (no route to the LAN,
+so it could not touch the real cluster), fixed container address, `server --disable traefik --disable-agent
+--node-ip/--advertise-address/--bind-address/--tls-san <container address>`. Timings: sha256 check + extract < 1 s,
+copy-in + start to a serving API **2 s**. `kubectl get nodes` listed all 7 nodes; `market-data` held the same object
+counts as live (36 CronJobs, 5 Deployments, 1 StatefulSet, 9 Secrets, 6 ConfigMaps, 1 PVC); the restored server CA
+fingerprint equals the live cluster's, so agents would trust it. Not covered: agents reconnecting (needs the real
+address) and a k3s install from scratch on new hardware. Two false starts worth knowing: k3s exits on a network with
+no default route unless the addresses are given explicitly, and step 4b above.
 
 ### Verify backup ran (daily 01:30 UTC)
 ```bash

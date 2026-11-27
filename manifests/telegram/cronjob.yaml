@@ -1,6 +1,6 @@
 # Daily Telegram market digest (findings Tier 1 #6, deployed 2026-10-09).
 # 08:00 IST — runs after every feed has landed for the day (last is
-# pipeline-health at 01:45 node-local; the digest reads it for stale warnings).
+# pipeline-health at 13:00 node-local; the digest reads it for stale warnings).
 #
 # Deliberate deviations from house defaults, both documented in ADR 0009:
 #   - timeZone: Asia/Kolkata — the ONLY job with an explicit timezone. Existing

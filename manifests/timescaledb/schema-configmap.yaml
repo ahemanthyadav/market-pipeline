@@ -112,7 +112,7 @@ data:
       ON capital_flows (flow_type, segment, ts);
   03-heartbeat.sql: |
     -- Pipeline health heartbeat (roadmap §3.1). v1 semantics: one row per
-    -- FEED, written by the pipeline-health CronJob (01:45 UTC) from data-
+    -- FEED, written by the pipeline-health CronJob (13:00 PST) from data-
     -- freshness checks — detects missed jobs, stale feeds, dead sources.
     -- v2 (per-JOB last_ok from inside each fetcher) lands with the next
     -- fetcher image rebuilds. Plain table (tiny, no hypertable overhead).

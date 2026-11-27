@@ -1,5 +1,9 @@
 # Backup & Restore Runbook
 
+> ⚠ **Partly stale (noted 2026-11-26):** the control plane moved from pi2 to k3s-cp (the N100, node `minipc`) on
+> 2026-11-16. §2's restore procedure is corrected; the hardware matrix, DR table, schedule summary and quick-reference
+> commands below still name pi2 as the control plane. Until they are rewritten, ops manual §9 is authoritative.
+
 > **Single source of truth for every backup in the cluster:** k3s control-plane datastore (`state.db`) and TimescaleDB (`pg_dump`).
 > **Last verified: 2026-11-15.** Commands are copy-paste ready. No IP addresses — node names only (real values in gitignored `.hosts.env`).
 > Secrets never enter tracked files or chat output; use `@@PW@@` token via `runcmd.py` / `putfile.py`.
@@ -63,34 +67,13 @@ python3 ops-tools/runcmd.py pi3 pi3 'ls -lh ~/k3s-cp-backups/ | tail -5'
 
 ### Restore procedure (from either copy)
 
-**Prerequisites:** quiet window, pi2 load < 3, spare SSD/SSD for drill first (restore **never rehearsed**).
+**Prerequisites:** quiet window. The control plane is k3s-cp (the N100, node `minipc`) since 2026-11-16; it is
+reached by key-auth SSH. The copy-paste steps live in one place — ops manual §9 "Control-plane datastore" — so they
+cannot drift again (this section still described pi2 until 2026-11-26).
 
-```bash
-# 0. Copy the archive to pi2 (from workstation or pi3)
-# From workstation:
-python3 ops-tools/putfile.py pi2 pi2 out/backups/k3s/k3s-cp-backup-<date>.tar.gz /tmp/k3s-cp-backup.tar.gz
-# From pi3:
-python3 ops-tools/runcmd.py pi3 pi3 'cat ~/k3s-cp-backups/k3s-cp-backup-<date>.tar.gz' > /tmp/k3s-cp-backup.tar.gz
-python3 ops-tools/putfile.py pi2 pi2 /tmp/k3s-cp-backup.tar.gz /tmp/k3s-cp-backup.tar.gz
-
-# 1. Stop k3s on pi2
-python3 ops-tools/runcmd.py pi2 pi2 'echo @@PW@@ | sudo -S systemctl stop k3s'
-
-# 2. Extract
-python3 ops-tools/runcmd.py pi2 pi2 'tar -xzf /tmp/k3s-cp-backup.tar.gz -C /tmp'
-
-# 3. Replace state.db
-python3 ops-tools/runcmd.py pi2 pi2 'echo @@PW@@ | sudo -S cp /var/lib/ranched/k3s/server/db/state.db /tmp/state.db.broken 2>/dev/null; sudo rm -f /var/lib/ranched/k3s/server/db/state.db-{wal,shm}; sudo cp /tmp/k3s-cp-backup/state.db /var/lib/ranched/k3s/server/db/state.db'
-
-# 4. Restore token + certs
-python3 ops-tools/runcmd.py pi2 pi2 'echo @@PW@@ | sudo -S cp /tmp/k3s-cp-backup/token /var/lib/ranched/k3s/server/token; sudo cp -a /tmp/k3s-cp-backup/tls /tmp/k3s-cp-backup/cred /var/lib/ranched/k3s/server/'
-
-# 5. Start k3s
-python3 ops-tools/runcmd.py pi2 pi2 'echo @@PW@@ | sudo -S systemctl start k3s'
-kubectl get nodes   # agents keep trusting the restored CA and reconnect
-```
-
-> ⚠ **Never rehearsed.** Drill this on a spare SD/SSD before relying on it in production.
+> ✅ **Rehearsed 2026-11-26** on a throwaway container: 2 s from start to a serving API, all objects present, CA
+> matches the live cluster. Record and the two gotchas (no default route; `dynamic-cert.json` on a new address):
+> ops manual §9.
 
 ---
 
@@ -180,7 +163,7 @@ python3 ops-tools/runcmd.py pi3 pi3 'echo @@PW@@ | sudo -S pg_restore -h timesca
 
 | Item | Status | Owner action |
 |---|---|---|
-| Control-plane restore **never rehearsed** | Open | Drill on spare SSD/SSD before relying on it |
+| Control-plane restore rehearsal | ✅ Done 2026-11-26 (ops manual §9) | Repeat after a k3s minor upgrade |
 | Off-site backup copy | Open | No rclone/restic/aws/b2 on workstation; pick destination + encryption (AR-11) |
 | ~~TX2 SSH credential stale~~ | None: false alarm 2026-11-15 (wrong SSH user) | Use `runcmd.py tx2 ahytx2` (user `ahytx2`, not the hostname `ahytx2-desktop`) |
 | Orin nodes unmonitored | Open | Not in nodewatch, no node-stats-log, no SSH alias (AR-12 pattern never applied) |
