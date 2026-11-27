@@ -82,34 +82,68 @@ def embed_with_retry(embedder, texts, waits=(65.0, 65.0, 65.0), sleep=time.sleep
     return embedder(texts)
 
 
+def rejected(exc):
+    """Pure. True when the provider refused the *input text* (NVIDIA answers 422 "input rejected by content
+    safety screening"). Waiting does not help and the model is fine: the headline has to be left out."""
+    m = str(exc)
+    return "content safety" in m or "Error code: 422" in m
+
+
+def embed_skipping_rejected(embedder, texts, pause=0.0, sleep=time.sleep):
+    """-> (model or None, [vector or None per text]). One refused headline used to fail its whole batch of
+    48, and because the batch is always the oldest pending rows, every later run hit the same batch and
+    embedded nothing (2026-11-26). Halve a refused batch until the refused headline is alone, and return
+    None for it."""
+    try:
+        return embed_with_retry(embedder, texts, sleep=sleep)
+    except RuntimeError as exc:
+        if not rejected(exc):
+            raise
+    if len(texts) == 1:
+        return None, [None]
+    mid = len(texts) // 2
+    sleep(pause)
+    m1, v1 = embed_skipping_rejected(embedder, texts[:mid], pause, sleep)
+    sleep(pause)
+    m2, v2 = embed_skipping_rejected(embedder, texts[mid:], pause, sleep)
+    return m1 or m2, v1 + v2
+
+
 def embed_pending(conn, embedder=embed, batch=48, pause=35.0, max_batches=60, sleep=time.sleep, reembed_from=""):
     """Embed headlines that have no vector yet. `reembed_from` = a retired model's name: its rows are
     replaced too (oldest first), so story grouping and search see them again after a model change
     (2026-11-26: both NVIDIA embedding models were retired; vectors of different models never compare).
-    A replaced row loses its story_id and is regrouped among the new model's rows."""
-    done = 0
+    A replaced row loses its story_id and is regrouped among the new model's rows.
+    A headline the provider refuses is left as it was and not asked again in this run."""
+    done, skip = 0, []
     for i in range(max_batches):
         with conn.cursor() as cur:
             cur.execute("SELECT r.id, r.ts, r.headline FROM raw_headlines r "
                         "LEFT JOIN headline_embeddings e ON e.headline_id = r.id "
                         "WHERE (e.headline_id IS NULL OR e.model = %s) AND r.ts >= now() - interval '400 days' "
-                        "ORDER BY r.ts LIMIT %s", (reembed_from or "(none)", batch))
+                        "AND r.id <> ALL(%s) ORDER BY r.ts LIMIT %s", (reembed_from or "(none)", skip, batch))
             rows = cur.fetchall()
         if not rows:
             break
         if i:
             sleep(pause)
         try:
-            model, vecs = embed_with_retry(embedder, [h[:1000] for _id, _ts, h in rows], sleep=sleep)
+            model, vecs = embed_skipping_rejected(embedder, [h[:1000] for _id, _ts, h in rows], pause, sleep)
         except RuntimeError as exc:
             raise EmbedStopped(str(exc), done) from exc
+        refused = [hid for (hid, _ts, _h), v in zip(rows, vecs) if v is None]
+        if refused:
+            skip.extend(refused)
+            print(f"refused by provider content screening, left out: headline ids {refused}", flush=True)
         with conn.transaction():
             with conn.cursor() as cur:
                 for (hid, ts, _h), v in zip(rows, vecs):
+                    if v is None:
+                        continue
                     cur.execute("DELETE FROM headline_embeddings WHERE headline_id = %s", (hid,))
                     cur.execute("INSERT INTO headline_embeddings (headline_id, ts, model, embedding) "
                                 "VALUES (%s, %s, %s, %s::vector)", (hid, ts, model, vec_literal(v)))
-        done += len(rows)
+        done += len(rows) - len(refused)
         print(f"embedded {done} (model {model})", flush=True)
     return done
 

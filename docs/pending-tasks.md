@@ -285,7 +285,18 @@ Both wired into bot.py COMMANDS + MENU, router SAFE_AI_COMMANDS, and nicknames.
   - **Rollback:** re-apply the manifests at `2eec086` (data v11 / light v1 are still in every node's store).
 - [x] ✅ 2026-11-26 **Old headline embeddings are being replaced** (owner: "implement"). `news_embed.py` gained
   `REEMBED_FROM=<retired model>`; three chained Jobs (`news-reembed-{1,2,3}-20261126`, 50 batches each, 45 s apart)
-  replace the 4,705 rows of `nemotron-3-embed-1b`. Running at the time of this entry (2,039 rows on the new model at 21:05 PT); result recorded when the chain finishes.
+  replace the 4,705 rows of `nemotron-3-embed-1b`.
+  **Finished 2026-11-27 ~02:00 PT: 6,028 rows on `nemotron-3.5-embed-1b`, all grouped into stories; 2 rows left on the old model.**
+  - The chain stalled at 3,863: the provider refuses some headlines (HTTP 422 "input rejected by content safety
+    screening"), and one refused headline failed its whole batch of 48. The batch is always the oldest pending
+    rows, so every later run hit it and embedded nothing. This would also have blocked the nightly job for good
+    the first time a new headline was refused.
+  - Fix (`news_embed.py` `embed_skipping_rejected`, shipped by ConfigMap, 2 new tests): a refused batch is halved
+    until the refused headline is alone; that headline is logged and left out, the rest are embedded.
+  - Headline ids 2629 and 3827 are the two refused; they keep their old-model vectors (never compared with the new ones).
+  - A manual re-embed Job inherits the CronJob's 3,600 s deadline: keep `MAX_BATCHES` ≤ ~40 per Job at `PAUSE=45`.
+  - Not done: a refused *new* headline has no row to mark it, so the nightly job will re-isolate it each night
+    (about a dozen extra gateway calls). A permanent marker needs a schema column; add one only if refusals become common.
 - 🔑 **Owner-run, refused to the agent again on 2026-11-26** (the permission system denies secret-store writes and
   network exposure — not worked around):
   1. Voice token — the block under "OWNER-RUN: voice service token" below. Add

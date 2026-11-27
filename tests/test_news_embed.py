@@ -103,6 +103,56 @@ class Embed(unittest.TestCase):
             ne.embed_pending(Conn(), embedder, batch=2, pause=0, max_batches=5, sleep=lambda s: None)
         self.assertEqual(cm.exception.done, 2)
 
+    def test_a_refused_headline_is_isolated_and_the_rest_of_the_batch_is_embedded(self):
+        calls = []
+
+        def embedder(texts):
+            calls.append(list(texts))
+            if "bad" in texts:
+                raise RuntimeError("unavailable: Error code: 422 - input rejected by content safety screening")
+            return "m", [[float(len(t))] for t in texts]
+        model, vecs = ne.embed_skipping_rejected(embedder, ["a", "bb", "bad", "cccc", "e"], sleep=lambda s: None)
+        self.assertEqual(model, "m")
+        self.assertEqual(vecs, [[1.0], [2.0], None, [4.0], [1.0]])
+        self.assertEqual(ne.embed_skipping_rejected(embedder, ["bad"], sleep=lambda s: None), (None, [None]))
+
+        def gone(texts):
+            raise RuntimeError("unavailable: 410 Gone")
+        with self.assertRaises(RuntimeError):                      # only a refused input is bisected
+            ne.embed_skipping_rejected(gone, ["a", "b"], sleep=lambda s: None)
+
+    def test_refused_headline_is_not_written_and_not_asked_again_in_the_run(self):
+        pending = {1: "a", 2: "bad", 3: "c"}
+        written, asked = [], []
+
+        class Cur:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def execute(self, sql, params=None):
+                if sql.startswith("SELECT"):
+                    _model, skip, limit = params
+                    self.rows = [(i, None, h) for i, h in sorted(pending.items()) if i not in skip][:limit]
+                elif sql.startswith("INSERT"):
+                    written.append(params[0])
+                    pending.pop(params[0])
+            def fetchall(self): return self.rows
+
+        class Tx(Cur):
+            pass
+
+        class Conn:
+            def cursor(self): return Cur()
+            def transaction(self): return Tx()
+
+        def embedder(texts):
+            asked.append(list(texts))
+            if "bad" in texts:
+                raise RuntimeError("unavailable: Error code: 422 - input rejected by content safety screening")
+            return "m", [[0.0]] * len(texts)
+        done = ne.embed_pending(Conn(), embedder, batch=3, pause=0, max_batches=5, sleep=lambda s: None)
+        self.assertEqual((done, written), (2, [1, 3]))
+        self.assertEqual(sum("bad" in t for t in asked), 3)       # batch of 3, half of 2, alone: never again
+
     def test_vector_literal(self):
         self.assertEqual(ne.vec_literal([0.5, -1e-7, 2]), "[0.5,-1e-07,2]")
 
