@@ -245,9 +245,15 @@ Both wired into bot.py COMMANDS + MENU, router SAFE_AI_COMMANDS, and nicknames.
   Coolify containers untouched. This ends the Orin (v1.37.2) > server skew. **Still open:** the Pi agents are on
   v1.36.4 (runbook §1b — one at a time; supported skew, no urgency); TX2 stays pinned at v1.35.3. Delete the rollback
   binary after ~2026-12-10. Re-run the control-plane restore rehearsal on the v1.37 image at the next opportunity.
-- [ ] 🟡 **`model-watch` (namespace `llm`) has ended `MODEL-WATCH-FAIL` on its last three runs (11-24 … 11-26)** and
-  could not alert: it prints "no Telegram credentials — alert printed only". Seen while checking pods after the
-  upgrade; it predates it. Belongs to the `llm-gateway` repo — not investigated here.
+- [ ] 🔴 **Headline embeddings have stopped: the provider retired both embedding models (HTTP 410 Gone).**
+  Found 2026-11-26 while checking pods after the upgrade; it predates it. `model-watch` (namespace `llm`) has ended
+  `MODEL-WATCH-FAIL` on its last three runs (11-24 … 11-26): `embed` and `embed.2` return 410, and so does
+  `fast-json.3`. It could not alert — it prints "no Telegram credentials — alert printed only". Effect here:
+  `news-embed` logs `EMBED-UNAVAILABLE` and then **`NEWS-EMBED-OK embedded=0`**, exits 0, and the `llm_gateway`
+  heartbeat stays fresh, so nothing flags it — no new `headline_embeddings`, no story grouping in the digest.
+  Fix is in the `llm-gateway` repo (new embedding model in the gateway config; ADR 0023 stores the answering model
+  per row, so a model change needs a decision on re-embedding vs. mixing). Two follow-ups here: `news-embed` should
+  not report OK with 0 embedded when headlines exist, and `model-watch` needs its Telegram credentials.
 
 ### 2026-11-15 open-source roadmap review (`market-pipeline-github-improvement-roadmap.md`)
 
