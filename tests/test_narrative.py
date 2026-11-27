@@ -117,6 +117,10 @@ class Bakeoff(unittest.TestCase):
         self.assertEqual((r["first_ok"], r["final_ok"], r["error"]), (False, True, ""))
         self.assertEqual(calls, ["fast-json.2", "fast-json.2"])   # the candidate is pinned per call
 
+    def test_run_one_empty_reply_is_not_a_first_try_pass(self):
+        r = self.b.run_one(FACTS, "general", lambda msgs, model: ("", model))
+        self.assertFalse(r["first_ok"])
+
     def test_score_and_errors(self):
         res = [{"first_ok": True, "final_ok": True, "latency": 2.0, "error": ""},
                {"first_ok": False, "final_ok": True, "latency": 4.0, "error": ""},
