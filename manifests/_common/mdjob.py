@@ -1,8 +1,9 @@
 """Shared job helpers for market-data fetchers (AR-2 / AR-3).
 
 Named `mdjob`, not `joblib`, so it can never shadow the PyPI `joblib` package.
-Not used by any image yet — adopt per image at its next natural rebuild by
-copying this file into the build context (no registry, ADR 0004).
+Copied into the light and data images (no registry, ADR 0004). Two levels of adoption:
+`job_run` + `write_window` for scripts written against it, `run_main` for the older scripts
+that keep their own write logic and only need a job_runs row per execution.
 
     from mdjob import connect, write_window, job_run
 
@@ -92,6 +93,37 @@ def job_run(job_name):
                 "".join(traceback.format_exception_only(type(exc), exc)).strip()[:2000])
         raise
     _finish(job_name, started, run.rows, "ok", None)
+
+
+def run_main(job_name, main):
+    """Entry-point wrapper for scripts that keep their own write logic (per-job heartbeat v2):
+
+        if __name__ == "__main__":
+            from mdjob import run_main
+            sys.exit(run_main("fx-fetcher", main))
+
+    Records one job_runs row per execution — 'ok' when main() returns 0/None, 'fail' on a non-zero
+    return or an exception — and returns main()'s own value unchanged. rows_written stays 0: these
+    scripts do not report a count. JOB_NAME in the environment overrides the name (one-off backfill
+    Jobs that reuse a script). Bookkeeping failures never fail the job.
+    """
+    job_name = os.environ.get("JOB_NAME") or job_name
+    started = datetime.now(timezone.utc)
+    _log(job_name, started, "INSERT INTO job_runs (job_name, started_at, status) "
+         "VALUES (%s, %s, 'running') ON CONFLICT DO NOTHING", (job_name, started))
+    try:
+        rc = main()
+    except SystemExit as exc:
+        code = exc.code
+        bad = code not in (0, None)
+        _finish(job_name, started, 0, "fail" if bad else "ok", f"exit {code}"[:2000] if bad else None)
+        raise
+    except BaseException as exc:
+        _finish(job_name, started, 0, "fail",
+                "".join(traceback.format_exception_only(type(exc), exc)).strip()[:2000])
+        raise
+    _finish(job_name, started, 0, "fail" if rc else "ok", f"exit code {rc}" if rc else None)
+    return rc
 
 
 def _finish(job_name, started, rows, status, error):

@@ -125,7 +125,6 @@ class Harness(unittest.TestCase):
 
     def test_altman_z_score_components(self):
         """Altman Z-score: higher = less distressed. Verify component signs on synthetic data."""
-        import numpy as np
         # Healthy company: positive WC, high equity, positive EBIT, high mve/liab, high rev/assets
         ca, cl, ta, se, oi, rev, so, close = 100, 40, 500, 300, 50, 400, 10, 50
         wc = ca - cl

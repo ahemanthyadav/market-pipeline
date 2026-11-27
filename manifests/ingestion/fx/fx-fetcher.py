@@ -11,7 +11,6 @@ Env: PGHOST, PGUSER, PGPASSWORD, PGDATABASE. Exit 1 only if zero rows written.
 import os
 import sys
 
-import pandas as pd
 import psycopg
 import yfinance as yf
 
@@ -90,4 +89,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    from mdjob import run_main   # one job_runs row per execution; never fails the job
+    sys.exit(run_main("fx-fetcher", main))

@@ -32,7 +32,7 @@ spec:
             runAsGroup: 1000
           containers:
             - name: fetcher
-              image: local/marketdata-light:v1
+              image: local/marketdata-light:v2
               imagePullPolicy: Never
               command: ["python", "factors-fetcher.py"]
               securityContext:

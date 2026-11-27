@@ -13,7 +13,6 @@ Runs 09:00 UTC on the 1st of each month. Always exits 0 (informational);
 a human decides what enters capital_flows.
 """
 
-import os
 import re
 import sys
 
@@ -65,4 +64,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    from mdjob import run_main   # one job_runs row per execution; never fails the job
+    sys.exit(run_main("fdi-watch", main))

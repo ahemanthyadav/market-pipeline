@@ -429,4 +429,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    from mdjob import run_main   # one job_runs row per execution; never fails the job
+    sys.exit(run_main("stock-prices", main))

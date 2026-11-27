@@ -28,7 +28,7 @@ spec:
           restartPolicy: OnFailure
           containers:
             - name: ml7b
-              image: local/marketdata-light:v1
+              image: local/marketdata-light:v2
               imagePullPolicy: Never
               command: ["python", "/scripts/ml7b_per_symbol.py"]
               env:

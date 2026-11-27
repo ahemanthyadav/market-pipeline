@@ -17,7 +17,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: bakeoff
-          image: local/marketdata-light:v1
+          image: local/marketdata-light:v2
           imagePullPolicy: Never
           command: ["python", "/scripts/bakeoff.py"]
           env:

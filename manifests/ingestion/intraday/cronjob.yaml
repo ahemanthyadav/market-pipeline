@@ -26,7 +26,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: fetcher
-              image: local/marketdata-data:v11
+              image: local/marketdata-data:v12
               imagePullPolicy: Never
               command: ["python", "intraday-fetcher.py"]
               env:

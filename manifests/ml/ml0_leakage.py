@@ -87,7 +87,6 @@ def pit_filter_check(
 
 if __name__ == "__main__":
     # Smoke test
-    import numpy as np
 
     df = pd.DataFrame(
         {

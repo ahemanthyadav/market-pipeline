@@ -1,7 +1,8 @@
 """Price-derived daily metrics (Phase F, job 1 of 2).
 
 Per active symbol, from the last 260 bars of stock_prices, computes the §6 metric
-set and writes (metric, value) rows keyed to the symbol's latest bar date:
+set and writes (metric, value) rows keyed to the symbol's latest bar date (and to any of the
+five newest bars that has no row yet — see bars_to_write):
 close, ret_1m, ret_6m, ret_12m, vol_180d, max_dd_252d, pos_52w, sma50_ratio,
 sma200_ratio, dol_vol_20d. Missing window (new listing) → metric omitted.
 """
@@ -52,6 +53,19 @@ def compute(df):
     return out
 
 
+HEAL_BARS = 5
+
+
+def bars_to_write(bar_ts, have_ts, heal=HEAL_BARS):
+    """Pure. Which bars get a metric row this run: always the newest, plus any of the `heal`
+    newest that has none yet. Rows used to be written at the newest bar only, so a symbol whose
+    bar arrived a run late (2026-11-25/26: Yahoo served ~40 % of NSE names with an empty close on
+    the newest day) never got a row for the day it skipped. An existing older row is left alone."""
+    recent = list(bar_ts)[-heal:]
+    have = set(have_ts)
+    return [t for t in recent[:-1] if t not in have] + recent[-1:]
+
+
 def main() -> int:
     limit = int(os.environ.get("UNIVERSE_LIMIT", "0") or 0) or None
     conn = psycopg.connect(
@@ -66,32 +80,40 @@ def main() -> int:
         symbols = [r[0] for r in cur.fetchall()]
     if limit:
         symbols = symbols[:limit]
-    computed, skipped, written = 0, 0, 0
+    computed, skipped, written, healed = 0, 0, 0, 0
     for sym in symbols:
         with conn.cursor() as cur:
             cur.execute("SELECT ts, close, volume, adj_close FROM stock_prices WHERE symbol=%s "
-                        "ORDER BY ts DESC LIMIT %s", (sym, BARS))
+                        "ORDER BY ts DESC LIMIT %s", (sym, BARS + HEAL_BARS))
             rows = cur.fetchall()
+            have = []
+            if len(rows) >= 5:
+                cur.execute("SELECT DISTINCT ts FROM stock_metrics_daily WHERE symbol=%s AND ts >= %s",
+                            (sym, rows[min(HEAL_BARS, len(rows)) - 1][0]))
+                have = [pd.Timestamp(r[0]) for r in cur.fetchall()]
         if len(rows) < 5:
             skipped += 1
             continue
         df = pd.DataFrame([(r[0], r[1], r[2], r[3] if len(r) > 3 else None) for r in reversed(rows)],
                            columns=["ts", "close", "volume", "adj_close"]).set_index("ts")
-        metrics = compute(df)
-        if not metrics:
+        todo = [(t, compute(df.loc[:t].tail(BARS))) for t in bars_to_write(list(df.index), have)]
+        todo = [(t, m) for t, m in todo if m]
+        if not todo:
             skipped += 1
             continue
-        ts = df.index[-1].to_pydatetime()
         try:
             with conn.transaction():
                 with conn.cursor() as cur:
-                    for metric, val in metrics.items():
-                        cur.execute("DELETE FROM stock_metrics_daily WHERE symbol=%s "
-                                    "AND ts=%s AND metric=%s", (sym, ts, metric))
-                        cur.execute("INSERT INTO stock_metrics_daily (symbol, ts, metric, value) "
-                                    "VALUES (%s,%s,%s,%s)", (sym, ts, metric, val))
-                        written += 1
+                    for t, metrics in todo:
+                        ts = t.to_pydatetime() if hasattr(t, "to_pydatetime") else t
+                        for metric, val in metrics.items():
+                            cur.execute("DELETE FROM stock_metrics_daily WHERE symbol=%s "
+                                        "AND ts=%s AND metric=%s", (sym, ts, metric))
+                            cur.execute("INSERT INTO stock_metrics_daily (symbol, ts, metric, value) "
+                                        "VALUES (%s,%s,%s,%s)", (sym, ts, metric, val))
+                            written += 1
             computed += 1
+            healed += len(todo) - 1
         except psycopg.OperationalError as exc:
             print(f"WARN {sym} conn dropped ({exc}); reconnecting, skipping sym", flush=True)
             skipped += 1
@@ -107,9 +129,10 @@ def main() -> int:
             )
             conn.autocommit = True
     conn.close()
-    print(f"METRICS-OK computed={computed} skipped={skipped} rows={written}", flush=True)
+    print(f"METRICS-OK computed={computed} skipped={skipped} rows={written} healed_days={healed}", flush=True)
     return 0 if computed else 1
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    from mdjob import run_main   # one job_runs row per execution; never fails the job
+    sys.exit(run_main("stock-metrics", main))

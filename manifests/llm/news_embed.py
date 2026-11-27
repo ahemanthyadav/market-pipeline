@@ -82,14 +82,18 @@ def embed_with_retry(embedder, texts, waits=(65.0, 65.0, 65.0), sleep=time.sleep
     return embedder(texts)
 
 
-def embed_pending(conn, embedder=embed, batch=48, pause=35.0, max_batches=60, sleep=time.sleep):
+def embed_pending(conn, embedder=embed, batch=48, pause=35.0, max_batches=60, sleep=time.sleep, reembed_from=""):
+    """Embed headlines that have no vector yet. `reembed_from` = a retired model's name: its rows are
+    replaced too (oldest first), so story grouping and search see them again after a model change
+    (2026-11-26: both NVIDIA embedding models were retired; vectors of different models never compare).
+    A replaced row loses its story_id and is regrouped among the new model's rows."""
     done = 0
     for i in range(max_batches):
         with conn.cursor() as cur:
             cur.execute("SELECT r.id, r.ts, r.headline FROM raw_headlines r "
                         "LEFT JOIN headline_embeddings e ON e.headline_id = r.id "
-                        "WHERE e.headline_id IS NULL AND r.ts >= now() - interval '400 days' "
-                        "ORDER BY r.ts LIMIT %s", (batch,))
+                        "WHERE (e.headline_id IS NULL OR e.model = %s) AND r.ts >= now() - interval '400 days' "
+                        "ORDER BY r.ts LIMIT %s", (reembed_from or "(none)", batch))
             rows = cur.fetchall()
         if not rows:
             break
@@ -137,7 +141,8 @@ def main() -> int:
     try:
         done = embed_pending(conn, batch=int(os.environ.get("BATCH", "48")),
                              pause=float(os.environ.get("PAUSE", "35")),
-                             max_batches=int(os.environ.get("MAX_BATCHES", "60")))
+                             max_batches=int(os.environ.get("MAX_BATCHES", "60")),
+                             reembed_from=os.environ.get("REEMBED_FROM", "").strip())
         failed = False
     except RuntimeError as exc:
         print(f"EMBED-UNAVAILABLE {str(exc)[:200]}", flush=True)

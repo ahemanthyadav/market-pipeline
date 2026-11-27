@@ -3,7 +3,6 @@
 
     python3 tests/test_ml1.py
 """
-import datetime as dt
 import importlib.util
 import sys
 import unittest

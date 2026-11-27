@@ -28,7 +28,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: health
-              image: local/marketdata-light:v1
+              image: local/marketdata-light:v2
               imagePullPolicy: Never
               command: ["python", "pipeline-health.py"]
               env:

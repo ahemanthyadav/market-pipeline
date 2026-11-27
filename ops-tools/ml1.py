@@ -20,7 +20,6 @@ Usage (workstation; DB via $PSQL_CMD like ev0.py):
   PSQL_CMD='…' python ops-tools/ml1.py show   # list recent anomalies
 """
 import argparse
-import datetime as dt
 import json
 import os
 import sys

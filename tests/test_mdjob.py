@@ -167,5 +167,62 @@ class JobRun(unittest.TestCase):
                 AssertionError("unexpected real connect"))
 
 
+class RunMain(unittest.TestCase):
+    """run_main: the wrapper for scripts that keep their own write logic (per-job heartbeat v2)."""
+
+    def setUp(self):
+        self.calls = []
+        self._log = mdjob._log
+        mdjob._log = lambda job, started, sql, params: self.calls.append((job, sql.split()[0], params))
+
+    def tearDown(self):
+        mdjob._log = self._log
+
+    def status(self):
+        return self.calls[-1][2][1], self.calls[-1][2][2]
+
+    def test_zero_return_is_ok_and_value_passes_through(self):
+        self.assertEqual(mdjob.run_main("fx-fetcher", lambda: 0), 0)
+        self.assertEqual([c[1] for c in self.calls], ["INSERT", "UPDATE"])
+        self.assertEqual(self.status(), ("ok", None))
+
+    def test_none_return_is_ok(self):
+        self.assertIsNone(mdjob.run_main("x", lambda: None))
+        self.assertEqual(self.status()[0], "ok")
+
+    def test_nonzero_return_is_fail_and_still_returned(self):
+        self.assertEqual(mdjob.run_main("x", lambda: 1), 1)
+        self.assertEqual(self.status(), ("fail", "exit code 1"))
+
+    def test_exception_is_recorded_and_reraised(self):
+        def boom():
+            raise ValueError("no data")
+        with self.assertRaises(ValueError):
+            mdjob.run_main("x", boom)
+        self.assertEqual(self.status()[0], "fail")
+        self.assertIn("no data", self.status()[1])
+
+    def test_sys_exit_zero_is_ok_nonzero_is_fail(self):
+        with self.assertRaises(SystemExit):
+            mdjob.run_main("x", lambda: sys.exit(0))
+        self.assertEqual(self.status()[0], "ok")
+        with self.assertRaises(SystemExit):
+            mdjob.run_main("x", lambda: sys.exit(3))
+        self.assertEqual(self.status(), ("fail", "exit 3"))
+
+    def test_bookkeeping_failure_never_fails_the_job(self):
+        mdjob._log = self._log          # real _log; connect() is the stub that raises
+        self.assertEqual(mdjob.run_main("x", lambda: 0), 0)
+
+    def test_job_name_env_override(self):
+        import os
+        os.environ["JOB_NAME"] = "stock-prices-backfill"
+        try:
+            mdjob.run_main("stock-prices", lambda: 0)
+        finally:
+            del os.environ["JOB_NAME"]
+        self.assertEqual(self.calls[0][0], "stock-prices-backfill")
+
+
 if __name__ == "__main__":
     unittest.main()

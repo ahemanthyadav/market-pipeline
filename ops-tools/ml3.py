@@ -10,12 +10,9 @@ Usage (workstation; DB via $PSQL_CMD like ev0.py):
   PSQL_CMD='…' python ops-tools/ml3.py show --limit 20
 """
 import argparse
-import datetime as dt
-import json
 import os
 import sys
 
-import numpy as np
 import pandas as pd
 
 # Reuse compute functions from the in-cluster module

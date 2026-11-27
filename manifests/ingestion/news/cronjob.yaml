@@ -25,7 +25,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: fetcher
-              image: local/marketdata-light:v1
+              image: local/marketdata-light:v2
               imagePullPolicy: Never
               command: ["python", "news-fetcher.py"]
               env:

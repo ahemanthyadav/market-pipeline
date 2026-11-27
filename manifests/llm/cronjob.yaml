@@ -25,7 +25,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: narrative
-              image: local/marketdata-light:v1
+              image: local/marketdata-light:v2
               imagePullPolicy: Never
               command: ["python", "/scripts/narrative.py"]
               env:
@@ -89,7 +89,7 @@ spec:
           automountServiceAccountToken: false
           containers:
             - name: embed
-              image: local/marketdata-light:v1
+              image: local/marketdata-light:v2
               imagePullPolicy: Never
               command: ["python", "/scripts/news_embed.py"]
               env:

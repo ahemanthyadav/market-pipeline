@@ -29,7 +29,7 @@ spec:
             runAsGroup: 1000
           containers:
             - name: research
-              image: local/marketdata-light:v1
+              image: local/marketdata-light:v2
               imagePullPolicy: Never
               command: ["python", "research-fetcher.py"]
               env:

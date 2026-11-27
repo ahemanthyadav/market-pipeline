@@ -15,7 +15,6 @@ p-hacking by limiting total experiments).
 import argparse
 import datetime as dt
 import hashlib
-import io
 import json
 import os
 import subprocess
@@ -25,7 +24,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ev0  # same directory
 
-import numpy as np
 import pandas as pd
 
 OUT = "out/ev0"

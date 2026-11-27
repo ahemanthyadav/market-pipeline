@@ -18,7 +18,7 @@ not kill the run.
 """
 import re
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import datetime
 
 import requests
 
